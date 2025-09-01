@@ -24,6 +24,17 @@ namespace flash {
 
 using namespace cute;
 
+/*
+void device_kernel<enable_sm90_or_later<
+FlashAttnFwdSm90<
+CollectiveMainloopFwdSm90<2, tuple<C<1>, C<1>, C<1>>, tuple<C<128>, C<176>, C<128>>,
+128,
+bfloat16_t,
+float,
+Sm90, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0>,
+CollectiveEpilogueFwd<tuple<C<128>, C<128>, C<176>>, tuple<C<1>, C<1>, C<1>>, bfloat16_t, Sm90, 256, 0, 0, 0, 0>,
+StaticPersistentTileScheduler<0>>>>(Params)
+*/
 template <class CollectiveMainloop_, class CollectiveEpilogue_, class TileScheduler_>
 class FlashAttnFwdSm90 {
 
@@ -194,6 +205,8 @@ public:
 
         SharedStorage& shared_storage = *reinterpret_cast<SharedStorage*>(smem_buf);
 
+        // DOR: intresting, using __shfl_sync to distribute the same value in the warp instead of each thread calculating it himself
+        // helps the compiler to recognize this is a warp uniform value!
         int const lane_predicate = cute::elect_one_sync();
         int const warp_idx = cutlass::canonical_warp_idx_sync();
 
@@ -212,6 +225,7 @@ public:
             if constexpr (HasQv) {
                 shared_storage.pipelines.barrier_Qv.init(Use_TMA_Q ? 1 : NumProducerThreads /*numThreads*/);
             }
+            // DOR: why do we need barrier_O? do we calculate multiple O tiles in the same cuda block? is it done with the TMA?
             shared_storage.pipelines.barrier_O.init(size(ClusterShape{}) * (Use_TMA_O ? 1 : NumMmaThreads) /*numThreads*/);
         }
 
@@ -320,15 +334,21 @@ public:
             if constexpr (SingleProducerWarp) {
                 if (warp_idx_in_warpgroup != 0) { return; }
             }
+            // DOR: why we exclude warp0 here? shoudn't it also init the consumer?
             if (!SingleProducerWarp && warp_idx_in_warpgroup != 0) { scheduler.init_consumer(); }
 
             cutlass::arch::wait_on_dependent_grids();
 
             // Load Q, K, V
-            for (auto work_tile_info = SingleProducerWarp || warp_idx_in_warpgroup == 0 ? scheduler.template get_initial_work</*IsProducerWarp=*/true>(params.scheduler) : scheduler.template get_initial_work</*IsProducerWarp=*/false>(params.scheduler);
+            for (auto work_tile_info = SingleProducerWarp || warp_idx_in_warpgroup == 0
+                    ? scheduler.template get_initial_work</*IsProducerWarp=*/true>(params.scheduler)
+                    : scheduler.template get_initial_work</*IsProducerWarp=*/false>(params.scheduler);
                  work_tile_info.is_valid(params.scheduler);
-                 work_tile_info = SingleProducerWarp || warp_idx_in_warpgroup == 0 ? scheduler.template get_next_work</*IsProducerWarp=*/true>(params.scheduler, work_tile_info) : scheduler.template get_next_work</*IsProducerWarp=*/false>(params.scheduler, work_tile_info)) {
+                 work_tile_info = SingleProducerWarp || warp_idx_in_warpgroup == 0
+                    ? scheduler.template get_next_work</*IsProducerWarp=*/true>(params.scheduler, work_tile_info)
+                    : scheduler.template get_next_work</*IsProducerWarp=*/false>(params.scheduler, work_tile_info)) {
 
+                // Get next logical threadblock coordinates.
                 auto block_coord = work_tile_info.get_block_coord(params.scheduler);
                 SeqlenInfo_t seqlen_info{
                     get<2>(block_coord) /*bidb*/,
@@ -414,6 +434,14 @@ public:
                     softmax_scale_log2 *= q_descale * k_descale;
                 }
                 flash::Softmax<!LargeHeadDimV ? 2 * (2 * kBlockM / NumMmaThreads) : 2, /*Max_offset=*/!Is_FP8 ? 0 : 8> softmax(softmax_scale_log2);
+
+                /*
+                taken from the answer here: https://youtu.be/JwUcZwPOCpA?t=3152
+                DOR: thread wise accumulator for the attention output
+                O - signifay this is the O matrix
+                r - signifay this is stored in registers
+                t - signifay this is the thread wise view
+                */
                 // Attention output (GEMM-II) accumulator.
                 Tensor tOrO = partition_fragment_C(tiled_mma_pv, select<0, 1>(TileShape_MNK_PV{}));
                 bool tile_valid;
