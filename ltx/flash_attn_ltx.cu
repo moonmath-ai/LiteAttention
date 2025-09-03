@@ -184,7 +184,7 @@ void flash_attn_ltx(
         reinterpret_cast<__nv_bfloat16*>(q.data_ptr()),
         reinterpret_cast<__nv_bfloat16*>(k.data_ptr()),
         reinterpret_cast<__nv_bfloat16*>(v.data_ptr()),
-        reinterpret_cast<__nv_bfloat16*>(output.data_ptr()),
-        reinterpret_cast<uint64_t*>(skip_mask.data_ptr())
+        // reinterpret_cast<uint64_t*>(skip_mask.data_ptr())
+        reinterpret_cast<__nv_bfloat16*>(output.data_ptr())
     );
 }
