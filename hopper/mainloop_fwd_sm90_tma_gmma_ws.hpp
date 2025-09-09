@@ -627,44 +627,45 @@ struct CollectiveMainloopFwdSm90 {
     }
 
 
-    // // todo: try to make the operation warp uniform to save registers
-    // // Boolean iterator for bitwise iteration over an array of uint64_t
-    // struct BoolBitIterator {
-    //     uint64_t* data;
-    //     int data_idx; // current index in the data array
-    //     int limb_idx; // current index in the limb (0-63)
-    //     uint64_t limb; // the limb after doing (<< 1) on in limb_idx times
-    //     bool is_assigned; // whether the current bit is assigned
-    //     const bool is_elected;
+    // todo: try to make the operation warp uniform to save registers
+    // Boolean iterator for bitwise iteration over an array of uint64_t
+    struct BoolBitIterator {
+        uint64_t* data;
+        int data_idx; // current index in the data array
+        int limb_idx; // current index in the limb (0-63)
+        uint64_t limb; // the limb after doing (<< 1) on in limb_idx times
+        bool is_assigned; // whether the current bit is assigned
+        const bool is_elected;
 
-    //     BoolBitIterator(uint64_t* data, bool is_elected) : data(data), data_idx(0), limb_idx(0), is_assigned(false), is_elected(is_elected) {
-    //         limb = data[data_idx];
-    //     }
+        BoolBitIterator(uint64_t* data, bool is_elected) : data(data), data_idx(0), limb_idx(0), is_assigned(false), is_elected(is_elected) {
+            limb = data[data_idx];
+        }
 
-    //     __device__ bool next(){
-    //         if(limb_idx == 64){
-    //             if(is_elected && is_assigned) data[data_idx] = limb;
-    //             data_idx++;
-    //             limb_idx = 0;
-    //             limb = data[data_idx];
-    //             is_assigned = false;
-    //         }
+        __device__ bool next(){
+            if(limb_idx == 64){
+                if(is_elected && is_assigned) data[data_idx] = limb;
+                data_idx++;
+                limb_idx = 0;
+                limb = data[data_idx];
+                is_assigned = false;
+            }
 
-    //         bool bit = (limb >> limb_idx) & 1;
+            bool bit = (limb >> limb_idx) & 1;
 
-    //         limb_idx++;
-    //         // todo: add a short cut if iter_limb == 0 so we could skip a larger amount of bits at once
-    //         return bit;
-    //     }
+            // 16 cycles
+            limb_idx++;
+            // todo: add a short cut if iter_limb == 0 so we could skip a larger amount of bits at once
+            return bit;
+        }
 
-    //     __device__ void assign_current_bit(){
-    //         if(is_elected){
-    //             limb |= 1 << (limb_idx - 1);
-    //             is_assigned = true;
-    //         }
-    //     }
+        __device__ void assign_current_bit(){
+            if(is_elected){
+                limb |= 1 << (limb_idx - 1);
+                is_assigned = true;
+            }
+        }
 
-    // };
+    };
 
 
     // Main load function: responsible for loading Q, K, V data from global memory to shared memory
