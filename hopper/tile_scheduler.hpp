@@ -792,4 +792,92 @@ public:
 
 ///////////////////////////////////////////////////////////////////////////////
 
+// template<bool Split=false>
+// class QKSkipTileScheduler {
+
+// protected:
+//     uint64_t* skip_mask;
+
+// public:
+
+//     using SharedStorage = int;
+
+//     // Device side kernel params
+//     struct Params {
+//         int total_blocks;
+//         cutlass::FastDivmod m_block_divmod, head_divmod;
+//         cutlass::FastDivmod nsplits_divmod;
+//     };
+
+//     static Params
+//     to_underlying_arguments(TileSchedulerArguments const& args) {
+//         return {args.num_blocks * args.num_head * args.num_batch * (!Split ? 1 : args.num_splits),
+//                 cutlass::FastDivmod(args.num_blocks), cutlass::FastDivmod(args.num_head * (!Split ? 1 : args.num_splits)),
+//                 cutlass::FastDivmod(!Split ? 1 : args.num_splits)};
+//     }
+
+//     static dim3
+//     get_grid_shape(Params const& params, int num_sm) {
+//         return {uint32_t(num_sm)};
+//     }
+
+//     struct WorkTileInfo {
+//         int tile_idx;
+
+//         CUTLASS_DEVICE
+//         bool
+//         is_valid(Params const& params) const {
+//             return tile_idx < params.total_blocks;
+//         }
+
+//         CUTLASS_DEVICE
+//         cute::tuple<int32_t, int32_t, int32_t, int32_t>
+//         get_block_coord(Params const& params) const {
+//             int block, bidh, bidb;
+//             bidb = params.head_divmod.divmod(bidh, params.m_block_divmod.divmod(block, tile_idx));
+//             int split_idx = 0;
+//             if constexpr (Split) {
+//                 bidh = params.nsplits_divmod.divmod(split_idx, bidh);
+//             }
+//             return {block, bidh, bidb, split_idx};
+//         }
+
+//     };
+
+//     CUTLASS_DEVICE
+//     QKSkipTileScheduler(SharedStorage* const smem_scheduler) {};
+
+
+//     CUTLASS_DEVICE
+//     void
+//     set_skip_mask(uint64_t* raw_skip_mask) const {
+        
+//     }
+
+//     template<bool IsProducerWarp=false>
+//     CUTLASS_DEVICE
+//     WorkTileInfo
+//     get_initial_work(Params const& params) const {
+//         return {int(blockIdx.x)};
+//     }
+
+//     CUTLASS_DEVICE
+//     void
+//     init_consumer() const {}
+
+//     CUTLASS_DEVICE
+//     void
+//     prefetch_next_work(Params const& params, WorkTileInfo& current_work) const {}
+
+//     template<bool IsProducerWarp=false>
+//     CUTLASS_DEVICE
+//     WorkTileInfo
+//     get_next_work(Params const& params, WorkTileInfo const& current_work) const {
+//         return {current_work.tile_idx + int(gridDim.x)};
+//     }
+
+// };
+
+///////////////////////////////////////////////////////////////////////////////
+
 } // flash

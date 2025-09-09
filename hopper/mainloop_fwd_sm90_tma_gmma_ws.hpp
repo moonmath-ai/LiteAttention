@@ -124,6 +124,8 @@ struct CollectiveMainloopFwdSm90 {
     // Slightly faster in this case to have WG1 use RS instead of SS to avoid waiting for the P smem write
     static constexpr bool MmaPV_use_RS_WG1 = !MmaPV_is_RS && kHeadDim == 64 && kHeadDimV == 512;
 
+    // DOR: is it (128 / 64 = 2, 1, 1)? it's not making sense to me...
+    // oh! it's because we do the atom 2 times for each warpgroup!
     using AtomLayoutQK = Layout<Shape<Int<kBlockM / 64>, _1, _1>>;
     using TiledMmaQK = decltype(cute::make_tiled_mma(
         std::conditional_t<
@@ -624,6 +626,47 @@ struct CollectiveMainloopFwdSm90 {
         }
     }
 
+
+    // // todo: try to make the operation warp uniform to save registers
+    // // Boolean iterator for bitwise iteration over an array of uint64_t
+    // struct BoolBitIterator {
+    //     uint64_t* data;
+    //     int data_idx; // current index in the data array
+    //     int limb_idx; // current index in the limb (0-63)
+    //     uint64_t limb; // the limb after doing (<< 1) on in limb_idx times
+    //     bool is_assigned; // whether the current bit is assigned
+    //     const bool is_elected;
+
+    //     BoolBitIterator(uint64_t* data, bool is_elected) : data(data), data_idx(0), limb_idx(0), is_assigned(false), is_elected(is_elected) {
+    //         limb = data[data_idx];
+    //     }
+
+    //     __device__ bool next(){
+    //         if(limb_idx == 64){
+    //             if(is_elected && is_assigned) data[data_idx] = limb;
+    //             data_idx++;
+    //             limb_idx = 0;
+    //             limb = data[data_idx];
+    //             is_assigned = false;
+    //         }
+
+    //         bool bit = (limb >> limb_idx) & 1;
+
+    //         limb_idx++;
+    //         // todo: add a short cut if iter_limb == 0 so we could skip a larger amount of bits at once
+    //         return bit;
+    //     }
+
+    //     __device__ void assign_current_bit(){
+    //         if(is_elected){
+    //             limb |= 1 << (limb_idx - 1);
+    //             is_assigned = true;
+    //         }
+    //     }
+
+    // };
+
+
     // Main load function: responsible for loading Q, K, V data from global memory to shared memory
     // This function handles the producer side of the producer-consumer pipeline
     // It loads data for multiple tiles (blocks) of K and V to enable tiled attention computation
@@ -912,13 +955,13 @@ struct CollectiveMainloopFwdSm90 {
             PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
             ++smem_pipe_write;
             if (should_load_KV) {
-                if constexpr (PagedKVNonTMA) {
-                    paged_kv_manager.template load_page_table<false /*Seqlenk_mask*/>(n_block);
-                } else {
-                    paged_kv_manager.load_page_table_TMA(n_block);
-                }
-                if constexpr (Transpose_V) { load_V(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/); }
-                load_K(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/);
+                    if constexpr (PagedKVNonTMA) {
+                        paged_kv_manager.template load_page_table<false /*Seqlenk_mask*/>(n_block);
+                    } else {
+                        paged_kv_manager.load_page_table_TMA(n_block);
+                    }
+                    if constexpr (Transpose_V) { load_V(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/); }
+                    load_K(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/);
                 if constexpr (!Transpose_V) {
                     if constexpr (IntraWGOverlap) {
                         load_V(n_block_prev, smem_pipe_write_v, cute::true_type{} /*Seqlenk_mask*/);
@@ -1015,7 +1058,9 @@ struct CollectiveMainloopFwdSm90 {
         SharedStorage& shared_storage
         ) {
         static_assert(is_rmem<FrgTensorO>::value, "O tensor must be rmem resident.");
+        // DOR: height of the Q block
         static constexpr int kBlockM = get<0>(TileShape_MNK{});
+        // DOR: height of the K/V block
         static constexpr int kBlockN = get<1>(TileShape_MNK{});
 
         // can't use auto [m_block, ...] = block_coord since structured binding cannot be captured in lambda
@@ -1033,9 +1078,16 @@ struct CollectiveMainloopFwdSm90 {
             if (n_block_max <= n_block_min) { return false; }
         }
 
-        Tensor sQ = make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_q.data()), SmemLayoutQ{});
-        Tensor sK = make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_k.data()), SmemLayoutK{});
-        Tensor sV = make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_v.data()), SmemLayoutVtMma{});
+        /* DOR: in the video there is this comment here:
+        SMEM layouts are such that the first shape mode is outer dimension in matmul
+        and second is inner dimension
+        Use CUTLASS helper function to construct (cutlass::gemm::collective::detail::ss_smem_selector)
+
+        kBlockM - is a multiple of 64, kBlockN - is a modified depending on the limitations such as register count etc...
+        */
+        Tensor sQ = make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_q.data()), SmemLayoutQ{}); // (kBlockM, kHeadSize)
+        Tensor sK = make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_k.data()), SmemLayoutK{}); // (kBlockN, kHeadSize, kStages)
+        Tensor sV = make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_v.data()), SmemLayoutVtMma{}); // (kHeadSize, kBlockN, kStages)
         Tensor sP = [&] {
             if constexpr (MmaPV_is_RS) {
                 // We might not have smem_p if !MmaPV_is_RS, just use smem_q as a placeholder since we don't use it
@@ -1065,10 +1117,13 @@ struct CollectiveMainloopFwdSm90 {
         Layout warp_group_thread_layout = make_layout(make_shape(Int<MmaWarpGroups>{}),
                                                       make_stride(Int<cutlass::NumThreadsPerWarpGroup>{}));
 
+        // DOR: cool way to hint the compiler to make this value a warp uniform
         int warp_group_idx = __shfl_sync(0xFFFFFFFF, thread_idx / cutlass::NumThreadsPerWarpGroup, 0);
         TiledMmaQK tiled_mma_qk;
         TiledMmaPV tiled_mma_pv;
+        // DOR: why? do? we? need? this?
         TiledMmaQV tiled_mma_qv;
+        // (thread_idx, value ) -> index in some op or memory
         auto wg_mma_qk = tiled_mma_qk.get_slice(warp_group_thread_layout(warp_group_idx));
         auto wg_mma_pv = tiled_mma_pv.get_slice(warp_group_thread_layout(warp_group_idx));
         auto wg_mma_qv = tiled_mma_qv.get_slice(warp_group_thread_layout(warp_group_idx));
@@ -1081,6 +1136,7 @@ struct CollectiveMainloopFwdSm90 {
         Tensor tSrK = wg_mma_qk.partition_fragment_B(sK);
         Tensor tOrV = wg_mma_pv.partition_fragment_B(sV);
         Tensor tOsP = wg_mma_pv.partition_fragment_A(sP);
+        // DOR: because there is an overlap in shared memory between V and Q (TOMER idea)
         Tensor tSrQv = wg_mma_qv.partition_fragment_A(sQv);
         Tensor tSrV = wg_mma_qv.partition_fragment_B(sVMmaQV);
         Tensor tPsP = smem_thr_copy_P.partition_D(cute::as_position_independent_swizzle_tensor(sP));

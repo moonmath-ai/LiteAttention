@@ -97,6 +97,14 @@ public:
     // static constexpr uint32_t LoadRegisterRequirement = 40;
     // static constexpr uint32_t MmaRegisterRequirement = NumMmaWarpGroups == 2 ? 232 : 152;
 
+    // DOR: very interesting! why there is overlap between the shared memory of mainloop and epilogue?
+    // i think it's for using TMA store for o and to not allocate extra smem for the epilogue
+    // we overlap some v dedicated tile smem with for the o tile.
+    // we choosing v tile and not k tile?
+    // because we need the k tile earlier then the tile
+    // in the simplified version we woudn't need this because each block handels only 1 q tile
+    // so there woudn't anything to overlap with.
+
     // Kernel level shared memory storage
     // We overlap the shared memory for the mainloop and epilogue. However, we only want smem_o to overlap with smem_v
     // and nothing else, so we'll pad in case sizeof(smem_o) > sizeof(smem_v).
@@ -433,6 +441,7 @@ public:
                     float const k_descale = params.mainloop.ptr_k_descale == nullptr ? 1.0f : params.mainloop.ptr_k_descale[bidb * get<0>(params.mainloop.stride_k_descale) + bidh_kv * get<1>(params.mainloop.stride_k_descale)];
                     softmax_scale_log2 *= q_descale * k_descale;
                 }
+                // DOR: kNRows = 2 * (2 * 128 / 256) = 2
                 flash::Softmax<!LargeHeadDimV ? 2 * (2 * kBlockM / NumMmaThreads) : 2, /*Max_offset=*/!Is_FP8 ? 0 : 8> softmax(softmax_scale_log2);
 
                 /*
