@@ -12,16 +12,6 @@
 
 #include "utils.h"
 
-struct QKSkipMaskArgs {
-    uint64_t* mask_0;
-    uint64_t* mask_1;
-    uint64_t* mask_2;
-    uint64_t* mask_3;
-
-    // uint32_t q_dim;
-    // uint32_t k_dim;
-};
-
 struct QKSkipMask {
     uint64_t* mask[4];
     uint32_t q_dim;
