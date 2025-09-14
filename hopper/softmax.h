@@ -12,6 +12,16 @@
 
 #include "utils.h"
 
+struct QKSkipMaskArgs {
+    uint64_t* mask_0;
+    uint64_t* mask_1;
+    uint64_t* mask_2;
+    uint64_t* mask_3;
+
+    // uint32_t q_dim;
+    // uint32_t k_dim;
+};
+
 struct QKSkipMask {
     uint64_t* mask[4];
     uint32_t q_dim;
@@ -21,6 +31,7 @@ struct QKSkipMask {
 
     // Pass in pointer to allocated global memory
     // Pass in total number of bits
+    // DOR: i want to initialize this in the host side, is it a problem?
     __device__ QKSkipMask(
         uint64_t* mask_0_,
         uint64_t* mask_1_,
@@ -30,6 +41,7 @@ struct QKSkipMask {
         uint32_t k_dim_)
         : q_dim(q_dim_), k_dim(k_dim_),
           n_bits(q_dim_ * k_dim_),
+          // DOR: why >> 6?
           n_limbs((n_bits + 63) >> 6) {
         mask[0] = mask_0_;
         mask[1] = mask_1_;
@@ -37,6 +49,7 @@ struct QKSkipMask {
         mask[3] = mask_3_;
     }
     
+    // DOR: do we offset the pointer according to the head and batch OR taking this into account in the indexing?
     __device__ inline uint32_t flatten(uint32_t q_i, uint32_t k_i) const {
         return q_i * k_dim + k_i;
     }

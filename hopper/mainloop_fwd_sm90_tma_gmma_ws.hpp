@@ -436,6 +436,7 @@ struct CollectiveMainloopFwdSm90 {
         int const* const seqused_k = nullptr;
         int const* const leftpad_k = nullptr;
         int const* const seqlens_rotary = nullptr;
+        QKSkipMaskArgs const qk_skip_mask_args;
     };
 
     // Device side kernel params
@@ -493,6 +494,7 @@ struct CollectiveMainloopFwdSm90 {
         int const* const seqused_k = nullptr;
         int const* const leftpad_k = nullptr;
         int const *const seqlens_rotary = nullptr;
+        QKSkipMaskArgs const qk_skip_mask_args;
     };
 
     static Params
@@ -604,7 +606,8 @@ struct CollectiveMainloopFwdSm90 {
                 !Split ? 1 : args.num_splits,
                 args.kv_batch_idx,
                 args.cu_seqlens_q, args.cu_seqlens_k, args.cu_seqlens_k_new,
-                args.seqused_q, args.seqused_k, args.leftpad_k, args.seqlens_rotary};
+                args.seqused_q, args.seqused_k, args.leftpad_k, args.seqlens_rotary,
+                args.qk_skip_mask_args};
     }
 
     /// Issue Tma Descriptor Prefetch -- ideally from a single thread for best performance
@@ -625,48 +628,6 @@ struct CollectiveMainloopFwdSm90 {
             cute::prefetch_tma_descriptor(params.tma_load_V_new.get_tma_descriptor());
         }
     }
-
-
-    // todo: try to make the operation warp uniform to save registers
-    // Boolean iterator for bitwise iteration over an array of uint64_t
-    struct BoolBitIterator {
-        uint64_t* data;
-        int data_idx; // current index in the data array
-        int limb_idx; // current index in the limb (0-63)
-        uint64_t limb; // the limb after doing (<< 1) on in limb_idx times
-        bool is_assigned; // whether the current bit is assigned
-        const bool is_elected;
-
-        BoolBitIterator(uint64_t* data, bool is_elected) : data(data), data_idx(0), limb_idx(0), is_assigned(false), is_elected(is_elected) {
-            limb = data[data_idx];
-        }
-
-        __device__ bool next(){
-            if(limb_idx == 64){
-                if(is_elected && is_assigned) data[data_idx] = limb;
-                data_idx++;
-                limb_idx = 0;
-                limb = data[data_idx];
-                is_assigned = false;
-            }
-
-            bool bit = (limb >> limb_idx) & 1;
-
-            // 16 cycles
-            limb_idx++;
-            // todo: add a short cut if iter_limb == 0 so we could skip a larger amount of bits at once
-            return bit;
-        }
-
-        __device__ void assign_current_bit(){
-            if(is_elected){
-                limb |= 1 << (limb_idx - 1);
-                is_assigned = true;
-            }
-        }
-
-    };
-
 
     // Main load function: responsible for loading Q, K, V data from global memory to shared memory
     // This function handles the producer side of the producer-consumer pipeline
@@ -1065,9 +1026,9 @@ struct CollectiveMainloopFwdSm90 {
         static constexpr int kBlockN = get<1>(TileShape_MNK{});
 
         // can't use auto [m_block, ...] = block_coord since structured binding cannot be captured in lambda
-        int const m_block = get<0>(block_coord);
-        int const bidh = get<1>(block_coord);
-        int const bidb = get<2>(block_coord);
+        int const m_block = get<0>(block_coord); // the index of the Q block we are currently processing
+        int const bidh = get<1>(block_coord); // the index of the head we are currently processing
+        int const bidb = get<2>(block_coord); // batch index
         int const split_idx = get<3>(block_coord);
         int const bidh_kv = !PackGQA ? params.qhead_per_khead_divmod.divide(bidh) : bidh;
         auto [n_block_min, n_block_max] = BlockMN_t::get_n_block_min_max(
@@ -1078,6 +1039,22 @@ struct CollectiveMainloopFwdSm90 {
         if constexpr (Is_causal || Is_local || Varlen || Split) {
             if (n_block_max <= n_block_min) { return false; }
         }
+
+        // using ShapeQKV = cute::Shape<int32_t, int32_t, int32_t, int32_t>;  // (seqlen, d, head, batch)
+        int const num_heads = params.shape_Q[2];
+        int const num_q_blocks = cute::ceil_div(params.shape_Q[0], kBlockM);
+        int const num_k_blocks = cute::ceil_div(params.shape_K[0], kBlockN);
+        // [batch, head, m_block, k_block]
+        uint64_t mask_offset = (bidb * num_heads * num_q_blocks * num_k_blocks) + (bidh * num_q_blocks * num_k_blocks) + (m_block * num_k_blocks) + 0;
+        // mask_offset /= 64;
+        QKSkipMask qk_skip_mask(
+            qk_skip_mask_args.mask_0 + mask_offset,
+            qk_skip_mask_args.mask_1 + mask_offset,
+            qk_skip_mask_args.mask_2 + mask_offset,
+            qk_skip_mask_args.mask_3 + mask_offset,
+            num_k_blocks,
+            num_q_blocks
+        );
 
         /* DOR: in the video there is this comment here:
         SMEM layouts are such that the first shape mode is outer dimension in matmul
@@ -1389,9 +1366,12 @@ struct CollectiveMainloopFwdSm90 {
                 }
                 scoremod_premask_fn(tSrS);
                 mask_fn(tSrS, n_block);
+
                 // TONY: This is where the row maximum is computed (this is the first stage of the online softmax algorithm)
                 //.    : Instead of computing the entire softmax on this line, we just search for the row maximum
-                Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
+                // Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
+                Tensor scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(tSrS, qk_skip_mask, m_block, n_block);
+                
                 // If do_pv is false, we can skip everything below (pretty much)
                 if constexpr (LargeHeadDimV && !Is_first_iter) { store_scales(scores_scale, smem_pipe_read_prev.index()); }
                 softmax.template online_softmax</*Is_first=*/Is_first_iter, Check_inf>(tSrS);

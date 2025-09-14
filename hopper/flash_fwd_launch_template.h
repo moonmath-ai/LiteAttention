@@ -260,7 +260,8 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream) {
         // Variable length sequence metadata arrays
         params.cu_seqlens_q, params.cu_seqlens_k, params.cu_seqlens_knew,  // Cumulative sequence lengths
         params.seqused_q, params.seqused_k,      // Actual sequence lengths used (for padding)
-        params.leftpad_k, params.seqlens_rotary  // Left padding for K and rotary position lengths
+        params.leftpad_k, params.seqlens_rotary,  // Left padding for K and rotary position lengths
+        params.qk_skip_mask_args
     };
     // Construct epilogue arguments for output tensor handling using CuTe abstractions
     typename CollectiveEpilogue::Arguments epilogue_args {
