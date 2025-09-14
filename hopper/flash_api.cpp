@@ -30,6 +30,7 @@ PyObject* PyInit__C(void)
         -1,     /* size of per-interpreter state of the module,
                     or -1 if the module keeps state in global variables. */
         NULL,   /* methods */
+        // NULL,   /* slots */
     };
     return PyModule_Create(&module_def);
 }

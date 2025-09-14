@@ -1044,10 +1044,12 @@ struct CollectiveMainloopFwdSm90 {
         int const num_heads = get<2>(params.shape_Q);
         int const num_q_blocks = cute::ceil_div(get<0>(params.shape_Q), kBlockM);
         int const num_k_blocks = cute::ceil_div(get<0>(params.shape_K), kBlockN);
+        const uint32_t q_i = (uint32_t) m_block;
+        // uint32_t k_i = (uint32_t) n_block;
         // [batch, head, m_block, k_block]
         // uint64_t mask_offset = (bidb * num_heads * num_q_blocks * num_k_blocks) + (bidh * num_q_blocks * num_k_blocks) + (m_block * num_k_blocks) + 0;
         const uint32_t limbs_qk = cute::ceil_div(num_q_blocks * num_k_blocks, 64);
-        uint64_t mask_offset = (bidb * num_heads * limbs_qk) + (bidh * limbs_qk) + ((m_block * num_k_blocks) / 64);
+        uint64_t mask_offset = (bidb * num_heads * limbs_qk) + (bidh * limbs_qk) + ((q_i * num_k_blocks) / 64);
         QKSkipMask qk_skip_mask(
             params.qk_skip_mask_args.mask_0 + mask_offset,
             params.qk_skip_mask_args.mask_1 + mask_offset,
@@ -1371,7 +1373,7 @@ struct CollectiveMainloopFwdSm90 {
                 // TONY: This is where the row maximum is computed (this is the first stage of the online softmax algorithm)
                 //.    : Instead of computing the entire softmax on this line, we just search for the row maximum
                 // Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
-                Tensor scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(tSrS, qk_skip_mask, m_block, n_block);
+                Tensor scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(tSrS, qk_skip_mask, q_i, (uint32_t) n_block);
                 
                 // If do_pv is false, we can skip everything below (pretty much)
                 if constexpr (LargeHeadDimV && !Is_first_iter) { store_scales(scores_scale, smem_pipe_read_prev.index()); }
