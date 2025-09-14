@@ -1041,17 +1041,18 @@ struct CollectiveMainloopFwdSm90 {
         }
 
         // using ShapeQKV = cute::Shape<int32_t, int32_t, int32_t, int32_t>;  // (seqlen, d, head, batch)
-        int const num_heads = params.shape_Q[2];
-        int const num_q_blocks = cute::ceil_div(params.shape_Q[0], kBlockM);
-        int const num_k_blocks = cute::ceil_div(params.shape_K[0], kBlockN);
+        int const num_heads = get<2>(params.shape_Q);
+        int const num_q_blocks = cute::ceil_div(get<0>(params.shape_Q), kBlockM);
+        int const num_k_blocks = cute::ceil_div(get<0>(params.shape_K), kBlockN);
         // [batch, head, m_block, k_block]
-        uint64_t mask_offset = (bidb * num_heads * num_q_blocks * num_k_blocks) + (bidh * num_q_blocks * num_k_blocks) + (m_block * num_k_blocks) + 0;
-        // mask_offset /= 64;
+        // uint64_t mask_offset = (bidb * num_heads * num_q_blocks * num_k_blocks) + (bidh * num_q_blocks * num_k_blocks) + (m_block * num_k_blocks) + 0;
+        const uint32_t limbs_qk = cute::ceil_div(num_q_blocks * num_k_blocks, 64);
+        uint64_t mask_offset = (bidb * num_heads * limbs_qk) + (bidh * limbs_qk) + ((m_block * num_k_blocks) / 64);
         QKSkipMask qk_skip_mask(
-            qk_skip_mask_args.mask_0 + mask_offset,
-            qk_skip_mask_args.mask_1 + mask_offset,
-            qk_skip_mask_args.mask_2 + mask_offset,
-            qk_skip_mask_args.mask_3 + mask_offset,
+            params.qk_skip_mask_args.mask_0 + mask_offset,
+            params.qk_skip_mask_args.mask_1 + mask_offset,
+            params.qk_skip_mask_args.mask_2 + mask_offset,
+            params.qk_skip_mask_args.mask_3 + mask_offset,
             num_k_blocks,
             num_q_blocks
         );

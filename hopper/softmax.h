@@ -51,6 +51,7 @@ struct QKSkipMask {
     
     // DOR: do we offset the pointer according to the head and batch OR taking this into account in the indexing?
     __device__ inline uint32_t flatten(uint32_t q_i, uint32_t k_i) const {
+        // (B, H) , round(M x N, 64)
         return q_i * k_dim + k_i;
     }
 

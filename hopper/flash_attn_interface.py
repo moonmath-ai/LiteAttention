@@ -51,6 +51,7 @@ def _flash_attn_forward(
         num_splits=1,
         pack_gqa=None,
         sm_margin=0,
+        qk_skip_mask_args=None,
     ):
     q, k, k_new, v_new = [maybe_contiguous(x) for x in (q, k, k_new, v_new)]
     v = v.contiguous() if v.stride(-1) != 1 and v.stride(-3) != 1 else v
@@ -98,6 +99,7 @@ def _flash_attn_forward(
         num_splits,
         pack_gqa,
         sm_margin,
+        qk_skip_mask_args,
     )
     return out, softmax_lse, *rest
 

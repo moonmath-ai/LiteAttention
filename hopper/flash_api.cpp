@@ -698,7 +698,8 @@ mha_fwd(at::Tensor q,   // (b, s_q, h, d) or (total_q, h, d) if there is cu_seql
         std::optional<at::Tensor> scheduler_metadata_,  // (b + 1)
         int64_t num_splits,
         std::optional<bool> pack_gqa_,
-        int64_t sm_margin
+        int64_t sm_margin,
+        std::optional<at::Tensor> qk_skip_mask_args_
         ) {
 
     auto dprops = at::cuda::getCurrentDeviceProperties();
@@ -905,6 +906,30 @@ mha_fwd(at::Tensor q,   // (b, s_q, h, d) or (total_q, h, d) if there is cu_seql
                      attention_chunk,
                      softcap,
                      sm_margin);
+
+    // Convert qk_skip_mask_args tensor to QKSkipMaskArgs struct
+    // Expected shape: [4, batch, heads, ceil_div(q_tiles * k_tiles, 64)]
+    if (qk_skip_mask_args_.has_value()) {
+        auto qk_skip_mask_tensor = qk_skip_mask_args_.value();
+        TORCH_CHECK(qk_skip_mask_tensor.dtype() == torch::kUInt64, "qk_skip_mask_args must be uint64 tensor");
+        TORCH_CHECK(qk_skip_mask_tensor.dim() == 4, "qk_skip_mask_args must be 4D tensor with shape [4, batch, heads, limbs]");
+        TORCH_CHECK(qk_skip_mask_tensor.size(0) == 4, "qk_skip_mask_args must have 4 masks in dimension 0");
+        TORCH_CHECK(qk_skip_mask_tensor.is_contiguous(), "qk_skip_mask_args must be contiguous");
+        
+        uint64_t* data_ptr = static_cast<uint64_t*>(qk_skip_mask_tensor.data_ptr());
+        // Calculate stride for each mask: batch * heads * limbs elements per mask
+        int64_t mask_stride = qk_skip_mask_tensor.size(1) * qk_skip_mask_tensor.size(2) * qk_skip_mask_tensor.size(3);
+        
+        params.qk_skip_mask_args.mask_0 = data_ptr;
+        params.qk_skip_mask_args.mask_1 = data_ptr + mask_stride;
+        params.qk_skip_mask_args.mask_2 = data_ptr + 2 * mask_stride;
+        params.qk_skip_mask_args.mask_3 = data_ptr + 3 * mask_stride;
+    } else {
+        params.qk_skip_mask_args.mask_0 = nullptr;
+        params.qk_skip_mask_args.mask_1 = nullptr;
+        params.qk_skip_mask_args.mask_2 = nullptr;
+        params.qk_skip_mask_args.mask_3 = nullptr;
+    }
     params.total_q = total_q;
     params.total_k = total_k;
     params.b_k = batch_size_k;
@@ -1697,7 +1722,9 @@ TORCH_LIBRARY(flash_attn_3, m) {
         "Tensor? scheduler_metadata = None,"
         "int num_splits = 0,"
         "bool? pack_gqa = None,"
-        "int sm_margin = 0) -> (Tensor(out!), Tensor, Tensor, Tensor)");
+        "int sm_margin = 0,"
+        "Tensor? qk_skip_mask_args = None) -> (Tensor(out!), Tensor, Tensor, Tensor)"
+    );
     m.def("bwd("
         "Tensor dout,"
         "Tensor q,"
