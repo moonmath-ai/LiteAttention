@@ -43,9 +43,9 @@ export FLASH_ATTENTION_DISABLE_HDIMDIFF192=TRUE   # Line 68 - Disable different 
 echo "Environment variables set successfully!"
 
 # Activate conda environment
-echo "Activating conda environment ltxfa3_comp..."
-source ~/miniconda3/etc/profile.d/conda.sh
-conda activate ltxfa3_comp
+# echo "Activating conda environment ltxfa3_comp..."
+# source ~/miniconda3/etc/profile.d/conda.sh
+# conda activate ltxfa3_comp
 
 # Uninstall existing flash_attn_3 installation
 echo "Uninstalling existing flash_attn_3..."

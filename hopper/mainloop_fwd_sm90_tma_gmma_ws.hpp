@@ -1384,7 +1384,9 @@ struct CollectiveMainloopFwdSm90 {
                 // TONY: This is where the row maximum is computed (this is the first stage of the online softmax algorithm)
                 //.    : Instead of computing the entire softmax on this line, we just search for the row maximum
                 // Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
-                if (!skip) Tensor scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(tSrS, qk_skip_mask, q_i, (uint32_t) n_block);
+                // Declare scores_scale with the correct dependent type from the template parameter `Softmax`.
+                typename Softmax::TensorT scores_scale;
+                if (!skip) scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(tSrS, qk_skip_mask, q_i, (uint32_t) n_block);
                 
                 // If do_pv is false, we can skip everything below (pretty much)
                 if constexpr (LargeHeadDimV && !Is_first_iter) { store_scales(scores_scale, smem_pipe_read_prev.index()); }
@@ -1399,7 +1401,7 @@ struct CollectiveMainloopFwdSm90 {
 
                 // DOR and TONY: not running in out case
                 if constexpr (!MmaPV_is_RS) { write_P_to_smem(tOrP); }
-                if constexpr (!Is_first_iter && !skip) { softmax.rescale_o(tOrO, scores_scale); }
+                if constexpr (!Is_first_iter) { if (!skip) { softmax.rescale_o(tOrO, scores_scale); } }
 
                 // DOR and TONY: not running in out case
                 if constexpr (!MmaPV_is_RS && !MmaPV_use_RS_WG1) { arrive_on_P_write_barrier(); }
