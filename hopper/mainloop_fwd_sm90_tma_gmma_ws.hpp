@@ -1344,17 +1344,27 @@ struct CollectiveMainloopFwdSm90 {
             warp_scheduler_barrier_sync();
 
             auto fwd_step = [&](int const n_block, auto mask_fn, auto is_first_iter_type, auto check_inf_type) {
+                bool skip = qk_skip_mask.get(q_i, (uint32_t) n_block);
+
                 static constexpr bool Is_first_iter = decltype(is_first_iter_type)::value;
                 static constexpr bool Check_inf = decltype(check_inf_type)::value;
                 auto smem_pipe_read_prev = smem_pipe_read;
                 if constexpr (!Is_first_iter) { ++smem_pipe_read; }
+
                 Tensor tSrS = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
                 consumer_wait(pipeline_k, smem_pipe_read);
                 // TONY: skip this (QK)
-                flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS);
+
+                // should create a problem
+                if (!skip) flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS);
+
                 if constexpr (!HasQv) {
                     warp_scheduler_barrier_arrive();
-                    warpgroup_wait<0>();
+                    if (!skip) {
+                        warpgroup_wait<0>();
+                    }else{
+                        warpgroup_wait<1>();
+                    }
                     pipeline_k.consumer_release(smem_pipe_read);  // release K
                 } else {
                     if constexpr (Is_first_iter) {
@@ -1367,42 +1377,59 @@ struct CollectiveMainloopFwdSm90 {
                     pipeline_k.consumer_release(smem_pipe_read);  // release K
                     warpgroup_wait<0>();
                 }
+
                 scoremod_premask_fn(tSrS);
                 mask_fn(tSrS, n_block);
 
                 // TONY: This is where the row maximum is computed (this is the first stage of the online softmax algorithm)
                 //.    : Instead of computing the entire softmax on this line, we just search for the row maximum
                 // Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
-                Tensor scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(tSrS, qk_skip_mask, q_i, (uint32_t) n_block);
+                if (!skip) Tensor scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(tSrS, qk_skip_mask, q_i, (uint32_t) n_block);
                 
                 // If do_pv is false, we can skip everything below (pretty much)
                 if constexpr (LargeHeadDimV && !Is_first_iter) { store_scales(scores_scale, smem_pipe_read_prev.index()); }
-                softmax.template online_softmax</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
+                if (!skip) softmax.template online_softmax</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
                 if constexpr (Is_FP8 && !V_colmajor) { flash::permute_Cregs_fp8(tSrS); }
                 Tensor tOrP_acc = make_tensor(tSrS.data(), flash::convert_layout_acc_Aregs<TiledMmaPV>(tSrS.layout()));
                 Tensor tOrP = make_tensor_like<Element>(tOrP_acc);
-                convert_type_out(tOrP_acc, tOrP);
+
+                if (!skip) convert_type_out(tOrP_acc, tOrP);
+
                 if constexpr (Is_FP8 && V_colmajor) { flash::permute_Aregs_fp8(tOrP); }
+
+                // DOR and TONY: not running in out case
                 if constexpr (!MmaPV_is_RS) { write_P_to_smem(tOrP); }
-                if constexpr (!Is_first_iter) { softmax.rescale_o(tOrO, scores_scale); }
+                if constexpr (!Is_first_iter && !skip) { softmax.rescale_o(tOrO, scores_scale); }
+
+                // DOR and TONY: not running in out case
                 if constexpr (!MmaPV_is_RS && !MmaPV_use_RS_WG1) { arrive_on_P_write_barrier(); }
+                // DOR and TONY: not running in out case
                 if constexpr (!HasQv) { consumer_wait(pipeline_v, smem_pipe_read); }
                 warp_scheduler_barrier_sync();
                 // TONY: this is P time V
-                if constexpr (!MmaPV_use_RS_WG1) {
-                    flash::gemm</*zero_init=*/Is_first_iter, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP), tOrV(_, _, _, smem_pipe_read.index()), tOrO);
-                } else {
-                    TiledMmaPV_RS tiled_mma_pv_rs;
-                    flash::gemm</*zero_init=*/Is_first_iter, /*wg_wait=*/-1>(tiled_mma_pv_rs, tOrP, tOrV(_, _, _, smem_pipe_read.index()), tOrO);
+                if (!skip) {
+                    if constexpr (!MmaPV_use_RS_WG1) {
+                        flash::gemm</*zero_init=*/Is_first_iter, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP), tOrV(_, _, _, smem_pipe_read.index()), tOrO);
+                    } else {
+                        // DOR and TONY: this runs!
+                        TiledMmaPV_RS tiled_mma_pv_rs;
+                        flash::gemm</*zero_init=*/Is_first_iter, /*wg_wait=*/-1>(tiled_mma_pv_rs, tOrP, tOrV(_, _, _, smem_pipe_read.index()), tOrO);
+                    }
                 }
+                // DOR and TONY: not running in out case
                 if constexpr (!MmaPV_is_RS && MmaPV_use_RS_WG1) { arrive_on_P_write_barrier(); }
-                warpgroup_wait<0>();
+                if (!skip) {
+                    warpgroup_wait<0>();
+                }else{
+                    warpgroup_wait<1>();
+                }
                 pipeline_v.consumer_release(smem_pipe_read);  // release V
             };
 
             auto first_iter_mask_fn = [&](auto& tSrS, int n_block) { mask.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS, m_block, n_block); };
             fwd_step(n_block, first_iter_mask_fn, cute::true_type{} /*is_first_iter*/, cute::true_type{} /*check_inf*/);
             --n_block;
+            // DOR and TONY: not running in our case
             if constexpr (Is_causal || Is_local) { // Separate iterations with causal or local masking
                 auto mask_fn = [&](auto& tSrS, int n_block) { mask.template apply<false /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS, m_block, n_block); };
                 int const n_block_min_causal_local_mask = BlockMN_t::get_n_block_min_causal_local_mask(
@@ -1423,6 +1450,8 @@ struct CollectiveMainloopFwdSm90 {
                 // if (do_pv_global[i] == false) {continue};
                 fwd_step(n_block, no_mask_fn, cute::false_type{} /*is_first_iter*/, cute::false_type{} /*check_inf*/);
             }
+
+            // DOR and TONY: not running in our case
             // Separate masking iterations on the left for local attention
             if constexpr (Is_local) {
                 auto local_mask_fn = [&](auto& tSrS, int n_block) { mask.template apply<false /*Seqlenk_mask*/, false /*Causal_mask*/, Is_local>(tSrS, m_block, n_block); };
@@ -1436,6 +1465,8 @@ struct CollectiveMainloopFwdSm90 {
             cutlass::arch::NamedBarrier::arrive(NumMmaThreadsQK + (Use_TMA_Q ? cutlass::NumThreadsPerWarp : NumProducerThreads), static_cast<uint32_t>(FwdNamedBarriers::QueryEmpty) /*id*/);
             float const v_descale = !Is_FP8 || params.ptr_v_descale == nullptr ? 1.0f : params.ptr_v_descale[bidb * get<0>(params.stride_v_descale) + bidh_kv * get<1>(params.stride_v_descale)];
             Tensor scores_scale = softmax.finalize(v_descale);
+
+            // DOR and TONY: not running in our case
             if constexpr (LargeHeadDimV) {
                 cutlass::arch::NamedBarrier::sync(NumMmaThreads, static_cast<uint32_t>(FwdNamedBarriers::PEmpty) /*id*/);
                 store_scales(scores_scale, smem_pipe_read.index());
