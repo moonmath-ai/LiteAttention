@@ -672,6 +672,25 @@ struct CollectiveMainloopFwdSm90 {
             }
         }
 
+        // using ShapeQKV = cute::Shape<int32_t, int32_t, int32_t, int32_t>;  // (seqlen, d, head, batch)
+        int const num_heads = get<2>(params.shape_Q);
+        int const num_q_blocks = cute::ceil_div(get<0>(params.shape_Q), kBlockM);
+        int const num_k_blocks = cute::ceil_div(get<0>(params.shape_K), kBlockN);
+        const uint32_t q_i = (uint32_t) m_block;
+        // uint32_t k_i = (uint32_t) n_block;
+        // [batch, head, m_block, k_block]
+        // uint64_t mask_offset = (bidb * num_heads * num_q_blocks * num_k_blocks) + (bidh * num_q_blocks * num_k_blocks) + (m_block * num_k_blocks) + 0;
+        const uint32_t limbs_qk = cute::ceil_div(num_q_blocks * num_k_blocks, 64);
+        uint64_t mask_offset = (bidb * num_heads * limbs_qk) + (bidh * limbs_qk) + ((q_i * num_k_blocks) / 64);
+        QKSkipMask qk_skip_mask(
+            params.qk_skip_mask_args.mask_0 + mask_offset,
+            params.qk_skip_mask_args.mask_1 + mask_offset,
+            params.qk_skip_mask_args.mask_2 + mask_offset,
+            params.qk_skip_mask_args.mask_3 + mask_offset,
+            num_k_blocks,
+            num_q_blocks
+        );
+
         Tensor sQ = make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_q.data()), SmemLayoutQ{});
         Tensor sK = make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_k.data()), SmemLayoutK{});
         Tensor sK_pi = as_position_independent_swizzle_tensor(sK);
@@ -769,6 +788,7 @@ struct CollectiveMainloopFwdSm90 {
         CUTE_STATIC_ASSERT_V(size<2>(tTranssVt_) == size<2>(tTranssV_));
         CUTE_STATIC_ASSERT_V(size<3>(tTranssVt_) == size<3>(tTranssV_));
         CUTE_STATIC_ASSERT_V(size<4>(tTranssVt_) == size<4>(tTranssV_));
+        // DOR: returne here and understand this better!
         // Faster to have 2 LDSM.T, byte permute, STSM for better ILP
         static constexpr int Transpose_ILP = (size<2>(tTranssVt_) * size<3>(tTranssVt_)) % 2 == 0 ? 2 : 1;
         Tensor tTranssVt = logical_divide(group_modes<1, rank(tTranssVt_) - 1>(tTranssVt_), Shape<Underscore, Int<Transpose_ILP>>{});  // ((16, 1), (2, kHeadDim / 64 * kBlockN / 32 / 2), kStages)
@@ -802,6 +822,7 @@ struct CollectiveMainloopFwdSm90 {
         }
 
         auto load_K = [&] (int const n_block, auto const& smem_pipe_write, auto need_seqlenk_masking_type) {
+
             pipeline_k.producer_acquire(smem_pipe_write);
             if constexpr (!PagedKVNonTMA) {
                 auto [n_block_idx, bidb_kv_idx] = paged_kv_manager.get_indices_for_K_TMA();
@@ -852,7 +873,11 @@ struct CollectiveMainloopFwdSm90 {
         static constexpr bool SingleProducerWarp = NumProducerThreads == cutlass::NumThreadsPerWarp;
         bool should_load_KV = !Use_TMA_KV || ((SingleProducerWarp || warp_idx_in_warpgroup == 0) && cute::elect_one_sync());
 
-        if (should_load_KV) {
+        bool skip = qk_skip_mask.get(q_i, (uint32_t) n_block);
+        // DOR: toggeld off so to not effect the computation until further testing
+        const bool not_skipable_toggle = true;
+
+        if (should_load_KV && (!skip || not_skipable_toggle)) {
             if constexpr (PagedKVNonTMA) {
                 paged_kv_manager.template load_page_table<true /*Seqlenk_mask*/, true /*First_iter*/>(n_block);
             } else {
@@ -913,7 +938,9 @@ struct CollectiveMainloopFwdSm90 {
         int n_block_prev = n_block;
         --n_block;
         #pragma unroll (!Transpose_V && Use_TMA_KV ? 2 : 1)
-        for (; n_block >= n_block_min; --n_block) {
+        for (; n_block >= n_block_min; --n_block, skip = qk_skip_mask.get(q_i, (uint32_t) n_block)) {
+            if(skip && not_skipable_toggle) continue;
+
             PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
             ++smem_pipe_write;
             if (should_load_KV) {
