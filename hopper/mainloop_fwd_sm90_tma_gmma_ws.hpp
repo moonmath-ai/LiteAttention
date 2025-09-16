@@ -1377,6 +1377,8 @@ struct CollectiveMainloopFwdSm90 {
 
             warp_scheduler_barrier_sync();
 
+            // clear(tOrO);
+
             auto fwd_step = [&](int const n_block, auto mask_fn, auto is_first_iter_type, auto check_inf_type) {
 
                 bool skip = qk_skip_mask.get(q_i, (uint32_t) n_block);
@@ -1392,14 +1394,14 @@ struct CollectiveMainloopFwdSm90 {
                 // TONY: skip this (QK)
 
                 // should create a problem
-                if (!skip) flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS);
+                if (!skip || Is_first_iter) flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS);
                 // flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS);
 
                 if constexpr (!HasQv) {
                     warp_scheduler_barrier_arrive();
                     // warpgroup_wait<0>();
 
-                    if (!skip) {
+                    if (!skip || Is_first_iter) {
                         warpgroup_wait<0>();
                     }else{
                         warpgroup_wait<1>();
@@ -1425,7 +1427,9 @@ struct CollectiveMainloopFwdSm90 {
                 // Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
                 // Declare scores_scale with the correct dependent type from the template parameter `Softmax`.
                 typename Softmax::TensorT scores_scale;
-                if (!skip) scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(tSrS, qk_skip_mask, q_i, (uint32_t) n_block, -70.0f);
+                // if (!skip) scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(tSrS, qk_skip_mask, q_i, (uint32_t) n_block, -INFINITY);
+                // if (!skip) scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(tSrS, qk_skip_mask, q_i, (uint32_t) n_block, -std::numeric_limits<float>::infinity());
+                if (!skip || Is_first_iter) scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(tSrS, qk_skip_mask, q_i, (uint32_t) n_block, 0.0f);
 
                 //  Tensor scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(tSrS, qk_skip_mask, q_i, (uint32_t) n_block);
                 // Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
@@ -1435,14 +1439,14 @@ struct CollectiveMainloopFwdSm90 {
                 // If do_pv is false, we can skip everything below (pretty much)
                 if constexpr (LargeHeadDimV && !Is_first_iter) { store_scales(scores_scale, smem_pipe_read_prev.index()); }
 
-                if (!skip) softmax.template online_softmax</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
+                if (!skip || Is_first_iter) softmax.template online_softmax</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
                 // softmax.template online_softmax</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
 
                 if constexpr (Is_FP8 && !V_colmajor) { flash::permute_Cregs_fp8(tSrS); }
                 Tensor tOrP_acc = make_tensor(tSrS.data(), flash::convert_layout_acc_Aregs<TiledMmaPV>(tSrS.layout()));
                 Tensor tOrP = make_tensor_like<Element>(tOrP_acc);
 
-                if (!skip) convert_type_out(tOrP_acc, tOrP);
+                if (!skip || Is_first_iter) convert_type_out(tOrP_acc, tOrP);
                 // convert_type_out(tOrP_acc, tOrP);
 
                 if constexpr (Is_FP8 && V_colmajor) { flash::permute_Aregs_fp8(tOrP); }
@@ -1458,7 +1462,7 @@ struct CollectiveMainloopFwdSm90 {
                 if constexpr (!HasQv) { consumer_wait(pipeline_v, smem_pipe_read); }
                 warp_scheduler_barrier_sync();
                 // TONY: this is P time V
-                if (!skip) {
+                if (!skip || Is_first_iter) {
                     if constexpr (!MmaPV_use_RS_WG1) {
                         flash::gemm</*zero_init=*/Is_first_iter, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP), tOrV(_, _, _, smem_pipe_read.index()), tOrO);
                     } else {
@@ -1471,7 +1475,7 @@ struct CollectiveMainloopFwdSm90 {
                 if constexpr (!MmaPV_is_RS && MmaPV_use_RS_WG1) { arrive_on_P_write_barrier(); }
 
                 // warpgroup_wait<0>();
-                if (!skip) {
+                if (!skip || Is_first_iter) {
                     warpgroup_wait<0>();
                 }else{
                     warpgroup_wait<1>();
