@@ -181,6 +181,7 @@ struct Softmax {
 
             #pragma unroll
             for (int mi = 0; mi < size(row_max); ++mi) {
+                // update row max
                 row_max(mi) = max(row_max(mi), scores_max_local(mi));
                 float cur = !Check_inf
                     ? row_max(mi)
