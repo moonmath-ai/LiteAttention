@@ -1430,7 +1430,7 @@ struct CollectiveMainloopFwdSm90 {
                 typename Softmax::TensorT scores_scale;
                 // if (!skip) scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(tSrS, qk_skip_mask, q_i, (uint32_t) n_block, -INFINITY);
                 // if (!skip) scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(tSrS, qk_skip_mask, q_i, (uint32_t) n_block, -std::numeric_limits<float>::infinity());
-                if (!skip || Is_first_iter) scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(tSrS, qk_skip_mask, q_i, (uint32_t) n_block, -7.0f);
+                if (!skip || Is_first_iter) scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(tSrS, qk_skip_mask, q_i, (uint32_t) n_block, 0.01f);
 
                 //  Tensor scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(tSrS, qk_skip_mask, q_i, (uint32_t) n_block);
                 // Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
