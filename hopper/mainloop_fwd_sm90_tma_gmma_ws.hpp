@@ -1086,10 +1086,11 @@ struct CollectiveMainloopFwdSm90 {
         // uint64_t mask_offset = (bidb * num_heads * limbs_qk) + (bidh * limbs_qk) + ((q_i * num_k_blocks) / 64);
         uint64_t mask_offset = (bidb * num_heads * limbs_qk) + (bidh * limbs_qk);
         QKSkipMask qk_skip_mask(
-            params.qk_skip_mask_args.mask_0 + mask_offset,
-            params.qk_skip_mask_args.mask_1 + mask_offset,
-            params.qk_skip_mask_args.mask_2 + mask_offset,
-            params.qk_skip_mask_args.mask_3 + mask_offset,
+            params.qk_skip_mask_args.mask + mask_offset,
+            // params.qk_skip_mask_args.mask_0 + mask_offset,
+            // params.qk_skip_mask_args.mask_1 + mask_offset,
+            // params.qk_skip_mask_args.mask_2 + mask_offset,
+            // params.qk_skip_mask_args.mask_3 + mask_offset,
             num_q_blocks,
             num_k_blocks
         );
@@ -1383,7 +1384,7 @@ struct CollectiveMainloopFwdSm90 {
             auto fwd_step = [&](int const n_block, auto mask_fn, auto is_first_iter_type, auto check_inf_type) {
 
                 bool skip = qk_skip_mask.get(q_i, (uint32_t) n_block);
-                assert(!skip);
+                // assert(!skip);
 
                 static constexpr bool Is_first_iter = decltype(is_first_iter_type)::value;
                 static constexpr bool Check_inf = decltype(check_inf_type)::value;

@@ -75,6 +75,18 @@ __device__ __forceinline__ T operator()(T const & x, T const & y) { return x + y
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+template<typename T>
+struct BoolOrOp {
+__device__ __forceinline__ T operator()(T const & x, T const & y) { return x || y; }
+};
+
+template <>
+struct BoolOrOp<bool> {
+__device__ __forceinline__ bool operator()(bool const & x, bool const & y) { return x || y; }
+};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
 template<int THREADS>
 struct Allreduce {
     static_assert(THREADS == 32 || THREADS == 16 || THREADS == 8 || THREADS == 4);
