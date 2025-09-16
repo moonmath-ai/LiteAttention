@@ -1058,7 +1058,7 @@ struct CollectiveMainloopFwdSm90 {
         int const m_block = get<0>(block_coord); // the index of the Q block we are currently processing
         int const bidh = get<1>(block_coord); // the index of the head we are currently processing
         int const bidb = get<2>(block_coord); // batch index
-        int const split_idx = get<3>(block_coord);
+        int const split_idx = get<3>(block_coord); 
         int const bidh_kv = !PackGQA ? params.qhead_per_khead_divmod.divide(bidh) : bidh;
         auto [n_block_min, n_block_max] = BlockMN_t::get_n_block_min_max(
             seqlen_info, m_block, bidb, split_idx, params.num_splits,
@@ -1074,13 +1074,15 @@ struct CollectiveMainloopFwdSm90 {
 
         // using ShapeQKV = cute::Shape<int32_t, int32_t, int32_t, int32_t>;  // (seqlen, d, head, batch)
         int const num_heads = get<2>(params.shape_Q);
-        int const num_q_blocks = cute::ceil_div(get<0>(params.shape_Q), kBlockM);
+        // int const num_q_blocks = cute::ceil_div(get<0>(params.shape_Q), kBlockM);
+        int const num_q_blocks = cute::ceil_div(get<0>(params.shape_Q), kBlockM / 2);
         int const num_k_blocks = cute::ceil_div(get<0>(params.shape_K), kBlockN);
         const uint32_t q_i = ((uint32_t) m_block) * 2 + warp_group_idx;
         // uint32_t k_i = (uint32_t) n_block;
         // [batch, head, m_block, k_block]
         // uint64_t mask_offset = (bidb * num_heads * num_q_blocks * num_k_blocks) + (bidh * num_q_blocks * num_k_blocks) + (m_block * num_k_blocks) + 0;
-        const uint32_t limbs_qk = cute::ceil_div(num_q_blocks * num_k_blocks, 64);
+        // const uint32_t limbs_qk = cute::ceil_div(num_q_blocks * num_k_blocks, 64);
+        const uint32_t limbs_qk = cute::ceil_div(num_q_blocks * num_k_blocks, 64) * 64;
         uint64_t mask_offset = (bidb * num_heads * limbs_qk) + (bidh * limbs_qk) + ((q_i * num_k_blocks) / 64);
         QKSkipMask qk_skip_mask(
             params.qk_skip_mask_args.mask_0 + mask_offset,
@@ -1423,10 +1425,12 @@ struct CollectiveMainloopFwdSm90 {
                 // Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
                 // Declare scores_scale with the correct dependent type from the template parameter `Softmax`.
                 typename Softmax::TensorT scores_scale;
-                // if (!skip) scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(tSrS, qk_skip_mask, q_i, (uint32_t) n_block);
+                if (!skip) scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(tSrS, qk_skip_mask, q_i, (uint32_t) n_block, -70.0f);
+
                 //  Tensor scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(tSrS, qk_skip_mask, q_i, (uint32_t) n_block);
                 // Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
-                if (!skip) scores_scale = softmax.template max_get_scale</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
+
+                // if (!skip) scores_scale = softmax.template max_get_scale</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
                 
                 // If do_pv is false, we can skip everything below (pretty much)
                 if constexpr (LargeHeadDimV && !Is_first_iter) { store_scales(scores_scale, smem_pipe_read_prev.index()); }
