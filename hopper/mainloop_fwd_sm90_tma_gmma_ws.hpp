@@ -1069,24 +1069,24 @@ struct CollectiveMainloopFwdSm90 {
             if (n_block_max <= n_block_min) { return false; }
         }
 
-        // // using ShapeQKV = cute::Shape<int32_t, int32_t, int32_t, int32_t>;  // (seqlen, d, head, batch)
-        // int const num_heads = get<2>(params.shape_Q);
-        // int const num_q_blocks = cute::ceil_div(get<0>(params.shape_Q), kBlockM);
-        // int const num_k_blocks = cute::ceil_div(get<0>(params.shape_K), kBlockN);
-        // const uint32_t q_i = (uint32_t) m_block;
-        // // uint32_t k_i = (uint32_t) n_block;
-        // // [batch, head, m_block, k_block]
-        // // uint64_t mask_offset = (bidb * num_heads * num_q_blocks * num_k_blocks) + (bidh * num_q_blocks * num_k_blocks) + (m_block * num_k_blocks) + 0;
-        // const uint32_t limbs_qk = cute::ceil_div(num_q_blocks * num_k_blocks, 64);
-        // uint64_t mask_offset = (bidb * num_heads * limbs_qk) + (bidh * limbs_qk) + ((q_i * num_k_blocks) / 64);
-        // QKSkipMask qk_skip_mask(
-        //     params.qk_skip_mask_args.mask_0 + mask_offset,
-        //     params.qk_skip_mask_args.mask_1 + mask_offset,
-        //     params.qk_skip_mask_args.mask_2 + mask_offset,
-        //     params.qk_skip_mask_args.mask_3 + mask_offset,
-        //     num_k_blocks,
-        //     num_q_blocks
-        // );
+        // using ShapeQKV = cute::Shape<int32_t, int32_t, int32_t, int32_t>;  // (seqlen, d, head, batch)
+        int const num_heads = get<2>(params.shape_Q);
+        int const num_q_blocks = cute::ceil_div(get<0>(params.shape_Q), kBlockM);
+        int const num_k_blocks = cute::ceil_div(get<0>(params.shape_K), kBlockN);
+        const uint32_t q_i = (uint32_t) m_block;
+        // uint32_t k_i = (uint32_t) n_block;
+        // [batch, head, m_block, k_block]
+        // uint64_t mask_offset = (bidb * num_heads * num_q_blocks * num_k_blocks) + (bidh * num_q_blocks * num_k_blocks) + (m_block * num_k_blocks) + 0;
+        const uint32_t limbs_qk = cute::ceil_div(num_q_blocks * num_k_blocks, 64);
+        uint64_t mask_offset = (bidb * num_heads * limbs_qk) + (bidh * limbs_qk) + ((q_i * num_k_blocks) / 64);
+        QKSkipMask qk_skip_mask(
+            params.qk_skip_mask_args.mask_0 + mask_offset,
+            params.qk_skip_mask_args.mask_1 + mask_offset,
+            params.qk_skip_mask_args.mask_2 + mask_offset,
+            params.qk_skip_mask_args.mask_3 + mask_offset,
+            num_k_blocks,
+            num_q_blocks
+        );
 
         /* DOR: in the video there is this comment here:
         SMEM layouts are such that the first shape mode is outer dimension in matmul
@@ -1374,8 +1374,8 @@ struct CollectiveMainloopFwdSm90 {
 
             auto fwd_step = [&](int const n_block, auto mask_fn, auto is_first_iter_type, auto check_inf_type) {
 
-                // bool skip = qk_skip_mask.get(q_i, (uint32_t) n_block);
-                // assert(!skip);
+                bool skip = qk_skip_mask.get(q_i, (uint32_t) n_block);
+                assert(!skip);
 
                 static constexpr bool Is_first_iter = decltype(is_first_iter_type)::value;
                 static constexpr bool Check_inf = decltype(check_inf_type)::value;
@@ -1387,18 +1387,18 @@ struct CollectiveMainloopFwdSm90 {
                 // TONY: skip this (QK)
 
                 // should create a problem
-                // if (!skip) flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS);
-                flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS);
+                if (!skip) flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS);
+                // flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS);
 
                 if constexpr (!HasQv) {
                     warp_scheduler_barrier_arrive();
-                    warpgroup_wait<0>();
+                    // warpgroup_wait<0>();
 
-                    // if (!skip) {
-                    //     warpgroup_wait<0>();
-                    // }else{
-                    //     warpgroup_wait<1>();
-                    // }
+                    if (!skip) {
+                        warpgroup_wait<0>();
+                    }else{
+                        warpgroup_wait<1>();
+                    }
                     pipeline_k.consumer_release(smem_pipe_read);  // release K
                 } else {
                     if constexpr (Is_first_iter) {
@@ -1419,30 +1419,31 @@ struct CollectiveMainloopFwdSm90 {
                 //.    : Instead of computing the entire softmax on this line, we just search for the row maximum
                 // Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
                 // Declare scores_scale with the correct dependent type from the template parameter `Softmax`.
-                // typename Softmax::TensorT scores_scale;
+                typename Softmax::TensorT scores_scale;
                 // if (!skip) scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(tSrS, qk_skip_mask, q_i, (uint32_t) n_block);
                 //  Tensor scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(tSrS, qk_skip_mask, q_i, (uint32_t) n_block);
-                Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
+                // Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
+                if (!skip) scores_scale = softmax.template max_get_scale</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
                 
                 // If do_pv is false, we can skip everything below (pretty much)
                 if constexpr (LargeHeadDimV && !Is_first_iter) { store_scales(scores_scale, smem_pipe_read_prev.index()); }
 
-                // if (!skip) softmax.template online_softmax</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
-                softmax.template online_softmax</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
+                if (!skip) softmax.template online_softmax</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
+                // softmax.template online_softmax</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
 
                 if constexpr (Is_FP8 && !V_colmajor) { flash::permute_Cregs_fp8(tSrS); }
                 Tensor tOrP_acc = make_tensor(tSrS.data(), flash::convert_layout_acc_Aregs<TiledMmaPV>(tSrS.layout()));
                 Tensor tOrP = make_tensor_like<Element>(tOrP_acc);
 
-                // if (!skip) convert_type_out(tOrP_acc, tOrP);
-                convert_type_out(tOrP_acc, tOrP);
+                if (!skip) convert_type_out(tOrP_acc, tOrP);
+                // convert_type_out(tOrP_acc, tOrP);
 
                 if constexpr (Is_FP8 && V_colmajor) { flash::permute_Aregs_fp8(tOrP); }
 
                 // DOR and TONY: not running in out case
                 if constexpr (!MmaPV_is_RS) { write_P_to_smem(tOrP); }
-                // if constexpr (!Is_first_iter) { if (!skip) { softmax.rescale_o(tOrO, scores_scale); } }
-                if constexpr (!Is_first_iter) { softmax.rescale_o(tOrO, scores_scale); }
+                if constexpr (!Is_first_iter) { if (!skip) { softmax.rescale_o(tOrO, scores_scale); } }
+                // if constexpr (!Is_first_iter) { softmax.rescale_o(tOrO, scores_scale); }
 
                 // DOR and TONY: not running in out case
                 if constexpr (!MmaPV_is_RS && !MmaPV_use_RS_WG1) { arrive_on_P_write_barrier(); }
@@ -1450,24 +1451,24 @@ struct CollectiveMainloopFwdSm90 {
                 if constexpr (!HasQv) { consumer_wait(pipeline_v, smem_pipe_read); }
                 warp_scheduler_barrier_sync();
                 // TONY: this is P time V
-                // if (!skip) {
-                if constexpr (!MmaPV_use_RS_WG1) {
-                    flash::gemm</*zero_init=*/Is_first_iter, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP), tOrV(_, _, _, smem_pipe_read.index()), tOrO);
-                } else {
-                    // DOR and TONY: this runs!
-                    TiledMmaPV_RS tiled_mma_pv_rs;
-                    flash::gemm</*zero_init=*/Is_first_iter, /*wg_wait=*/-1>(tiled_mma_pv_rs, tOrP, tOrV(_, _, _, smem_pipe_read.index()), tOrO);
+                if (!skip) {
+                    if constexpr (!MmaPV_use_RS_WG1) {
+                        flash::gemm</*zero_init=*/Is_first_iter, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP), tOrV(_, _, _, smem_pipe_read.index()), tOrO);
+                    } else {
+                        // DOR and TONY: this runs!
+                        TiledMmaPV_RS tiled_mma_pv_rs;
+                        flash::gemm</*zero_init=*/Is_first_iter, /*wg_wait=*/-1>(tiled_mma_pv_rs, tOrP, tOrV(_, _, _, smem_pipe_read.index()), tOrO);
+                    }
                 }
-                // }
                 // DOR and TONY: not running in out case
                 if constexpr (!MmaPV_is_RS && MmaPV_use_RS_WG1) { arrive_on_P_write_barrier(); }
 
-                warpgroup_wait<0>();
-                // if (!skip) {
-                //     warpgroup_wait<0>();
-                // }else{
-                //     warpgroup_wait<1>();
-                // }
+                // warpgroup_wait<0>();
+                if (!skip) {
+                    warpgroup_wait<0>();
+                }else{
+                    warpgroup_wait<1>();
+                }
                 pipeline_v.consumer_release(smem_pipe_read);  // release V
             };
 
