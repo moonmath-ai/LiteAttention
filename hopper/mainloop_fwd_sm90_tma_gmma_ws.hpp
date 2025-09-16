@@ -1441,15 +1441,15 @@ struct CollectiveMainloopFwdSm90 {
                 // If do_pv is false, we can skip everything below (pretty much)
                 if constexpr (LargeHeadDimV && !Is_first_iter) { store_scales(scores_scale, smem_pipe_read_prev.index()); }
 
-                if (!skip || Is_first_iter) softmax.template online_softmax</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
-                // softmax.template online_softmax</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
+                // if (!skip || Is_first_iter) softmax.template online_softmax</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
+                softmax.template online_softmax</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
 
                 if constexpr (Is_FP8 && !V_colmajor) { flash::permute_Cregs_fp8(tSrS); }
                 Tensor tOrP_acc = make_tensor(tSrS.data(), flash::convert_layout_acc_Aregs<TiledMmaPV>(tSrS.layout()));
                 Tensor tOrP = make_tensor_like<Element>(tOrP_acc);
 
-                if (!skip || Is_first_iter) convert_type_out(tOrP_acc, tOrP);
-                // convert_type_out(tOrP_acc, tOrP);
+                // if (!skip || Is_first_iter) convert_type_out(tOrP_acc, tOrP);
+                convert_type_out(tOrP_acc, tOrP);
 
                 if constexpr (Is_FP8 && V_colmajor) { flash::permute_Aregs_fp8(tOrP); }
 
