@@ -673,6 +673,10 @@ struct CollectiveMainloopFwdSm90 {
         }
 
         // using ShapeQKV = cute::Shape<int32_t, int32_t, int32_t, int32_t>;  // (seqlen, d, head, batch)
+        // DOR: height of the Q block
+        static constexpr int kBlockM = get<0>(TileShape_MNK{});
+        // DOR: height of the K/V block
+        static constexpr int kBlockN = get<1>(TileShape_MNK{});
         int const num_heads = get<2>(params.shape_Q);
         int const num_q_blocks = cute::ceil_div(get<0>(params.shape_Q), kBlockM);
         int const num_k_blocks = cute::ceil_div(get<0>(params.shape_K), kBlockN);
