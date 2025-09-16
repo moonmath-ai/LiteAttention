@@ -1082,15 +1082,16 @@ struct CollectiveMainloopFwdSm90 {
         // [batch, head, m_block, k_block]
         // uint64_t mask_offset = (bidb * num_heads * num_q_blocks * num_k_blocks) + (bidh * num_q_blocks * num_k_blocks) + (m_block * num_k_blocks) + 0;
         // const uint32_t limbs_qk = cute::ceil_div(num_q_blocks * num_k_blocks, 64);
-        const uint32_t limbs_qk = cute::ceil_div(num_q_blocks * num_k_blocks, 64) * 64;
-        uint64_t mask_offset = (bidb * num_heads * limbs_qk) + (bidh * limbs_qk) + ((q_i * num_k_blocks) / 64);
+        const uint32_t limbs_qk = cute::ceil_div(num_q_blocks * num_k_blocks, 64);
+        // uint64_t mask_offset = (bidb * num_heads * limbs_qk) + (bidh * limbs_qk) + ((q_i * num_k_blocks) / 64);
+        uint64_t mask_offset = (bidb * num_heads * limbs_qk) + (bidh * limbs_qk);
         QKSkipMask qk_skip_mask(
             params.qk_skip_mask_args.mask_0 + mask_offset,
             params.qk_skip_mask_args.mask_1 + mask_offset,
             params.qk_skip_mask_args.mask_2 + mask_offset,
             params.qk_skip_mask_args.mask_3 + mask_offset,
-            num_k_blocks,
-            num_q_blocks
+            num_q_blocks,
+            num_k_blocks
         );
 
         /* DOR: in the video there is this comment here:
@@ -1429,7 +1430,7 @@ struct CollectiveMainloopFwdSm90 {
                 typename Softmax::TensorT scores_scale;
                 // if (!skip) scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(tSrS, qk_skip_mask, q_i, (uint32_t) n_block, -INFINITY);
                 // if (!skip) scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(tSrS, qk_skip_mask, q_i, (uint32_t) n_block, -std::numeric_limits<float>::infinity());
-                if (!skip || Is_first_iter) scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(tSrS, qk_skip_mask, q_i, (uint32_t) n_block, 0.0f);
+                if (!skip || Is_first_iter) scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(tSrS, qk_skip_mask, q_i, (uint32_t) n_block, -7.0f);
 
                 //  Tensor scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(tSrS, qk_skip_mask, q_i, (uint32_t) n_block);
                 // Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/Is_first_iter, Check_inf>(tSrS);

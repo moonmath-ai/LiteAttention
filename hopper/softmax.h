@@ -17,7 +17,7 @@ struct QKSkipMask {
     uint32_t q_dim;
     uint32_t k_dim;
     uint32_t n_bits;
-    uint32_t n_limbs;
+    uint64_t local_cache;
 
     // Pass in pointer to allocated global memory
     // Pass in total number of bits
@@ -30,9 +30,7 @@ struct QKSkipMask {
         uint32_t q_dim_,
         uint32_t k_dim_)
         : q_dim(q_dim_), k_dim(k_dim_),
-          n_bits(q_dim_ * k_dim_),
-          // DOR: why >> 6?
-          n_limbs((n_bits + 63) >> 6) {
+          n_bits(q_dim_ * k_dim_) {
         mask[0] = mask_0_;
         mask[1] = mask_1_;
         mask[2] = mask_2_;
@@ -158,17 +156,17 @@ struct Softmax {
         QKSkipMask &qk_skip_mask,
         uint32_t q_i,
         uint32_t k_i,
-        const float thr = -7.0f
+        const float thr
     ) {
         // Reshape acc_s from ((2, 2, V), MMA_M, MMA_N) to (nrow=(2, MMA_M), ncol=(2, V, MMA_N))
         Tensor scores = make_tensor(acc_s.data(), flash::convert_layout_acc_rowcol(acc_s.layout()));
         static_assert(CUTE_STATIC_V(size<0>(scores)) == kNRows);
         TensorT scores_scale;
-        bool skip_local = true;
+        bool do_qk = false;
         if constexpr (Is_first) {
             flash::template reduce_max</*zero_init=*/true>(scores, row_max);
             cute::fill(scores_scale, 1.f);
-            skip_local = false;
+            do_qk = true;
         } else {
             Tensor scores_max_prev = make_fragment_like(row_max);
             cute::copy(row_max, scores_max_prev);
@@ -181,11 +179,11 @@ struct Softmax {
                 float prev = scores_max_prev(mi);
                 scores_scale(mi) = exp2f((prev - cur) * softmax_scale_log2);
                 row_sum(mi) *= scores_scale(mi);
-                skip_local &= (((cur - prev) * softmax_scale_log2) > thr);
+                do_qk |= (((cur - prev) * softmax_scale_log2) > thr);
             }
         }
 
-        if (__all_sync(0xffffffffu, skip_local)) {
+        if (!__any_sync(0xffffffffu, do_qk)) {
             qk_skip_mask.set(q_i, k_i);
         }
 
