@@ -50,7 +50,8 @@ struct QKSkipMask {
         uint32_t li = i >> 6;
         uint32_t bi = i & 63;
         uint64_t m  = (1ull << bi);
-        return (mask[0][li] & m) | (mask[1][li] & m) | (mask[2][li] & m) | (mask[3][li] & m);
+        // return (mask[0][li] & m) | (mask[1][li] & m) | (mask[2][li] & m) | (mask[3][li] & m);
+        return (mask[0][li] & mask[1][li] & mask[2][li] & mask[3][li] & m) != 0;
     }
 
     __device__ inline void set(uint32_t q_i, uint32_t k_i) {

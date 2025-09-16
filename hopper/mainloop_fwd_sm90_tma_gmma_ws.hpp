@@ -1069,24 +1069,24 @@ struct CollectiveMainloopFwdSm90 {
             if (n_block_max <= n_block_min) { return false; }
         }
 
-        // using ShapeQKV = cute::Shape<int32_t, int32_t, int32_t, int32_t>;  // (seqlen, d, head, batch)
-        int const num_heads = get<2>(params.shape_Q);
-        int const num_q_blocks = cute::ceil_div(get<0>(params.shape_Q), kBlockM);
-        int const num_k_blocks = cute::ceil_div(get<0>(params.shape_K), kBlockN);
-        const uint32_t q_i = (uint32_t) m_block;
-        // uint32_t k_i = (uint32_t) n_block;
-        // [batch, head, m_block, k_block]
-        // uint64_t mask_offset = (bidb * num_heads * num_q_blocks * num_k_blocks) + (bidh * num_q_blocks * num_k_blocks) + (m_block * num_k_blocks) + 0;
-        const uint32_t limbs_qk = cute::ceil_div(num_q_blocks * num_k_blocks, 64);
-        uint64_t mask_offset = (bidb * num_heads * limbs_qk) + (bidh * limbs_qk) + ((q_i * num_k_blocks) / 64);
-        QKSkipMask qk_skip_mask(
-            params.qk_skip_mask_args.mask_0 + mask_offset,
-            params.qk_skip_mask_args.mask_1 + mask_offset,
-            params.qk_skip_mask_args.mask_2 + mask_offset,
-            params.qk_skip_mask_args.mask_3 + mask_offset,
-            num_k_blocks,
-            num_q_blocks
-        );
+        // // using ShapeQKV = cute::Shape<int32_t, int32_t, int32_t, int32_t>;  // (seqlen, d, head, batch)
+        // int const num_heads = get<2>(params.shape_Q);
+        // int const num_q_blocks = cute::ceil_div(get<0>(params.shape_Q), kBlockM);
+        // int const num_k_blocks = cute::ceil_div(get<0>(params.shape_K), kBlockN);
+        // const uint32_t q_i = (uint32_t) m_block;
+        // // uint32_t k_i = (uint32_t) n_block;
+        // // [batch, head, m_block, k_block]
+        // // uint64_t mask_offset = (bidb * num_heads * num_q_blocks * num_k_blocks) + (bidh * num_q_blocks * num_k_blocks) + (m_block * num_k_blocks) + 0;
+        // const uint32_t limbs_qk = cute::ceil_div(num_q_blocks * num_k_blocks, 64);
+        // uint64_t mask_offset = (bidb * num_heads * limbs_qk) + (bidh * limbs_qk) + ((q_i * num_k_blocks) / 64);
+        // QKSkipMask qk_skip_mask(
+        //     params.qk_skip_mask_args.mask_0 + mask_offset,
+        //     params.qk_skip_mask_args.mask_1 + mask_offset,
+        //     params.qk_skip_mask_args.mask_2 + mask_offset,
+        //     params.qk_skip_mask_args.mask_3 + mask_offset,
+        //     num_k_blocks,
+        //     num_q_blocks
+        // );
 
         /* DOR: in the video there is this comment here:
         SMEM layouts are such that the first shape mode is outer dimension in matmul
@@ -1374,7 +1374,8 @@ struct CollectiveMainloopFwdSm90 {
 
             auto fwd_step = [&](int const n_block, auto mask_fn, auto is_first_iter_type, auto check_inf_type) {
 
-                bool skip = qk_skip_mask.get(q_i, (uint32_t) n_block);
+                // bool skip = qk_skip_mask.get(q_i, (uint32_t) n_block);
+                // assert(!skip);
 
                 static constexpr bool Is_first_iter = decltype(is_first_iter_type)::value;
                 static constexpr bool Check_inf = decltype(check_inf_type)::value;
@@ -1420,7 +1421,8 @@ struct CollectiveMainloopFwdSm90 {
                 // Declare scores_scale with the correct dependent type from the template parameter `Softmax`.
                 // typename Softmax::TensorT scores_scale;
                 // if (!skip) scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(tSrS, qk_skip_mask, q_i, (uint32_t) n_block);
-                 Tensor scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(tSrS, qk_skip_mask, q_i, (uint32_t) n_block);
+                //  Tensor scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(tSrS, qk_skip_mask, q_i, (uint32_t) n_block);
+                Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
                 
                 // If do_pv is false, we can skip everything below (pretty much)
                 if constexpr (LargeHeadDimV && !Is_first_iter) { store_scales(scores_scale, smem_pipe_read_prev.index()); }
