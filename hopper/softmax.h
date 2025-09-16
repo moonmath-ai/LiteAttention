@@ -170,16 +170,26 @@ struct Softmax {
         } else {
             Tensor scores_max_prev = make_fragment_like(row_max);
             cute::copy(row_max, scores_max_prev);
-            flash::template reduce_max</*zero_init=*/false>(scores, row_max);
+
+            // find the local max for each row
+            Tensor scores_max_local = make_fragment_like(row_max);
+            flash::template reduce_max</*zero_init=*/true>(scores, scores_max_local);
+
+            // update row max
+            // thread_reduce_<true>(scores_max_local, row_max, MaxOp<float>());
+            // flash::template reduce_max</*zero_init=*/false>(scores, row_max);
+
             #pragma unroll
             for (int mi = 0; mi < size(row_max); ++mi) {
+                row_max(mi) = max(row_max(mi), scores_max_local(mi));
                 float cur = !Check_inf
                     ? row_max(mi)
                     : (row_max(mi) == -INFINITY ? 0.0f : row_max(mi));
                 float prev = scores_max_prev(mi);
                 scores_scale(mi) = exp2f((prev - cur) * softmax_scale_log2);
                 row_sum(mi) *= scores_scale(mi);
-                do_qk |= (((cur - prev) * softmax_scale_log2) > thr);
+                // do_qk |= (((cur - prev) * softmax_scale_log2) > thr);
+                do_qk |= (((scores_max_local(mi) - prev) * softmax_scale_log2) > thr);
             }
         }
 
