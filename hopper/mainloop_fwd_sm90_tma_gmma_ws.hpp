@@ -1069,11 +1069,14 @@ struct CollectiveMainloopFwdSm90 {
             if (n_block_max <= n_block_min) { return false; }
         }
 
+        // DOR: cool way to hint the compiler to make this value a warp uniform
+        int warp_group_idx = __shfl_sync(0xFFFFFFFF, thread_idx / cutlass::NumThreadsPerWarpGroup, 0);
+
         // using ShapeQKV = cute::Shape<int32_t, int32_t, int32_t, int32_t>;  // (seqlen, d, head, batch)
         int const num_heads = get<2>(params.shape_Q);
         int const num_q_blocks = cute::ceil_div(get<0>(params.shape_Q), kBlockM);
         int const num_k_blocks = cute::ceil_div(get<0>(params.shape_K), kBlockN);
-        const uint32_t q_i = (uint32_t) m_block;
+        const uint32_t q_i = ((uint32_t) m_block) * 2 + warp_group_idx;
         // uint32_t k_i = (uint32_t) n_block;
         // [batch, head, m_block, k_block]
         // uint64_t mask_offset = (bidb * num_heads * num_q_blocks * num_k_blocks) + (bidh * num_q_blocks * num_k_blocks) + (m_block * num_k_blocks) + 0;
@@ -1127,8 +1130,8 @@ struct CollectiveMainloopFwdSm90 {
         Layout warp_group_thread_layout = make_layout(make_shape(Int<MmaWarpGroups>{}),
                                                       make_stride(Int<cutlass::NumThreadsPerWarpGroup>{}));
 
-        // DOR: cool way to hint the compiler to make this value a warp uniform
-        int warp_group_idx = __shfl_sync(0xFFFFFFFF, thread_idx / cutlass::NumThreadsPerWarpGroup, 0);
+        // // DOR: cool way to hint the compiler to make this value a warp uniform
+        // int warp_group_idx = __shfl_sync(0xFFFFFFFF, thread_idx / cutlass::NumThreadsPerWarpGroup, 0);
         TiledMmaQK tiled_mma_qk;
         TiledMmaPV tiled_mma_pv;
         // DOR: why? do? we? need? this?
