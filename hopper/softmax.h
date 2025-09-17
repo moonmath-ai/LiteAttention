@@ -13,53 +13,40 @@
 #include "utils.h"
 
 struct QKSkipMask {
-    uint64_t* mask[4];
-    uint32_t q_dim;
+    uint32_t* mask[4];
     uint32_t k_dim;
-    uint32_t n_bits;
-    uint64_t local_cache;
 
-    // Pass in pointer to allocated global memory
-    // Pass in total number of bits
-    // DOR: i want to initialize this in the host side, is it a problem?
     __device__ QKSkipMask(
         uint64_t* mask_0_,
         uint64_t* mask_1_,
         uint64_t* mask_2_,
         uint64_t* mask_3_,
-        uint32_t q_dim_,
-        uint32_t k_dim_)
-        : q_dim(q_dim_), k_dim(k_dim_),
-          n_bits(q_dim_ * k_dim_) {
-        mask[0] = mask_0_;
-        mask[1] = mask_1_;
-        mask[2] = mask_2_;
-        mask[3] = mask_3_;
+        uint32_t k_dim_) : k_dim(k_dim_) {
+        mask[0] = (uint32_t*)mask_0_;
+        mask[1] = (uint32_t*)mask_1_;
+        mask[2] = (uint32_t*)mask_2_;
+        mask[3] = (uint32_t*)mask_3_;
     }
     
-    // DOR: do we offset the pointer according to the head and batch OR taking this into account in the indexing?
-    __device__ inline uint32_t flatten(uint32_t q_i, uint32_t k_i) const {
-        // (B, H) , round(M x N, 64)
+    __device__ __forceinline__ uint32_t flatten(uint32_t q_i, uint32_t k_i) const {
         return q_i * k_dim + k_i;
     }
 
-    __device__ inline bool get(uint32_t q_i, uint32_t k_i) const {
+    __device__ __forceinline__ bool get(uint32_t q_i, uint32_t k_i) {
         uint32_t i = flatten(q_i, k_i);
-        uint32_t li = i >> 6;
-        uint32_t bi = i & 63;
-        uint64_t m  = (1ull << bi);
-        // return (mask[0][li] & m) | (mask[1][li] & m) | (mask[2][li] & m) | (mask[3][li] & m);
-        return (mask[0][li] & mask[1][li] & mask[2][li] & mask[3][li] & m) != 0;
+        uint32_t li = i >> 5;
+        uint32_t bi = i & 31;
+        uint32_t m  = (1u << bi);
+        return ((mask[0][li] & mask[1][li] & mask[2][li] & mask[3][li]) & m) != 0;
     }
 
-    __device__ inline void set(uint32_t q_i, uint32_t k_i) {
+    __device__ __forceinline__ void set(uint32_t q_i, uint32_t k_i) {
         uint32_t i = flatten(q_i, k_i);
-        uint32_t li = i >> 6;
-        uint32_t bi = i & 63;
-        // first thread of every warp sets the bit
+        uint32_t li = i >> 5;
+        uint32_t bi = i & 31;
         if (threadIdx.x % 32 == 0) {
-            int mask_id = ((threadIdx.x - 128) / 32) % 4; // subtract 128 to get to consumer warps
-            mask[mask_id][li] |= (1ull << bi);
+            int mask_id = ((threadIdx.x - 128) / 32) % 4;
+            mask[mask_id][li] = (mask[mask_id][li] | (1u << bi));
         }
     }
 };
@@ -162,11 +149,9 @@ struct Softmax {
         Tensor scores = make_tensor(acc_s.data(), flash::convert_layout_acc_rowcol(acc_s.layout()));
         static_assert(CUTE_STATIC_V(size<0>(scores)) == kNRows);
         TensorT scores_scale;
-        bool do_qk = false;
         if constexpr (Is_first) {
             flash::template reduce_max</*zero_init=*/true>(scores, row_max);
             cute::fill(scores_scale, 1.f);
-            do_qk = true;
         } else {
             Tensor scores_max_prev = make_fragment_like(row_max);
             cute::copy(row_max, scores_max_prev);
@@ -179,6 +164,7 @@ struct Softmax {
             // thread_reduce_<true>(scores_max_local, row_max, MaxOp<float>());
             // flash::template reduce_max</*zero_init=*/false>(scores, row_max);
 
+            bool do_qk = false;
             #pragma unroll
             for (int mi = 0; mi < size(row_max); ++mi) {
                 // update row max
@@ -192,10 +178,9 @@ struct Softmax {
                 // do_qk |= (((cur - prev) * softmax_scale_log2) > thr);
                 do_qk |= (((scores_max_local(mi) - prev) * softmax_scale_log2) > thr);
             }
-        }
-
-        if (!__any_sync(0xffffffffu, do_qk)) {
-            qk_skip_mask.set(q_i, k_i);
+            if (!__any_sync(0xffffffffu, do_qk)) {
+                qk_skip_mask.set(q_i, k_i);
+            }
         }
 
         return scores_scale;
