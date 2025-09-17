@@ -68,7 +68,7 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream) {
     
     // SM90+ tile configuration: returns (BlockM, BlockN, MmaPV_is_RS, IntraWGOverlap)
     static constexpr std::tuple<int, int, bool, bool> kBlockMN_RS_IntraWGOverlap = 
-        tile_size_fwd_sm90(kHeadDim, kHeadDimV, Is_causal, Is_local, sizeof(Element) /*element_size*/, V_colmajor, PagedKVNonTMA, Has_softcap);
+        tile_size_fwd_sm90(kHeadDim, kHeadDimV, Is_causal, Is_local, sizeof(Element) /*element_size*/, V_colmajor, PagedKVNonTMA, Has_softcap, Is_skipable);
     
     // SM80-89 tile configuration: returns (BlockM, BlockN, NWarps, Stages, Q_in_regs)
     static constexpr std::tuple<int, int, int, int, bool> kBlockMN_kNWarps_Stages_RS = 
@@ -94,6 +94,7 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream) {
     // DOR: in our case this is (128, 128, 176)
     using TileShape_MNK_PV = cute::Shape<Int<kBlockM>, Int<kHeadDimV>, Int<kBlockN>>;  // PV computation: (M,N,K) = (seqlen_q, head_dim_v, seqlen_k)
     using ClusterShape = cute::Shape<Int<ClusterM>, _1, _1>;                          // Cluster dimensions for cooperative thread blocks (SM90+)
+
     // Collective operation types - these encapsulate the main computation and output phases
     // CuTe's collective operations coordinate work across thread blocks and manage shared memory
     using CollectiveMainloop = std::conditional_t<
@@ -358,17 +359,19 @@ void run_mha_fwd_(Flash_fwd_params &params, cudaStream_t stream) {
         VCOLMAJOR_SWITCH(params.v_dim_stride != 1, V_colmajor_, [&] {
             static constexpr bool V_colmajor = V_colmajor_ && sizeof(T) == 1;
             VARLEN_SWITCH(params.cu_seqlens_q || params.cu_seqlens_k || params.seqused_q || params.seqused_k || params.leftpad_k, Varlen, [&] {
-                // Only needed here to decide if we should use cluster
-                static constexpr int kBlockM = Arch >= 90 ? std::get<0>(tile_size_fwd_sm90(kHeadDim, kHeadDimV, Is_causal, Is_local, sizeof(T) /*element_size*/, V_colmajor, PagedKVNonTMA, Has_softcap)) : 128;
-                // DOR: in our case this is always true since kHeadDim == 128, Arch == 90 ...
-                static constexpr bool Enable_cluster = Arch == 90 && (sizeof(T) == 2 ? (kHeadDim >= 128) : (kHeadDim == 192)) && !Is_causal && !Is_local && !Split && !PagedKVNonTMA && !Varlen;
-                BOOL_SWITCH(params.qv_ptr, HasQV_, [&] {
-                    static constexpr bool HasQv = HasQV_ && Arch == 90 && !Is_FP8 && kHeadDim == 64 && kHeadDimV >= 256;
-                    APPENDKV_SWITCH(params.knew_ptr, AppendKV, [&] {
-                        // Only use Cluster if number of tiles along seqlen_q is even and not varlen
-                        CLUSTER_SWITCH(cutlass::ceil_div(params.seqlen_q * (!PackGQA ? 1 : params.h / params.h_k), kBlockM) % 2 == 0, Use_cluster, [&] {
-                            static constexpr int ClusterM = Enable_cluster && Use_cluster ? 2 : 1;
-                            run_flash_fwd<Arch, kHeadDim, kHeadDimV, ClusterM, T, T_out, Is_causal, Is_local, Has_softcap, Varlen, PagedKVNonTMA, AppendKV && Varlen, HasQv, PackGQA, Split, V_colmajor>(params, stream);
+                BOOL_SWITCH(params.is_skipable, Is_skipable, [&] {
+                    // Only needed here to decide if we should use cluster
+                    static constexpr int kBlockM = Arch >= 90 ? std::get<0>(tile_size_fwd_sm90(kHeadDim, kHeadDimV, Is_causal, Is_local, sizeof(T) /*element_size*/, V_colmajor, PagedKVNonTMA, Has_softcap, Is_skipable)) : 128;
+                    // DOR: in our case this is always true since kHeadDim == 128, Arch == 90 ...
+                    static constexpr bool Enable_cluster = Arch == 90 && (sizeof(T) == 2 ? (kHeadDim >= 128) : (kHeadDim == 192)) && !Is_causal && !Is_local && !Split && !PagedKVNonTMA && !Varlen;
+                    BOOL_SWITCH(params.qv_ptr, HasQV_, [&] {
+                        static constexpr bool HasQv = HasQV_ && Arch == 90 && !Is_FP8 && kHeadDim == 64 && kHeadDimV >= 256;
+                        APPENDKV_SWITCH(params.knew_ptr, AppendKV, [&] {
+                            // Only use Cluster if number of tiles along seqlen_q is even and not varlen
+                            CLUSTER_SWITCH(cutlass::ceil_div(params.seqlen_q * (!PackGQA ? 1 : params.h / params.h_k), kBlockM) % 2 == 0, Use_cluster, [&] {
+                                static constexpr int ClusterM = Enable_cluster && Use_cluster ? 2 : 1;
+                                run_flash_fwd<Arch, kHeadDim, kHeadDimV, ClusterM, T, T_out, Is_causal, Is_local, Has_softcap, Varlen, PagedKVNonTMA, AppendKV && Varlen, HasQv, PackGQA, Split, V_colmajor, Is_skipable>(params, stream);
+                            });
                         });
                     });
                 });
