@@ -40,6 +40,10 @@ struct QKSkipMask {
         return ((mask[0][li] & mask[1][li] & mask[2][li] & mask[3][li]) & m) != 0;
     }
 
+    __device__ __forceinline__ bool get2(uint32_t q_i, uint32_t k_i) {
+        return get(q_i*2, k_i) && get(q_i*2+1, k_i);
+    }
+
     __device__ __forceinline__ void set(uint32_t q_i, uint32_t k_i) {
         uint32_t i = flatten(q_i, k_i);
         uint32_t li = i >> 5;
