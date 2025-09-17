@@ -14,6 +14,9 @@ struct QKSkipMaskArgs {
     uint64_t* mask_1;
     uint64_t* mask_2;
     uint64_t* mask_3;
+    float thr;
+
+    // bool is_skipable;
 
     // uint32_t q_dim;
     // uint32_t k_dim;
@@ -179,6 +182,7 @@ struct Flash_fwd_params : public Qkv_params {
     int num_sm;
 
     QKSkipMaskArgs qk_skip_mask_args;
+    bool is_skipable;
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
