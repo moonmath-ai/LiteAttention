@@ -1092,11 +1092,13 @@ struct CollectiveMainloopFwdSm90 {
 
         // DOR: cool way to hint the compiler to make this value a warp uniform
         int warp_group_idx = __shfl_sync(0xFFFFFFFF, thread_idx / cutlass::NumThreadsPerWarpGroup, 0);
+        static constexpr int MmaWarpGroups = size(TiledMmaPV{}) / cutlass::NumThreadsPerWarpGroup;
 
         // using ShapeQKV = cute::Shape<int32_t, int32_t, int32_t, int32_t>;  // (seqlen, d, head, batch)
         int const num_heads = get<2>(params.shape_Q);
         // int const num_q_blocks = cute::ceil_div(get<0>(params.shape_Q), kBlockM);
-        int const num_q_blocks = cute::ceil_div(get<0>(params.shape_Q), kBlockM / 2);
+        // int const num_q_blocks = cute::ceil_div(get<0>(params.shape_Q), kBlockM / 2);
+        int const num_q_blocks = cute::ceil_div(get<0>(params.shape_Q), kBlockM / MmaWarpGroups);
         int const num_k_blocks = cute::ceil_div(get<0>(params.shape_K), kBlockN);
         const uint32_t q_i = ((uint32_t) m_block) * 2 + warp_group_idx;
         // uint32_t k_i = (uint32_t) n_block;
@@ -1149,7 +1151,7 @@ struct CollectiveMainloopFwdSm90 {
                         size<0>(typename TiledMmaQK::BLayout{}) == cutlass::NumThreadsPerWarpGroup,
                 "Stride of the first mode must be 0 and the size of the mode must be NumThreadsPerWarpGroup");
         }
-        static constexpr int MmaWarpGroups = size(TiledMmaPV{}) / cutlass::NumThreadsPerWarpGroup;
+        // static constexpr int MmaWarpGroups = size(TiledMmaPV{}) / cutlass::NumThreadsPerWarpGroup;
         Layout warp_group_thread_layout = make_layout(make_shape(Int<MmaWarpGroups>{}),
                                                       make_stride(Int<cutlass::NumThreadsPerWarpGroup>{}));
 
