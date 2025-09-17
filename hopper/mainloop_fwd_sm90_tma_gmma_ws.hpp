@@ -1385,12 +1385,11 @@ struct CollectiveMainloopFwdSm90 {
                 auto smem_pipe_read_prev = smem_pipe_read;
                 if constexpr (!Is_first_iter) { ++smem_pipe_read; }
 
-                Tensor tSrS = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
-                consumer_wait(pipeline_k, smem_pipe_read);
-
                 if (!skip) {
-                    flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS);
                     warp_scheduler_barrier_arrive();
+                    consumer_wait(pipeline_k, smem_pipe_read);
+                    Tensor tSrS = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
+                    flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS);
                     warpgroup_wait<0>();
                     pipeline_k.consumer_release(smem_pipe_read);  // release K
                     scoremod_premask_fn(tSrS);
@@ -1406,13 +1405,15 @@ struct CollectiveMainloopFwdSm90 {
                     TiledMmaPV_RS tiled_mma_pv_rs;
                     flash::gemm</*zero_init=*/Is_first_iter, /*wg_wait=*/-1>(tiled_mma_pv_rs, tOrP, tOrV(_, _, _, smem_pipe_read.index()), tOrO);
                     warpgroup_wait<0>();
+                    pipeline_v.consumer_release(smem_pipe_read);  // release V
                 } else {
                     warp_scheduler_barrier_arrive();
+                    consumer_wait(pipeline_k, smem_pipe_read);
                     pipeline_k.consumer_release(smem_pipe_read);  // release K
                     consumer_wait(pipeline_v, smem_pipe_read);
                     warp_scheduler_barrier_sync();
+                    pipeline_v.consumer_release(smem_pipe_read);  // release V
                 }
-                pipeline_v.consumer_release(smem_pipe_read);  // release V
             };
 
             auto first_iter_mask_fn = [&](auto& tSrS, int n_block) { mask.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS, m_block, n_block); };
