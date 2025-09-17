@@ -910,6 +910,7 @@ mha_fwd(at::Tensor q,   // (b, s_q, h, d) or (total_q, h, d) if there is cu_seql
 
     // Convert qk_skip_mask_args tensor to QKSkipMaskArgs struct
     // Expected shape: [4, batch, heads, ceil_div(q_tiles * k_tiles, 64)]
+    bool is_skipable = false;
     if (qk_skip_mask_args_.has_value()) {
         auto qk_skip_mask_tensor = qk_skip_mask_args_.value();
         TORCH_CHECK(qk_skip_mask_tensor.dtype() == torch::kUInt64, "qk_skip_mask_args must be uint64 tensor");
@@ -925,11 +926,14 @@ mha_fwd(at::Tensor q,   // (b, s_q, h, d) or (total_q, h, d) if there is cu_seql
         params.qk_skip_mask_args.mask_1 = data_ptr + mask_stride;
         params.qk_skip_mask_args.mask_2 = data_ptr + 2 * mask_stride;
         params.qk_skip_mask_args.mask_3 = data_ptr + 3 * mask_stride;
+        params.qk_skip_mask_args.thr = thr;
+        is_skipable = true;
     } else {
         params.qk_skip_mask_args.mask_0 = nullptr;
         params.qk_skip_mask_args.mask_1 = nullptr;
         params.qk_skip_mask_args.mask_2 = nullptr;
         params.qk_skip_mask_args.mask_3 = nullptr;
+        params.qk_skip_mask_args.thr = 0.0f;
     }
     params.total_q = total_q;
     params.total_k = total_k;

@@ -51,7 +51,7 @@ using namespace cute;  // Import CuTe namespace for tensor operations and layout
  */
 template <int Arch, int kHeadDim, int kHeadDimV, int ClusterM, typename Element, typename ElementOut,
           bool Is_causal, bool Is_local, bool Has_softcap, bool Varlen, bool PagedKVNonTMA, bool AppendKV, bool HasQv,
-          bool PackGQA, bool Split, bool V_colmajor>
+          bool PackGQA, bool Split, bool V_colmajor, bool Is_skipable>
 void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream) {
     // Compile-time validation of template parameter combinations
     static_assert(!(Is_causal && Is_local), "Causal and Local cannot be enabled at the same time");
@@ -119,7 +119,8 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream) {
             IntraWGOverlap,     // 1
             PackGQA,            // 0
             Split,              // 0
-            V_colmajor          // 0
+            V_colmajor,          // 0
+            Is_skipable
         >,
         // SM80-89 mainloop: Traditional warp-level cooperation with manual shared memory management
         flash::CollectiveMainloopFwdSm80<kNWarps, kStages, Q_in_regs, TileShape_MNK, kHeadDimV, Element, float, cutlass::arch::Sm80, 
@@ -261,7 +262,7 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream) {
         params.cu_seqlens_q, params.cu_seqlens_k, params.cu_seqlens_knew,  // Cumulative sequence lengths
         params.seqused_q, params.seqused_k,      // Actual sequence lengths used (for padding)
         params.leftpad_k, params.seqlens_rotary,  // Left padding for K and rotary position lengths
-        params.qk_skip_mask_args
+        params.qk_skip_mask_args,
     };
     // Construct epilogue arguments for output tensor handling using CuTe abstractions
     typename CollectiveEpilogue::Arguments epilogue_args {

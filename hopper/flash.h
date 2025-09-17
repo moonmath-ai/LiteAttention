@@ -14,6 +14,8 @@ struct QKSkipMaskArgs {
     uint64_t* mask_1;
     uint64_t* mask_2;
     uint64_t* mask_3;
+    float thr;
+    bool is_skipable;
 
     // uint32_t q_dim;
     // uint32_t k_dim;
