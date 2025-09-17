@@ -9,6 +9,10 @@
 #include <cute/tensor.hpp>
 
 #include <cutlass/numeric_types.h>
+// #include <cooperative_groups.h>
+// #include <cooperative_groups/reduce.h>
+#include <cub/cub.cuh>  // For CUB-based reductions
+#include <cooperative_groups.h>  // For warpgroup synchronization
 
 #include "utils.h"
 
@@ -117,10 +121,8 @@ __device__ __forceinline__ void reduce_sum(Tensor<Engine0, Layout0> const& tenso
     if constexpr (warp_reduce) { quad_allreduce_(sum, sum, sum_op); }
 }
 
-template<typename T>
-__device__ __forceinline__ T warpgroup_any(T value) {
-    BoolOrOp<T> or_op;
-    return Allreduce<4>::run(value, or_op);
+bool warpgroup_max(float value) {
+
 }
 
 // Apply the exp to all the elements.
@@ -174,6 +176,9 @@ struct Softmax {
         static_assert(CUTE_STATIC_V(size<0>(scores)) == kNRows);
         TensorT scores_scale;
         bool do_qk = false;
+
+        Tensor scores_max_local = make_fragment_like(row_max);
+
         if constexpr (Is_first) {
             flash::template reduce_max</*zero_init=*/true>(scores, row_max);
             cute::fill(scores_scale, 1.f);
@@ -183,7 +188,7 @@ struct Softmax {
             cute::copy(row_max, scores_max_prev);
 
             // find the local max for each row
-            Tensor scores_max_local = make_fragment_like(row_max);
+            // Tensor scores_max_local = make_fragment_like(row_max);
             flash::template reduce_max</*zero_init=*/true>(scores, scores_max_local);
 
             // update row max
@@ -204,9 +209,8 @@ struct Softmax {
                 do_qk |= (((scores_max_local(mi) - prev) * softmax_scale_log2) > thr);
             }
         }
-
-        // Use warp group reduction (4 warps) instead of single warp reduction
-        if (!warpgroup_any(do_qk)) {
+        
+        if (!do_qk) {
             qk_skip_mask.set(q_i, k_i);
         }
 
