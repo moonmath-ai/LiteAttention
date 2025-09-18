@@ -131,6 +131,11 @@ public:
             alignas(16) typename CollectiveMainloop::MainloopPipelineKVNew::SharedStorage pipeline_k_new;
             alignas(16) typename CollectiveMainloop::MainloopPipelineKVNew::SharedStorage pipeline_v_new;
             alignas(16) typename TileScheduler::SharedStorage smem_scheduler;
+
+            // alignas(16) std::conditional_t<CollectiveMainloop::Is_skipable, 
+            //                    int[CollectiveMainloop::kStages], 
+            //                    cute::array<int, 0>> curr_n_block;
+            int curr_n_block[CollectiveMainloop::kStages];
         } pipelines;
 
     };
@@ -381,8 +386,15 @@ public:
                     scheduler.prefetch_next_work(params.scheduler, work_tile_info);
                 };
                 // pipeline_vt won't be used if we don't need to transpose V.
-                mainloop.load(params.mainloop, pipeline_k, pipeline_v, pipeline_vt, smem_pipe_write,
-                                         shared_storage, scheduler_prefetch, seqlen_info, block_coord, work_idx);
+                if(mainloop.Is_skipable){
+                    mainloop.load(params.mainloop, pipeline_k, pipeline_v, pipeline_vt, smem_pipe_write,
+                                            shared_storage, scheduler_prefetch, seqlen_info, block_coord, work_idx);
+                }else{
+                    mainloop.load_no_skip(params.mainloop, pipeline_k, pipeline_v, pipeline_vt, smem_pipe_write,
+                                            shared_storage, scheduler_prefetch, seqlen_info, block_coord, work_idx);
+                }
+                // mainloop.load(params.mainloop, pipeline_k, pipeline_v, pipeline_vt, smem_pipe_write,
+                //                          shared_storage, scheduler_prefetch, seqlen_info, block_coord, work_idx);
             }
             mainloop.load_tail(pipeline_k, pipeline_v, pipeline_vt, smem_pipe_write, shared_storage, work_idx);
         } else {  // Consumer

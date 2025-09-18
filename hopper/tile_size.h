@@ -32,7 +32,14 @@ constexpr std::tuple<int, int, bool, bool> tile_size_fwd_sm90(
             return {192, is_local || paged_kv_non_TMA ? 128 : 144, false, true && maybe_intra_wg_overlap};
         } else if (headdim <= 128) {
             bool const use_blockN_128 = is_causal || is_local || paged_kv_non_TMA;
-            return {128, use_blockN_128 ? 128 : 176, true, true && maybe_intra_wg_overlap};
+            // return {128, use_blockN_128 ? 128 : 176, true, true && maybe_intra_wg_overlap};
+
+            // return {is_skipable ? 128 : 64, use_blockN_128 ? 128 : 176, true, true && maybe_intra_wg_overlap};
+            // return {64, use_blockN_128 ? 128 : 176, true, true && maybe_intra_wg_overlap};
+            return {is_skipable ? 64 : 128, use_blockN_128 ? 128 : 176, true, true && maybe_intra_wg_overlap};
+            // return {128, use_blockN_128 ? 128 : 176, true, true && maybe_intra_wg_overlap};
+
+            // return {64, use_blockN_128 ? 128 : 176, true, true && maybe_intra_wg_overlap};
             // return {is_skipable ? 64 : 128, use_blockN_128 ? 128 : 176, true, true && maybe_intra_wg_overlap};
 
             // {128, 192, true, false} and {192, 128, false, true} are quite good too
