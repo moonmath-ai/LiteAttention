@@ -1740,7 +1740,9 @@ struct CollectiveMainloopFwdSm90 {
                 auto smem_pipe_read_prev = smem_pipe_read;
                 if constexpr (!Is_first_iter) { ++smem_pipe_read; }
 
-                warp_scheduler_barrier_arrive();
+                // warp_scheduler_barrier_arrive();
+
+                Tensor tSrS = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
                 consumer_wait(pipeline_k, smem_pipe_read);
 
                 const int t_n_block = shared_storage.pipelines.curr_n_block[warp_group_idx][smem_pipe_read.index()];
@@ -1748,8 +1750,9 @@ struct CollectiveMainloopFwdSm90 {
                 const int n_block = skip ? -t_n_block : t_n_block;
 
                 if(!skip){
-                    Tensor tSrS = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
+                    // Tensor tSrS = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
                     flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS);
+                    warp_scheduler_barrier_arrive();
                     warpgroup_wait<0>();
                     pipeline_k.consumer_release(smem_pipe_read);  // release K
                     scoremod_premask_fn(tSrS);
@@ -1757,6 +1760,7 @@ struct CollectiveMainloopFwdSm90 {
                     Tensor scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(tSrS, qk_skip_mask, q_i, (uint32_t) n_block, params.qk_skip_mask_args.thr);
 
                     softmax.template online_softmax</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
+                    // softmax.template online_softmax_skipable</*Is_first=*/Is_first_iter, Check_inf>(tSrS, params.qk_skip_mask_args.thr);
                     Tensor tOrP_acc = make_tensor(tSrS.data(), flash::convert_layout_acc_Aregs<TiledMmaPV>(tSrS.layout()));
                     Tensor tOrP = make_tensor_like<Element>(tOrP_acc);
                     convert_type_out(tOrP_acc, tOrP);
@@ -1768,8 +1772,8 @@ struct CollectiveMainloopFwdSm90 {
                     warpgroup_wait<0>();
                     pipeline_v.consumer_release(smem_pipe_read);  // release V
                 }else{
-                    // warp_scheduler_barrier_arrive();
-                    // consumer_wait(pipeline_k, smem_pipe_read);
+                    warp_scheduler_barrier_arrive();
+                    consumer_wait(pipeline_k, smem_pipe_read);
                     pipeline_k.consumer_release(smem_pipe_read);  // release K
                     consumer_wait(pipeline_v, smem_pipe_read);
                     warp_scheduler_barrier_sync();
