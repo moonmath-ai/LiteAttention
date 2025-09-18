@@ -683,8 +683,8 @@ struct CollectiveMainloopFwdSm90 {
         int const num_q_blocks = cute::ceil_div(get<0>(params.shape_Q), kBlockM / MmaWarpGroups);
         int const num_k_blocks = cute::ceil_div(get<0>(params.shape_K), kBlockN);
         // const uint32_t q_i = ((uint32_t) m_block) * 2 + warp_group_idx;
-        // const uint32_t q_i = ((uint32_t) m_block) * 2;
-        const uint32_t q_i = ((uint32_t) m_block);
+        const uint32_t q_i = ((uint32_t) m_block) * 2;
+        // const uint32_t q_i = ((uint32_t) m_block);
         const uint32_t limbs_qk = cute::ceil_div(num_q_blocks * num_k_blocks, 64);
         uint64_t mask_offset = (bidb * num_heads * limbs_qk) + (bidh * limbs_qk);
         QKSkipMask qk_skip_mask(
@@ -825,11 +825,18 @@ struct CollectiveMainloopFwdSm90 {
             }
         }
 
-        auto load_K = [&] (int const n_block, auto const& smem_pipe_write, auto need_seqlenk_masking_type, bool last_iter = false) {
+        // auto load_K = [&] (int const n_block, auto const& smem_pipe_write, auto need_seqlenk_masking_type, bool last_iter = false, bool skip1 = false, bool skip2 = false) {
+        auto load_K = [&] (int const n_block, auto const& smem_pipe_write, auto need_seqlenk_masking_type, bool skip1 = false, bool skip2 = false) {
 
             pipeline_k.producer_acquire(smem_pipe_write);
-            int t_n_block = last_iter ? -n_block : n_block;
-            shared_storage.pipelines.curr_n_block[smem_pipe_write.index()] = t_n_block;
+
+            int t_n_block = skip1 ? -n_block : n_block;
+            shared_storage.pipelines.curr_n_block[0][smem_pipe_write.index()] = t_n_block;
+            t_n_block = skip2 ? -n_block : n_block;
+            shared_storage.pipelines.curr_n_block[1][smem_pipe_write.index()] = t_n_block;
+
+            // int t_n_block = last_iter ? -n_block : n_block;
+            // shared_storage.pipelines.curr_n_block[smem_pipe_write.index()] = t_n_block;
             if constexpr (!PagedKVNonTMA) {
                 // DOR: we do this
                 auto [n_block_idx, bidb_kv_idx] = paged_kv_manager.get_indices_for_K_TMA();
@@ -875,7 +882,7 @@ struct CollectiveMainloopFwdSm90 {
 
         int n_block = n_block_max - 1;
         // bool skip = qk_skip_mask.get(q_i, n_block);
-        bool skip = false;
+        // bool skip = false;
         // int n_block = n_block_min;
 
         int warp_idx_in_warpgroup = __shfl_sync(0xffffffff, (threadIdx.x / 32) % 4, 0);
@@ -954,11 +961,16 @@ struct CollectiveMainloopFwdSm90 {
         --n_block;
         // bool skip_prev = skip;
         // skip = qk_skip_mask.get2(q_i, n_block);
-        skip = qk_skip_mask.get(q_i, n_block);
+        bool skip1 = qk_skip_mask.get(q_i, n_block);
+        bool skip2 = qk_skip_mask.get(q_i + 1, n_block);
+        // skip = qk_skip_mask.get(q_i, n_block);
         // ++n_block;
         #pragma unroll (!Transpose_V && Use_TMA_KV ? 2 : 1)
         // for (; n_block < n_block_max; ++n_block) {
-        for (; n_block >= n_block_min; --n_block, skip = qk_skip_mask.get(q_i, n_block)) {
+        // for (; n_block >= n_block_min; --n_block, skip = qk_skip_mask.get(q_i, n_block)) {
+        // for (; n_block >= n_block_min; --n_block, skip = qk_skip_mask.get2(q_i, n_block)) {
+        for (; n_block >= n_block_min; --n_block, skip1 = qk_skip_mask.get(q_i, n_block), skip2 = qk_skip_mask.get(q_i + 1, n_block)) {
+            bool skip = skip1 && skip2;
             if (skip && n_block != n_block_min) continue;
 
             // int j_block = middle_out_indexing(n_block);
@@ -973,8 +985,8 @@ struct CollectiveMainloopFwdSm90 {
                     // paged_kv_manager.load_page_table_TMA(j_block);
                 }
                 if constexpr (Transpose_V) { load_V(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/); }
-                load_K(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/, n_block == n_block_min);
-                // load_K(j_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/);
+                // load_K(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/, n_block == n_block_min);
+                load_K(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/, skip1, skip2);
                 if constexpr (!Transpose_V) {
                     if constexpr (IntraWGOverlap) {
                         load_V(n_block_prev, smem_pipe_write_v, cute::true_type{} /*Seqlenk_mask*/);
@@ -1421,7 +1433,9 @@ struct CollectiveMainloopFwdSm90 {
         int const num_heads = get<2>(params.shape_Q);
         int const num_q_blocks = cute::ceil_div(get<0>(params.shape_Q), kBlockM / MmaWarpGroups);
         int const num_k_blocks = cute::ceil_div(get<0>(params.shape_K), kBlockN);
-        const uint32_t q_i = ((uint32_t) m_block);
+        // const uint32_t q_i = ((uint32_t) m_block);
+        const uint32_t Q_i = ((uint32_t) m_block) * 2;
+        const uint32_t q_i = Q_i + warp_group_idx;
         const uint32_t limbs_qk = cute::ceil_div(num_q_blocks * num_k_blocks, 64);
         uint64_t mask_offset = (bidb * num_heads * limbs_qk) + (bidh * limbs_qk);
         QKSkipMask qk_skip_mask(
@@ -1728,62 +1742,41 @@ struct CollectiveMainloopFwdSm90 {
 
                 warp_scheduler_barrier_arrive();
                 consumer_wait(pipeline_k, smem_pipe_read);
-                const int t_n_block = shared_storage.pipelines.curr_n_block[smem_pipe_read.index()];
-                const int n_block = t_n_block > 0 ? t_n_block : -t_n_block;
 
-                Tensor tSrS = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
-                flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS);
-                warpgroup_wait<0>();
-                pipeline_k.consumer_release(smem_pipe_read);  // release K
-                scoremod_premask_fn(tSrS);
-                mask_fn(tSrS, n_block);
-                Tensor scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(tSrS, qk_skip_mask, q_i, (uint32_t) n_block, params.qk_skip_mask_args.thr);
+                const int t_n_block = shared_storage.pipelines.curr_n_block[warp_group_idx][smem_pipe_read.index()];
+                bool skip = t_n_block < 0;
+                const int n_block = skip ? -t_n_block : t_n_block;
 
-                softmax.template online_softmax</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
-                Tensor tOrP_acc = make_tensor(tSrS.data(), flash::convert_layout_acc_Aregs<TiledMmaPV>(tSrS.layout()));
-                Tensor tOrP = make_tensor_like<Element>(tOrP_acc);
-                convert_type_out(tOrP_acc, tOrP);
-                if constexpr (!Is_first_iter) { softmax.rescale_o(tOrO, scores_scale); }
-                consumer_wait(pipeline_v, smem_pipe_read);
-                warp_scheduler_barrier_sync();
-                TiledMmaPV_RS tiled_mma_pv_rs;
-                flash::gemm</*zero_init=*/Is_first_iter, /*wg_wait=*/-1>(tiled_mma_pv_rs, tOrP, tOrV(_, _, _, smem_pipe_read.index()), tOrO);
-                warpgroup_wait<0>();
-                pipeline_v.consumer_release(smem_pipe_read);  // release V
+                if(!skip){
+                    Tensor tSrS = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
+                    flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS);
+                    warpgroup_wait<0>();
+                    pipeline_k.consumer_release(smem_pipe_read);  // release K
+                    scoremod_premask_fn(tSrS);
+                    mask_fn(tSrS, n_block);
+                    Tensor scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(tSrS, qk_skip_mask, q_i, (uint32_t) n_block, params.qk_skip_mask_args.thr);
 
-                return t_n_block > 0;
+                    softmax.template online_softmax</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
+                    Tensor tOrP_acc = make_tensor(tSrS.data(), flash::convert_layout_acc_Aregs<TiledMmaPV>(tSrS.layout()));
+                    Tensor tOrP = make_tensor_like<Element>(tOrP_acc);
+                    convert_type_out(tOrP_acc, tOrP);
+                    if constexpr (!Is_first_iter) { softmax.rescale_o(tOrO, scores_scale); }
+                    consumer_wait(pipeline_v, smem_pipe_read);
+                    warp_scheduler_barrier_sync();
+                    TiledMmaPV_RS tiled_mma_pv_rs;
+                    flash::gemm</*zero_init=*/Is_first_iter, /*wg_wait=*/-1>(tiled_mma_pv_rs, tOrP, tOrV(_, _, _, smem_pipe_read.index()), tOrO);
+                    warpgroup_wait<0>();
+                    pipeline_v.consumer_release(smem_pipe_read);  // release V
+                }else{
+                    // warp_scheduler_barrier_arrive();
+                    // consumer_wait(pipeline_k, smem_pipe_read);
+                    pipeline_k.consumer_release(smem_pipe_read);  // release K
+                    consumer_wait(pipeline_v, smem_pipe_read);
+                    warp_scheduler_barrier_sync();
+                    pipeline_v.consumer_release(smem_pipe_read);  // release V
+                }
 
-                // if (!skip) {
-                //     warp_scheduler_barrier_arrive();
-                //     consumer_wait(pipeline_k, smem_pipe_read);
-                //     Tensor tSrS = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
-                //     flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS);
-                //     warpgroup_wait<0>();
-                //     pipeline_k.consumer_release(smem_pipe_read);  // release K
-                //     scoremod_premask_fn(tSrS);
-                //     mask_fn(tSrS, n_block);
-                //     Tensor scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(tSrS, qk_skip_mask, q_i, (uint32_t) n_block, params.qk_skip_mask_args.thr);
-                //     // Tensor scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(tSrS, qk_skip_mask, q_i, (uint32_t) n_block, num_k_blocks > 27 ? -3.0f : -INFINITY);
-
-                //     softmax.template online_softmax</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
-                //     Tensor tOrP_acc = make_tensor(tSrS.data(), flash::convert_layout_acc_Aregs<TiledMmaPV>(tSrS.layout()));
-                //     Tensor tOrP = make_tensor_like<Element>(tOrP_acc);
-                //     convert_type_out(tOrP_acc, tOrP);
-                //     if constexpr (!Is_first_iter) { softmax.rescale_o(tOrO, scores_scale); }
-                //     consumer_wait(pipeline_v, smem_pipe_read);
-                //     warp_scheduler_barrier_sync();
-                //     TiledMmaPV_RS tiled_mma_pv_rs;
-                //     flash::gemm</*zero_init=*/Is_first_iter, /*wg_wait=*/-1>(tiled_mma_pv_rs, tOrP, tOrV(_, _, _, smem_pipe_read.index()), tOrO);
-                //     warpgroup_wait<0>();
-                //     pipeline_v.consumer_release(smem_pipe_read);  // release V
-                // } else {
-                //     warp_scheduler_barrier_arrive();
-                //     consumer_wait(pipeline_k, smem_pipe_read);
-                //     pipeline_k.consumer_release(smem_pipe_read);  // release K
-                //     consumer_wait(pipeline_v, smem_pipe_read);
-                //     warp_scheduler_barrier_sync();
-                //     pipeline_v.consumer_release(smem_pipe_read);  // release V
-                // }
+                return t_n_block != 0;
             };
 
             auto first_iter_mask_fn = [&](auto& tSrS, int n_block) { mask.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS, m_block, n_block); };
@@ -1806,14 +1799,6 @@ struct CollectiveMainloopFwdSm90 {
                 seqlen_info, m_block, n_block_min, params.window_size_left,
                 params.attention_chunk_divmod, params.qhead_per_khead_divmod);
             auto no_mask_fn = [](auto& tSrS, int n_block) { };
-            // (i think) the following loop, loops over the number of k tiles
-            // #pragma unroll 1
-            // for (; n_block >= n_block_min_before_local_mask; --n_block) {
-            //     if(qk_skip_mask.get(q_i, n_block)){ continue; }
-            //     // bool skip = qk_skip_mask.get(q_i, n_block);
-            //     // fwd_step(n_block, no_mask_fn, cute::false_type{} /*is_first_iter*/, cute::false_type{} /*check_inf*/, skip);
-            //     fwd_step(n_block, no_mask_fn, cute::false_type{} /*is_first_iter*/, cute::false_type{} /*check_inf*/, false);
-            // }
 
             #pragma unroll 1
             while (has_next) {

@@ -135,7 +135,7 @@ public:
             // alignas(16) std::conditional_t<CollectiveMainloop::Is_skipable, 
             //                    int[CollectiveMainloop::kStages], 
             //                    cute::array<int, 0>> curr_n_block;
-            int curr_n_block[CollectiveMainloop::kStages];
+            int curr_n_block[NumMmaWarpGroups][CollectiveMainloop::kStages];
         } pipelines;
 
     };
