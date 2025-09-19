@@ -13,19 +13,22 @@
 #include "utils.h"
 
 struct QKSkipMask {
-    uint32_t* mask[4];
+    // uint32_t* mask[4];
+    uint32_t* mask;
     uint32_t k_dim;
 
     __device__ QKSkipMask(
-        uint64_t* mask_0_,
-        uint64_t* mask_1_,
-        uint64_t* mask_2_,
-        uint64_t* mask_3_,
+        uint64_t* mask_,
+        // uint64_t* mask_0_,
+        // uint64_t* mask_1_,
+        // uint64_t* mask_2_,
+        // uint64_t* mask_3_,
         uint32_t k_dim_) : k_dim(k_dim_) {
-        mask[0] = (uint32_t*)mask_0_;
-        mask[1] = (uint32_t*)mask_1_;
-        mask[2] = (uint32_t*)mask_2_;
-        mask[3] = (uint32_t*)mask_3_;
+        mask = (uint32_t*)mask_;
+        // mask[0] = (uint32_t*)mask_0_;
+        // mask[1] = (uint32_t*)mask_1_;
+        // mask[2] = (uint32_t*)mask_2_;
+        // mask[3] = (uint32_t*)mask_3_;
     }
     
     __device__ __forceinline__ uint32_t flatten(uint32_t q_i, uint32_t k_i) const {
@@ -37,7 +40,8 @@ struct QKSkipMask {
         uint32_t li = i >> 5;
         uint32_t bi = i & 31;
         uint32_t m  = (1u << bi);
-        return ((mask[0][li] & mask[1][li] & mask[2][li] & mask[3][li]) & m) != 0;
+        // return ((mask[0][li] & mask[1][li] & mask[2][li] & mask[3][li]) & m) != 0;
+        return (mask[li] & m) != 0;
     }
 
     __device__ __forceinline__ bool get2(uint32_t q_i, uint32_t k_i) {
@@ -51,10 +55,12 @@ struct QKSkipMask {
         uint32_t i = flatten(q_i, k_i);
         uint32_t li = i >> 5;
         uint32_t bi = i & 31;
-        if (threadIdx.x % 32 == 0) {
-            int mask_id = ((threadIdx.x - 128) / 32) % 4;
-            mask[mask_id][li] = (mask[mask_id][li] | (1u << bi));
-        }
+        mask[li] = (mask[li] | (1u << bi));
+
+        // if (threadIdx.x % 32 == 0) {
+        //     int mask_id = ((threadIdx.x - 128) / 32) % 4;
+        //     mask[mask_id][li] = (mask[mask_id][li] | (1u << bi));
+        // }
     }
 };
 
@@ -109,6 +115,39 @@ __device__ __forceinline__ void reduce_sum(Tensor<Engine0, Layout0> const& tenso
 // Apply the exp to all the elements.
 template <bool Scale_max=true, bool Check_inf=true, int Max_offset=0,
         typename Engine0, typename Layout0, typename Engine1, typename Layout1>
+__forceinline__ __device__ void scale_apply_exp2_skipable(Tensor<Engine0, Layout0> &tensor, Tensor<Engine1, Layout1> const &max, const float scale, const float thr) {
+    // For FP8, we can subtract max by 8.0 so that the value after exp2 is in the range of [0, 256].
+    // This lets us use more of the FP8 range (instead of just [0, 1]) to reduce underflow.
+    static constexpr float max_offset = float(Max_offset);  // We can only template on int, not float
+    static_assert(Layout0::rank == 2, "Only support 2D Tensor");
+    static_assert(Layout1::rank == 1, "Only support 1D Tensor");
+    CUTE_STATIC_ASSERT_V(size<0>(max) == size<0>(tensor));
+    #pragma unroll
+    for (int mi = 0; mi < size<0>(tensor); ++mi) {
+        // If max is -inf, then all elements must have been -inf (possibly due to masking).
+        // We don't want (-inf - (-inf)) since that would give NaN.
+        const float max_scaled = Check_inf
+            ? (max(mi) == -INFINITY ? 0.f : (!Scale_max ? max(mi) : max(mi) * scale) - max_offset)
+            : (!Scale_max ? max(mi) : max(mi) * scale) - max_offset;
+        #pragma unroll
+        for (int ni = 0; ni < size<1>(tensor); ++ni)  {
+            // Instead of computing exp(x - max), we compute exp2(x * log_2(e) -
+            // max * log_2(e)). This allows the compiler to use the ffma
+            // instruction instead of fadd and fmul separately.
+            float diff = tensor(mi, ni) * scale - max_scaled;
+            bool do_exp = diff > thr;
+            if (do_exp) {
+                tensor(mi, ni) = exp2f(diff);
+            } else {
+                tensor(mi, ni) = 0.f;
+            }
+        }
+    }
+}
+
+// Apply the exp to all the elements.
+template <bool Scale_max=true, bool Check_inf=true, int Max_offset=0,
+        typename Engine0, typename Layout0, typename Engine1, typename Layout1>
 __forceinline__ __device__ void scale_apply_exp2(Tensor<Engine0, Layout0> &tensor, Tensor<Engine1, Layout1> const &max, const float scale) {
     // For FP8, we can subtract max by 8.0 so that the value after exp2 is in the range of [0, 256].
     // This lets us use more of the FP8 range (instead of just [0, 1]) to reduce underflow.
@@ -147,10 +186,11 @@ struct Softmax {
     template<bool Is_first, bool Check_inf=false, typename Tensor0>
     __forceinline__ __device__ TensorT max_get_scale_detect_qk_skip(
         Tensor0 &acc_s,
-        QKSkipMask &qk_skip_mask,
+        // QKSkipMask &qk_skip_mask,
         uint32_t q_i,
         uint32_t k_i,
-        const float thr
+        const float thr,
+        int skip_tests[4]
     ) {
         // Reshape acc_s from ((2, 2, V), MMA_M, MMA_N) to (nrow=(2, MMA_M), ncol=(2, V, MMA_N))
         Tensor scores = make_tensor(acc_s.data(), flash::convert_layout_acc_rowcol(acc_s.layout()));
@@ -185,8 +225,11 @@ struct Softmax {
                 // do_qk |= (((cur - prev) * softmax_scale_log2) > thr);
                 do_qk |= (((scores_max_local(mi) - prev) * softmax_scale_log2) > thr);
             }
-            if (!__any_sync(0xffffffffu, do_qk)) {
-                qk_skip_mask.set(q_i, k_i);
+
+            const bool skip = !__any_sync(0xffffffffu, do_qk);
+            if (threadIdx.x % 32 == 0) {
+                const int32_t warp_idx_in_warpgroup = (threadIdx.x / 32) % 4;
+                skip_tests[warp_idx_in_warpgroup] = skip;
             }
         }
 
@@ -226,6 +269,17 @@ struct Softmax {
             // }
         }
         return scores_scale;
+    };
+
+    template<bool Is_first, bool Check_inf=false, typename Tensor0>
+    __forceinline__ __device__ void online_softmax_skipable(Tensor0 &acc_s, float thr) {
+        // Reshape acc_s from ((2, 2, V), MMA_M, MMA_N) to (nrow=(2, MMA_M), ncol=(2, V, MMA_N))
+        Tensor scores = make_tensor(acc_s.data(), flash::convert_layout_acc_rowcol(acc_s.layout()));
+        static_assert(CUTE_STATIC_V(size<0>(scores)) == kNRows);
+        flash::template scale_apply_exp2_skipable</*Scale_max=*/true, Check_inf, Max_offset>(scores, row_max, softmax_scale_log2, thr);
+        // We don't do the reduce across threads here since we don't need to use the row_sum.
+        // We do that reduce at the end when we need to normalize the softmax.
+        flash::reduce_sum</*zero_init=*/Is_first, /*warp_reduce=*/false>(scores, row_sum);
     };
 
     template<bool Is_first, bool Check_inf=false, typename Tensor0>

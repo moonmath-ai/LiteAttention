@@ -136,6 +136,8 @@ public:
             //                    int[CollectiveMainloop::kStages], 
             //                    cute::array<int, 0>> curr_n_block;
             int curr_n_block[NumMmaWarpGroups][CollectiveMainloop::kStages];
+            // int skip_tests[NumMmaWarpGroups][CollectiveMainloop::kStages][4];
+            int skip_tests[NumMmaWarpGroups][4];
         } pipelines;
 
     };

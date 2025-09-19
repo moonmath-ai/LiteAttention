@@ -688,10 +688,11 @@ struct CollectiveMainloopFwdSm90 {
         const uint32_t limbs_qk = cute::ceil_div(num_q_blocks * num_k_blocks, 64);
         uint64_t mask_offset = (bidb * num_heads * limbs_qk) + (bidh * limbs_qk);
         QKSkipMask qk_skip_mask(
-            params.qk_skip_mask_args.mask_0 + mask_offset,
-            params.qk_skip_mask_args.mask_1 + mask_offset,
-            params.qk_skip_mask_args.mask_2 + mask_offset,
-            params.qk_skip_mask_args.mask_3 + mask_offset,
+            params.qk_skip_mask_args.mask + mask_offset,
+            // params.qk_skip_mask_args.mask_0 + mask_offset,
+            // params.qk_skip_mask_args.mask_1 + mask_offset,
+            // params.qk_skip_mask_args.mask_2 + mask_offset,
+            // params.qk_skip_mask_args.mask_3 + mask_offset,
             num_k_blocks
         );
 
@@ -1439,10 +1440,11 @@ struct CollectiveMainloopFwdSm90 {
         const uint32_t limbs_qk = cute::ceil_div(num_q_blocks * num_k_blocks, 64);
         uint64_t mask_offset = (bidb * num_heads * limbs_qk) + (bidh * limbs_qk);
         QKSkipMask qk_skip_mask(
-            params.qk_skip_mask_args.mask_0 + mask_offset,
-            params.qk_skip_mask_args.mask_1 + mask_offset,
-            params.qk_skip_mask_args.mask_2 + mask_offset,
-            params.qk_skip_mask_args.mask_3 + mask_offset,
+            params.qk_skip_mask_args.mask + mask_offset,
+            // params.qk_skip_mask_args.mask_0 + mask_offset,
+            // params.qk_skip_mask_args.mask_1 + mask_offset,
+            // params.qk_skip_mask_args.mask_2 + mask_offset,
+            // params.qk_skip_mask_args.mask_3 + mask_offset,
             num_k_blocks
         );
 
@@ -1737,7 +1739,7 @@ struct CollectiveMainloopFwdSm90 {
             auto fwd_step = [&](auto mask_fn, auto is_first_iter_type, auto check_inf_type) -> bool {
                 static constexpr bool Is_first_iter = decltype(is_first_iter_type)::value;
                 static constexpr bool Check_inf = decltype(check_inf_type)::value;
-                auto smem_pipe_read_prev = smem_pipe_read;
+                // auto smem_pipe_read_prev = smem_pipe_read;
                 if constexpr (!Is_first_iter) { ++smem_pipe_read; }
 
                 // warp_scheduler_barrier_arrive();
@@ -1757,7 +1759,11 @@ struct CollectiveMainloopFwdSm90 {
                     pipeline_k.consumer_release(smem_pipe_read);  // release K
                     scoremod_premask_fn(tSrS);
                     mask_fn(tSrS, n_block);
-                    Tensor scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(tSrS, qk_skip_mask, q_i, (uint32_t) n_block, params.qk_skip_mask_args.thr);
+                    // Tensor scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(tSrS, qk_skip_mask, q_i, (uint32_t) n_block, params.qk_skip_mask_args.thr);
+                    Tensor scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(
+                        // tSrS, qk_skip_mask, q_i, (uint32_t) n_block, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests[warp_group_idx][smem_pipe_read.index()]
+                        tSrS, q_i, (uint32_t) n_block, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests[warp_group_idx]
+                    );
 
                     softmax.template online_softmax</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
                     // softmax.template online_softmax_skipable</*Is_first=*/Is_first_iter, Check_inf>(tSrS, params.qk_skip_mask_args.thr);
@@ -1769,6 +1775,16 @@ struct CollectiveMainloopFwdSm90 {
                     warp_scheduler_barrier_sync();
                     TiledMmaPV_RS tiled_mma_pv_rs;
                     flash::gemm</*zero_init=*/Is_first_iter, /*wg_wait=*/-1>(tiled_mma_pv_rs, tOrP, tOrV(_, _, _, smem_pipe_read.index()), tOrO);
+                    if(threadIdx.x % 128 == 0){
+                        // reduce skip over the 4 warps
+                        bool skip = 
+                        shared_storage.pipelines.skip_tests[warp_group_idx][0] &&
+                        shared_storage.pipelines.skip_tests[warp_group_idx][1] &&
+                        shared_storage.pipelines.skip_tests[warp_group_idx][2] &&
+                        shared_storage.pipelines.skip_tests[warp_group_idx][3];
+
+                        if(skip) qk_skip_mask.set(q_i, (uint32_t) n_block);
+                    }
                     warpgroup_wait<0>();
                     pipeline_v.consumer_release(smem_pipe_read);  // release V
                 }else{
