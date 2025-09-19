@@ -187,8 +187,8 @@ struct Softmax {
     __forceinline__ __device__ TensorT max_get_scale_detect_qk_skip(
         Tensor0 &acc_s,
         // QKSkipMask &qk_skip_mask,
-        uint32_t q_i,
-        uint32_t k_i,
+        // uint32_t q_i,
+        // uint32_t k_i,
         const float thr,
         int skip_tests[4]
     ) {

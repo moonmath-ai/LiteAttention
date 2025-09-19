@@ -1761,8 +1761,7 @@ struct CollectiveMainloopFwdSm90 {
                     mask_fn(tSrS, n_block);
                     // Tensor scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(tSrS, qk_skip_mask, q_i, (uint32_t) n_block, params.qk_skip_mask_args.thr);
                     Tensor scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(
-                        // tSrS, qk_skip_mask, q_i, (uint32_t) n_block, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests[warp_group_idx][smem_pipe_read.index()]
-                        tSrS, q_i, (uint32_t) n_block, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests[warp_group_idx]
+                        tSrS, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests[warp_group_idx]
                     );
 
                     softmax.template online_softmax</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
