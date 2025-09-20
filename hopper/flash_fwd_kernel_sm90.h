@@ -469,9 +469,15 @@ public:
                 Tensor tOrO = partition_fragment_C(tiled_mma_pv, select<0, 1>(TileShape_MNK_PV{}));
                 bool tile_valid;
                 if constexpr (!LargeHeadDimV) {
+                    if (mainloop.Is_skipable) {
                     tile_valid = mainloop.mma(
-                        params.mainloop, pipeline_k, pipeline_v, smem_pipe_read,
-                        tOrO, softmax, threadIdx.x - MmaThreadOffset, work_idx, seqlen_info, block_coord, shared_storage);
+                            params.mainloop, pipeline_k, pipeline_v, smem_pipe_read,
+                            tOrO, softmax, threadIdx.x - MmaThreadOffset, work_idx, seqlen_info, block_coord, shared_storage);
+                    } else {
+                        tile_valid = mainloop.mma_no_skip(
+                            params.mainloop, pipeline_k, pipeline_v, smem_pipe_read,
+                            tOrO, softmax, threadIdx.x - MmaThreadOffset, work_idx, seqlen_info, block_coord, shared_storage);
+                    }
                 } else {  // mma_pv might not compile if !LargeHeadDimV
                     if (warp_group_idx == 1) {
                         if constexpr (mainloop.Is_skipable) {
