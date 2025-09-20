@@ -51,7 +51,9 @@ def _flash_attn_forward(
         num_splits=1,
         pack_gqa=None,
         sm_margin=0,
-        qk_skip_mask_args=None,
+        # qk_skip_mask_args=None,
+        read_skip_list=None,
+        write_skip_list=None,
         thr=-3.0,
     ):
     q, k, k_new, v_new = [maybe_contiguous(x) for x in (q, k, k_new, v_new)]
@@ -100,7 +102,9 @@ def _flash_attn_forward(
         num_splits,
         pack_gqa,
         sm_margin,
-        qk_skip_mask_args,
+        # qk_skip_mask_args,
+        read_skip_list,
+        write_skip_list,
         thr=thr,
     )
     return out, softmax_lse, *rest
@@ -172,7 +176,9 @@ class FlashAttnQKVPackedFunc(torch.autograd.Function):
         deterministic=False,
         num_heads_q=None,
         sm_margin=0,
-        qk_skip_mask_args=None,
+        # qk_skip_mask_args=None,
+        read_skip_list=None,
+        write_skip_list=None,
         thr=-3.0,
     ):
         if softmax_scale is None:
@@ -205,7 +211,9 @@ class FlashAttnQKVPackedFunc(torch.autograd.Function):
             attention_chunk=attention_chunk,
             softcap=softcap,
             sm_margin=sm_margin,
-            qk_skip_mask_args=qk_skip_mask_args,
+            # qk_skip_mask_args=qk_skip_mask_args,
+            read_skip_list=read_skip_list,
+            write_skip_list=write_skip_list,
             thr=thr,
         )
         # ctx.save_for_backward(q, k, v, out_padded, softmax_lse)
@@ -278,7 +286,9 @@ class FlashAttnFunc(torch.autograd.Function):
         pack_gqa=None,
         deterministic=False,
         sm_margin=0,
-        qk_skip_mask_args=None,
+        # qk_skip_mask_args=None,
+        read_skip_list=None,
+        write_skip_list=None,
         thr=-3.0,
     ):
         if softmax_scale is None:
@@ -305,7 +315,9 @@ class FlashAttnFunc(torch.autograd.Function):
             num_splits=num_splits,
             pack_gqa=pack_gqa,
             sm_margin=sm_margin,
-            qk_skip_mask_args=qk_skip_mask_args,
+            # qk_skip_mask_args=qk_skip_mask_args,
+            read_skip_list=read_skip_list,
+            write_skip_list=write_skip_list,
             thr=thr,
         )
         # ctx.save_for_backward(q, k, v, out_padded, softmax_lse)
@@ -375,7 +387,9 @@ class FlashAttnVarlenFunc(torch.autograd.Function):
         pack_gqa=None,
         deterministic=False,
         sm_margin=0,
-        qk_skip_mask_args=None,
+        # qk_skip_mask_args=None,
+        read_skip_list=None,
+        write_skip_list=None,
         thr=-3.0,
     ):
         if softmax_scale is None:
@@ -406,7 +420,9 @@ class FlashAttnVarlenFunc(torch.autograd.Function):
             num_splits=num_splits,
             pack_gqa=pack_gqa,
             sm_margin=sm_margin,
-            qk_skip_mask_args=None,
+            # qk_skip_mask_args=None,
+            read_skip_list=read_skip_list,
+            write_skip_list=write_skip_list,
             thr=thr,
         )
         # ctx.save_for_backward(q, k, v, out_padded, softmax_lse, cu_seqlens_q, cu_seqlens_k, seqused_q, seqused_k)
@@ -531,7 +547,9 @@ def flash_attn_func(
     pack_gqa=None,
     deterministic=False,
     sm_margin=0,
-    qk_skip_mask_args=None,
+    # qk_skip_mask_args=None,
+    read_skip_list=None,
+    write_skip_list=None,
     thr=-3.0,
 ):
     """dropout_p should be set to 0.0 during evaluation
@@ -594,7 +612,9 @@ def flash_attn_func(
         pack_gqa,
         deterministic,
         sm_margin,
-        qk_skip_mask_args,
+        # qk_skip_mask_args,
+        read_skip_list,
+        write_skip_list,
         thr,
     )
 
@@ -680,7 +700,9 @@ def flash_attn_with_kvcache(
     pack_gqa=None,   # Can be tuned for speed
     sm_margin=0,     # Can be tuned if some SMs are used for communication
     return_softmax_lse=False,
-    qk_skip_mask_args=None,
+    # qk_skip_mask_args=None,
+    read_skip_list=None,
+    write_skip_list=None,
     thr=-3.0,
 ):
     """
@@ -809,7 +831,9 @@ def flash_attn_with_kvcache(
         num_splits=num_splits,
         pack_gqa=pack_gqa,
         sm_margin=sm_margin,
-        qk_skip_mask_args=qk_skip_mask_args,
+        # qk_skip_mask_args=qk_skip_mask_args,
+        read_skip_list=read_skip_list,
+        write_skip_list=write_skip_list,
         thr=thr,
     )
     # return (out, softmax_lse) if return_softmax_lse else out
