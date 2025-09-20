@@ -1661,9 +1661,11 @@ struct CollectiveMainloopFwdSm90 {
             // Each step does gemm0 for iter n_block, gemm1 for iter n_block + 1, and softmax for iter n_block.
             auto fwd_step = [&](int const n_block, auto mask_fn, auto check_inf_type) {
                 static constexpr bool Check_inf = decltype(check_inf_type)::value;
+                // TODO: understand this line better
                 PipelineState smem_pipe_read_v(smem_pipe_read.index(), smem_pipe_read.phase(), smem_pipe_read.count());
                 ++smem_pipe_read;
                 Tensor tSrS = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
+                // DOR: UseSchedulerBarrier == true in our case. only the first consumer warp group enter this if
                 if (!UseSchedulerBarrier || warp_group_idx == 0) { consumer_wait(pipeline_k, smem_pipe_read); }
                 warp_scheduler_barrier_sync();
                 flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS);
@@ -2097,23 +2099,6 @@ struct CollectiveMainloopFwdSm90 {
 
         // TONY: WE SHOULD disable this for first version
         if constexpr (IntraWGOverlap) {
-            // // ~~~~~~~~~~~~~~~~~ define skip list ~~~~~~~~~~~~~~~~~
-            // int const num_heads = get<2>(params.shape_Q);
-            // int const num_q_blocks = cute::ceil_div(get<0>(params.shape_Q), kBlockM);
-            // int const num_k_blocks = cute::ceil_div(get<0>(params.shape_K), kBlockN) + 1;
-            // const uint32_t q_i = ((uint32_t) m_block);
-            // uint64_t mask_offset = (bidb * num_heads * num_q_blocks * num_k_blocks) + (bidh * num_q_blocks * num_k_blocks) + (q_i * num_k_blocks);
-            // uint32_t* read_skip_list = params.qk_skip_mask_args.read_skip_list + mask_offset;
-            // uint32_t* write_skip_list = params.qk_skip_mask_args.write_skip_list + mask_offset;
-            // // ~~~~~~~~~~~~~~~~~ end of define skip list ~~~~~~~~~~~~~~~~~
-
-            // // ~~~~~~~~~~~~~~~~~ skip list init ~~~~~~~~~~~~~~~~~
-            // uint32_t skip_list_len = read_skip_list[0];
-            // uint32_t read_idx = 1;
-            // uint32_t start_idx = read_skip_list[read_idx];
-            // uint32_t end_idx = read_skip_list[read_idx + 1];
-            // // ~~~~~~~~~~~~~~~~~ end of skip list init ~~~~~~~~~~
-
             Tensor tSrS = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
             consumer_wait(pipeline_k, smem_pipe_read);
             flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS);
