@@ -1315,16 +1315,18 @@ struct CollectiveMainloopFwdSm90 {
             PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
             ++smem_pipe_write;
             if (should_load_KV) {
-                    if constexpr (PagedKVNonTMA) {
-                        paged_kv_manager.template load_page_table<false /*Seqlenk_mask*/>(n_block);
-                        // paged_kv_manager.template load_page_table<false /*Seqlenk_mask*/>(j_block);
-                    } else {
-                        paged_kv_manager.load_page_table_TMA(n_block);
-                        // paged_kv_manager.load_page_table_TMA(j_block);
-                    }
-                    if constexpr (Transpose_V) { load_V(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/); }
-                    load_K(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/);
-                    // load_K(j_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/);
+                if constexpr (PagedKVNonTMA) {
+                    paged_kv_manager.template load_page_table<false /*Seqlenk_mask*/>(n_block);
+                    // paged_kv_manager.template load_page_table<false /*Seqlenk_mask*/>(j_block);
+                } else {
+                    paged_kv_manager.load_page_table_TMA(n_block);
+                    // paged_kv_manager.load_page_table_TMA(j_block);
+                }
+                if constexpr (Transpose_V) { load_V(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/); }
+
+                load_K(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/);
+                // load_K(j_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/);
+
                 if constexpr (!Transpose_V) {
                     if constexpr (IntraWGOverlap) {
                         load_V(n_block_prev, smem_pipe_write_v, cute::true_type{} /*Seqlenk_mask*/);
@@ -1371,7 +1373,10 @@ struct CollectiveMainloopFwdSm90 {
     CUTLASS_DEVICE void
     warp_scheduler_barrier_sync() {
         if constexpr (UseSchedulerBarrier) {
-            cutlass::arch::NamedBarrier::sync(2 * cutlass::NumThreadsPerWarpGroup, static_cast<uint32_t>(FwdNamedBarriers::WarpSchedulerWG1) - 1 + flash::canonical_warp_group_idx_nosync() /*id*/);
+            cutlass::arch::NamedBarrier::sync(
+                2 * cutlass::NumThreadsPerWarpGroup,
+                static_cast<uint32_t>(FwdNamedBarriers::WarpSchedulerWG1) - 1 + flash::canonical_warp_group_idx_nosync() /*id*/
+            );
         }
     }
 
@@ -1812,7 +1817,7 @@ struct CollectiveMainloopFwdSm90 {
                 //     consumer_wait(pipeline_k, smem_pipe_read);
                 //     pipeline_k.consumer_release(smem_pipe_read);  // release K
                 //     consumer_wait(pipeline_v, smem_pipe_read);
-                //     warp_scheduler_barrier_sync();
+                //     Warp_scheduler_barrier_sync();
                 //     pipeline_v.consumer_release(smem_pipe_read);  // release V
                 // }
 
@@ -2099,6 +2104,7 @@ struct CollectiveMainloopFwdSm90 {
 
         // TONY: WE SHOULD disable this for first version
         if constexpr (IntraWGOverlap) {
+            // question: if both warpgroups do this, why can't we use fwd_step?
             Tensor tSrS = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
             consumer_wait(pipeline_k, smem_pipe_read);
             flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS);
@@ -2135,7 +2141,10 @@ struct CollectiveMainloopFwdSm90 {
                 PipelineState smem_pipe_read_v(smem_pipe_read.index(), smem_pipe_read.phase(), smem_pipe_read.count());
                 ++smem_pipe_read;
                 Tensor tSrS = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
+                // DOR: UseSchedulerBarrier == true in our case. only the first consumer warp group enter this if
+                // this makes the first warp group wait for the next K tile to load
                 if (!UseSchedulerBarrier || warp_group_idx == 0) { consumer_wait(pipeline_k, smem_pipe_read); }
+                // DOR: both warpgroups wait here??? no. we init wg1 such that it woudn't stuck here?
                 warp_scheduler_barrier_sync();
                 flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS);
                 if constexpr (RescaleOBeforeGemm) { softmax.rescale_o(tOrO, scores_scale); }
@@ -2143,6 +2152,7 @@ struct CollectiveMainloopFwdSm90 {
                     if (!UseSchedulerBarrier || warp_group_idx == 0) { consumer_wait(pipeline_v, smem_pipe_read_v); }
                 }
                 flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP), tOrV(_, _, _, smem_pipe_read_v.index()), tOrO);
+                // DOR: one warpgroup frees the other warpgroup from the warp_scheduler_barrier_sync above
                 warp_scheduler_barrier_arrive();
                 warpgroup_wait<1>();
                 pipeline_k.consumer_release(smem_pipe_read);  // release K
