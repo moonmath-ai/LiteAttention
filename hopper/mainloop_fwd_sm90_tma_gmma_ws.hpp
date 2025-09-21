@@ -2143,14 +2143,17 @@ struct CollectiveMainloopFwdSm90 {
                 Tensor tSrS = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
                 // DOR: UseSchedulerBarrier == true in our case. only the first consumer warp group enter this if
                 // this makes the first warp group wait for the next K tile to load
+                // wg1 waits for n_block k tile to load (n_block - 1 k tile already loaded)
                 if (!UseSchedulerBarrier || warp_group_idx == 0) { consumer_wait(pipeline_k, smem_pipe_read); }
                 // DOR: both warpgroups wait here??? no. we init wg1 such that it woudn't stuck here?
                 warp_scheduler_barrier_sync();
+                // doing QK_T for n_block
                 flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS);
                 if constexpr (RescaleOBeforeGemm) { softmax.rescale_o(tOrO, scores_scale); }
                 if constexpr(!HasQv) {
                     if (!UseSchedulerBarrier || warp_group_idx == 0) { consumer_wait(pipeline_v, smem_pipe_read_v); }
                 }
+                // doing PV for n_block - 1
                 flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP), tOrV(_, _, _, smem_pipe_read_v.index()), tOrO);
                 // DOR: one warpgroup frees the other warpgroup from the warp_scheduler_barrier_sync above
                 warp_scheduler_barrier_arrive();
@@ -2164,7 +2167,9 @@ struct CollectiveMainloopFwdSm90 {
                 }
                 scoremod_premask_fn(tSrS);
                 mask_fn(tSrS, n_block);
+                // calculating scores_scale for n_block
                 cute::copy(softmax.template max_get_scale</*Is_first=*/false, Check_inf>(tSrS), scores_scale);
+                // TODO: it is possible to update the mask from wg2 now for n_block?
                 if constexpr (LargeHeadDimV) { store_scales(scores_scale, smem_pipe_read_v.index()); }
                 softmax.template online_softmax</*Is_first=*/false, Check_inf>(tSrS);
                 if constexpr (!HasQv) {
