@@ -389,7 +389,7 @@ public:
                     scheduler.prefetch_next_work(params.scheduler, work_tile_info);
                 };
                 // pipeline_vt won't be used if we don't need to transpose V.
-                if(mainloop.Is_skipable){
+                if constexpr(mainloop.Is_skipable){
                     mainloop.load(params.mainloop, pipeline_k, pipeline_v, pipeline_vt, smem_pipe_write,
                                             shared_storage, scheduler_prefetch, seqlen_info, block_coord, work_idx);
                 }else{

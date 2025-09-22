@@ -190,7 +190,8 @@ struct Softmax {
         // uint32_t q_i,
         // uint32_t k_i,
         const float thr,
-        int skip_tests[4]
+        int skip_tests[4],
+        const bool do_and = false
     ) {
         // Reshape acc_s from ((2, 2, V), MMA_M, MMA_N) to (nrow=(2, MMA_M), ncol=(2, V, MMA_N))
         Tensor scores = make_tensor(acc_s.data(), flash::convert_layout_acc_rowcol(acc_s.layout()));
@@ -229,7 +230,12 @@ struct Softmax {
             const bool skip = !__any_sync(0xffffffffu, do_qk);
             if (threadIdx.x % 32 == 0) {
                 const int32_t warp_idx_in_warpgroup = (threadIdx.x / 32) % 4;
-                skip_tests[warp_idx_in_warpgroup] = skip;
+                if (do_and){
+                    skip_tests[warp_idx_in_warpgroup] &= skip;
+                }else{
+                    skip_tests[warp_idx_in_warpgroup] = skip;
+                }
+                // skip_tests[warp_idx_in_warpgroup] = skip;
             }
         }
 

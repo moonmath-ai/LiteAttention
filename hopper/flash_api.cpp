@@ -916,13 +916,14 @@ mha_fwd(at::Tensor q,   // (b, s_q, h, d) or (total_q, h, d) if there is cu_seql
     // bool is_skipable = false;
     if (read_skip_list_.has_value()) {
         auto qk_skip_mask_tensor = read_skip_list_.value();
-        TORCH_CHECK(qk_skip_mask_tensor.dtype() == torch::kUInt16, "qk_skip_mask_args must be uint16 tensor");
+        // TORCH_CHECK(qk_skip_mask_tensor.dtype() == torch::kUInt16, "qk_skip_mask_args must be uint16 tensor");
+        TORCH_CHECK(qk_skip_mask_tensor.dtype() == torch::kUInt32, "qk_skip_mask_args must be uint32 tensor");
         // TORCH_CHECK(qk_skip_mask_tensor.dim() == 4, "qk_skip_mask_args must be 4D tensor with shape [4, batch, heads, limbs]");
         TORCH_CHECK(qk_skip_mask_tensor.dim() == 4, "qk_skip_mask_args must be 4D tensor with shape [batch, heads, limbs]");
         // TORCH_CHECK(qk_skip_mask_tensor.size(0) == 4, "qk_skip_mask_args must have 4 masks in dimension 0");
         TORCH_CHECK(qk_skip_mask_tensor.is_contiguous(), "qk_skip_mask_args must be contiguous");
         
-        uint16_t* data_ptr = static_cast<uint16_t*>(qk_skip_mask_tensor.data_ptr());
+        uint32_t* data_ptr = static_cast<uint32_t*>(qk_skip_mask_tensor.data_ptr());
         
         params.qk_skip_mask_args.read_skip_list = data_ptr;
         params.qk_skip_mask_args.thr = (float) thr;
@@ -935,13 +936,13 @@ mha_fwd(at::Tensor q,   // (b, s_q, h, d) or (total_q, h, d) if there is cu_seql
 
     if (write_skip_list_.has_value()) {
         auto qk_skip_mask_tensor = write_skip_list_.value();
-        TORCH_CHECK(qk_skip_mask_tensor.dtype() == torch::kUInt16, "qk_skip_mask_args must be uint16 tensor");
+        TORCH_CHECK(qk_skip_mask_tensor.dtype() == torch::kUInt32, "qk_skip_mask_args must be uint32 tensor");
         // TORCH_CHECK(qk_skip_mask_tensor.dim() == 4, "qk_skip_mask_args must be 4D tensor with shape [4, batch, heads, limbs]");
         TORCH_CHECK(qk_skip_mask_tensor.dim() == 4, "qk_skip_mask_args must be 4D tensor with shape [batch, heads, limbs]");
         // TORCH_CHECK(qk_skip_mask_tensor.size(0) == 4, "qk_skip_mask_args must have 4 masks in dimension 0");
         TORCH_CHECK(qk_skip_mask_tensor.is_contiguous(), "qk_skip_mask_args must be contiguous");
         
-        uint16_t* data_ptr = static_cast<uint16_t*>(qk_skip_mask_tensor.data_ptr());
+        uint32_t* data_ptr = static_cast<uint32_t*>(qk_skip_mask_tensor.data_ptr());
         params.qk_skip_mask_args.write_skip_list = data_ptr;
     } else {
         params.qk_skip_mask_args.write_skip_list = nullptr;
@@ -1740,7 +1741,9 @@ TORCH_LIBRARY(flash_attn_3, m) {
         "int num_splits = 0,"
         "bool? pack_gqa = None,"
         "int sm_margin = 0,"
-        "Tensor? qk_skip_mask_args = None,"
+        // "Tensor? qk_skip_mask_args = None,"
+        "Tensor? read_skip_mask = None,"
+        "Tensor? write_skip_mask = None,"
         "float thr = -3.0) -> (Tensor(out!), Tensor, Tensor, Tensor)"
     );
     m.def("bwd("

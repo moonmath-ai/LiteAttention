@@ -10,8 +10,8 @@
 // #include "softmax.h"
 
 struct QKSkipMaskArgs {
-    uint16_t* read_skip_list;
-    uint16_t* write_skip_list;
+    uint32_t* read_skip_list;
+    uint32_t* write_skip_list;
     // uint64_t* mask;
     // // uint64_t* mask_0;
     // // uint64_t* mask_1;
