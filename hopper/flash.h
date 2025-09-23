@@ -9,15 +9,17 @@
 
 // #include "softmax.h"
 
-struct QKSkipMaskArgs {
-    uint32_t* read_skip_list;
-    uint32_t* write_skip_list;
+struct QKSkipMaskArgs
+{
+    uint32_t *read_skip_list;
+    uint32_t *write_skip_list;
     float thr;
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-struct Qkv_params {
+struct Qkv_params
+{
     using index_t = int64_t;
     // The QKV matrices.
     void *__restrict__ q_ptr;
@@ -42,12 +44,13 @@ struct Qkv_params {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-struct Flash_fwd_params : public Qkv_params {
+struct Flash_fwd_params : public Qkv_params
+{
     using index_t = int64_t;
 
     // The O matrix (output).
-    void * __restrict__ o_ptr;
-    void * __restrict__ oaccum_ptr;
+    void *__restrict__ o_ptr;
+    void *__restrict__ oaccum_ptr;
 
     // The stride between rows of O.
     index_t o_batch_stride;
@@ -55,13 +58,13 @@ struct Flash_fwd_params : public Qkv_params {
     index_t o_head_stride;
 
     // The pointer to the softmax sum.
-    void * __restrict__ softmax_lse_ptr;
-    void * __restrict__ softmax_lseaccum_ptr;
+    void *__restrict__ softmax_lse_ptr;
+    void *__restrict__ softmax_lseaccum_ptr;
 
     // For FP8 scaling
-    float * __restrict__ q_descale_ptr;
-    float * __restrict__ k_descale_ptr;
-    float * __restrict__ v_descale_ptr;
+    float *__restrict__ q_descale_ptr;
+    float *__restrict__ k_descale_ptr;
+    float *__restrict__ v_descale_ptr;
     index_t q_descale_batch_stride;
     index_t q_descale_head_stride;
     index_t k_descale_batch_stride;
@@ -72,18 +75,18 @@ struct Flash_fwd_params : public Qkv_params {
     // The dimensions.
     int b, seqlen_q, seqlen_k, seqlen_knew, d, seqlen_q_rounded, seqlen_k_rounded, d_rounded, rotary_dim;
     int total_q, total_k, total_knew;
-    int b_k;  // When having KV cache and with cache_batch_idx, K & V might have larger batch size than Q
-    int dv, dv_rounded;  // For the case where V headdim is different from Q/K headdim
+    int b_k;            // When having KV cache and with cache_batch_idx, K & V might have larger batch size than Q
+    int dv, dv_rounded; // For the case where V headdim is different from Q/K headdim
 
     // The scaling factors for the kernel.
     float scale_softmax;
     float softcap;
 
     // array of length b+1 holding starting offset of each sequence.
-    int * __restrict__ cu_seqlens_q;
-    int * __restrict__ cu_seqlens_k;
-    int * __restrict__ cu_seqlens_knew;
-    int * __restrict__ leftpad_k;
+    int *__restrict__ cu_seqlens_q;
+    int *__restrict__ cu_seqlens_k;
+    int *__restrict__ cu_seqlens_knew;
+    int *__restrict__ leftpad_k;
 
     // If provided, the actual length of each q/k sequence.
     int *__restrict__ seqused_q;
@@ -101,8 +104,8 @@ struct Flash_fwd_params : public Qkv_params {
     index_t lseaccum_head_stride;
 
     // The K_new and V_new matrices.
-    void * __restrict__ knew_ptr;
-    void * __restrict__ vnew_ptr;
+    void *__restrict__ knew_ptr;
+    void *__restrict__ vnew_ptr;
 
     // The stride between rows of the Q, K and V matrices.
     index_t knew_batch_stride;
@@ -118,15 +121,15 @@ struct Flash_fwd_params : public Qkv_params {
     index_t qv_head_stride;
 
     // The cos and sin matrices for rotary embedding.
-    void * __restrict__ rotary_cos_ptr;
-    void * __restrict__ rotary_sin_ptr;
+    void *__restrict__ rotary_cos_ptr;
+    void *__restrict__ rotary_sin_ptr;
     int *__restrict__ seqlens_rotary;
 
     // The indices to index into the KV cache.
-    int * __restrict__ kv_batch_idx;
+    int *__restrict__ kv_batch_idx;
 
     // Paged KV cache
-    int * __restrict__ page_table;
+    int *__restrict__ page_table;
     index_t page_table_batch_stride;
     int page_size;
     int num_pages;
@@ -146,7 +149,7 @@ struct Flash_fwd_params : public Qkv_params {
     int attention_chunk;
 
     // Pointer to the RNG seed (idx 0) and offset (idx 1).
-    uint64_t * rng_state;
+    uint64_t *rng_state;
 
     bool is_bf16;
     bool is_fp32;
@@ -156,15 +159,15 @@ struct Flash_fwd_params : public Qkv_params {
 
     bool is_rotary_interleaved;
 
-    int num_splits;  // For split-KV version
+    int num_splits; // For split-KV version
     bool pack_gqa;
 
-    int * __restrict__ tile_count_semaphore;
-    int * __restrict__ num_m_blocks_ptr;
+    int *__restrict__ tile_count_semaphore;
+    int *__restrict__ num_m_blocks_ptr;
     // int * __restrict__ num_n_blocks_ptr;
-    int * __restrict__ num_splits_dynamic_ptr;
-    int * __restrict__ varlen_batch_idx_ptr; // virtual -> actual
-    int * __restrict__ num_nheads_in_l2_ptr;
+    int *__restrict__ num_splits_dynamic_ptr;
+    int *__restrict__ varlen_batch_idx_ptr; // virtual -> actual
+    int *__restrict__ num_nheads_in_l2_ptr;
     bool skip_scheduler_metadata_computation;
     bool varlen_sort_batches;
     int tile_count_semaphore_offset;
@@ -180,7 +183,8 @@ struct Flash_fwd_params : public Qkv_params {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-struct Flash_bwd_params : public Flash_fwd_params {
+struct Flash_bwd_params : public Flash_fwd_params
+{
     using index_t = int64_t;
 
     // The dO and dQKV matrices.
