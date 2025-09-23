@@ -287,7 +287,9 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream) {
     int num_blocks_m = cutlass::ceil_div(params.seqlen_q * qhead_per_khead, get<0>(TileShape_MNK{}));
     num_blocks_m = cutlass::round_up(num_blocks_m, size<0>(ClusterShape{}));  // Round up for cluster alignment
     // DOR: the total number of Q blocks is ceil_div(len(Q), 128) and
-    
+
+    // printf("Device pointer: %p\n", mainloop_args.qk_skip_mask_args.read_skip_list);
+
     // Scheduler arguments for coordinating work distribution across SMs
     typename flash::TileSchedulerArguments scheduler_args {
         // grid shape: ceil_div(len(Q), 128), 32, 3, 1
