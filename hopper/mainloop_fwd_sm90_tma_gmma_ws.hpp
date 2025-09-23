@@ -2071,10 +2071,10 @@ namespace flash
 
                     scoremod_premask_fn(tSrS);
                     mask_fn(tSrS, n_block);
-                    Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
-                    // Tensor scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(
-                    //     tSrS, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests, warp_group_idx
-                    // );
+                    // Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
+                    Tensor scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(
+                        tSrS, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests, warp_group_idx
+                    );
 
                     if constexpr (LargeHeadDimV && !Is_first_iter)
                     {
@@ -2084,14 +2084,14 @@ namespace flash
                     softmax.template online_softmax</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
 
                     bool skip = false;
-                    // if (thread_idx == 128)
-                    // {
-                    //     skip =
-                    //         shared_storage.pipelines.skip_tests[0] &&
-                    //         shared_storage.pipelines.skip_tests[1] &&
-                    //         shared_storage.pipelines.skip_tests[2] &&
-                    //         shared_storage.pipelines.skip_tests[3];
-                    // }
+                    if (thread_idx == 128)
+                    {
+                        skip =
+                            shared_storage.pipelines.skip_tests[0] &&
+                            shared_storage.pipelines.skip_tests[1] &&
+                            shared_storage.pipelines.skip_tests[2] &&
+                            shared_storage.pipelines.skip_tests[3];
+                    }
 
                     if constexpr (Is_FP8 && !V_colmajor)
                     {
