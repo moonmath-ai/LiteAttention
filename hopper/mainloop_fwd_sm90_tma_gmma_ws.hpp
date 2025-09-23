@@ -1854,10 +1854,21 @@ namespace flash
                 scoremod_premask_fn(tSrS);
                 mask.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS, m_block, n_block);
 
-                Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
+                // Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
+                Tensor scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/true, true>(
+                    tSrS, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests, warp_group_idx);
                 // Don't need to store scales to send to WG1 (in the case of LargeHeadDimV) since it's 1.f
 
                 softmax.template online_softmax</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
+                bool skip = false;
+                if (thread_idx == 128)
+                {
+                    skip =
+                        shared_storage.pipelines.skip_tests[0] &&
+                        shared_storage.pipelines.skip_tests[1] &&
+                        shared_storage.pipelines.skip_tests[2] &&
+                        shared_storage.pipelines.skip_tests[3];
+                }
                 if constexpr (Is_FP8 && !V_colmajor)
                 {
                     flash::permute_Cregs_fp8(tSrS);
@@ -1877,14 +1888,14 @@ namespace flash
                 {
                     arrive_on_P_write_barrier();
                 }
-                --n_block;
+                // --n_block;
 
                 // Need to initialize tOrO in the case of RescaleOBeforeGemm where we will scale tOrO even in the 1st iter
                 clear(tOrO);
                 // tiled_mma_pv.accumulate_ = GMMA::ScaleOut::Zero;
 
                 // Each step does gemm0 for iter n_block, gemm1 for iter n_block + 1, and softmax for iter n_block.
-                auto fwd_step = [&](int const n_block, auto mask_fn, auto check_inf_type)
+                auto fwd_step = [&](int const n_block, auto mask_fn, auto check_inf_type) -> bool
                 {
                     static constexpr bool Check_inf = decltype(check_inf_type)::value;
                     PipelineState smem_pipe_read_v(smem_pipe_read.index(), smem_pipe_read.phase(), smem_pipe_read.count());
@@ -1928,13 +1939,26 @@ namespace flash
                     scoremod_premask_fn(tSrS);
                     mask_fn(tSrS, n_block);
                     // calculating scores_scale for n_block
-                    cute::copy(softmax.template max_get_scale</*Is_first=*/false, Check_inf>(tSrS), scores_scale);
+                    // cute::copy(softmax.template max_get_scale</*Is_first=*/false, Check_inf>(tSrS), scores_scale);
+                    cute::copy(
+                        softmax.template max_get_scale_detect_qk_skip</*Is_first=*/false, Check_inf>(
+                            tSrS, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests, warp_group_idx),
+                        scores_scale);
                     // TODO: it is possible to update the mask from wg2 now for n_block?
                     if constexpr (LargeHeadDimV)
                     {
                         store_scales(scores_scale, smem_pipe_read_v.index());
                     }
                     softmax.template online_softmax</*Is_first=*/false, Check_inf>(tSrS);
+                    bool skip = false;
+                    if (thread_idx == 128)
+                    {
+                        skip =
+                            shared_storage.pipelines.skip_tests[0] &&
+                            shared_storage.pipelines.skip_tests[1] &&
+                            shared_storage.pipelines.skip_tests[2] &&
+                            shared_storage.pipelines.skip_tests[3];
+                    }
                     if constexpr (!HasQv)
                     {
                         warpgroup_wait<0>();
@@ -1961,6 +1985,7 @@ namespace flash
                     {
                         arrive_on_P_write_barrier();
                     }
+                    return skip;
                 };
 
                 if constexpr (Is_causal || Is_local)
@@ -1981,10 +2006,45 @@ namespace flash
                     seqlen_info, m_block, n_block_min, params.window_size_left,
                     params.attention_chunk_divmod, params.qhead_per_khead_divmod);
                 auto no_mask_fn = [](auto &tSrS, int n_block) {};
-#pragma unroll 1
-                for (; n_block >= n_block_min_before_local_mask; --n_block)
+// #pragma unroll 1
+//                 for (; n_block >= n_block_min_before_local_mask; --n_block)
+//                 {
+//                     fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/);
+//                 }
+                bool is_first_iter_skips = true;
+                for (; read_idx <= skip_list_len; read_idx += 2)
                 {
-                    fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/);
+                    start_idx = read_skip_list[read_idx];
+                    end_idx = read_skip_list[read_idx + 1];
+                    for (n_block = start_idx; n_block < end_idx; n_block++)
+                    {
+                        // this happens only in the first iteration of the loop
+                        if (is_first_iter_skips) [[unlikely]]
+                        {
+                            is_first_iter_skips = false;
+                            // continue;
+                        }
+                        else
+                        {
+                            skip = fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/);
+                        }
+                        if ((skip != is_skipping) && thread_idx == 128)
+                        {
+                            write_skip_list[write_idx] = n_block;
+                            write_idx++;
+                            is_skipping = skip;
+                        }
+                    }
+                    is_skipping = true;
+                    if ((skip != is_skipping) && thread_idx == 128)
+                    {
+                        write_skip_list[write_idx] = end_idx;
+                        write_idx++;
+                    }
+                }
+                if (thread_idx == 128)
+                {
+                    write_skip_list[0] = write_idx - 1;
                 }
                 // Separate masking iterations on the left for local attention
                 if constexpr (Is_local)
@@ -2072,9 +2132,7 @@ namespace flash
                     scoremod_premask_fn(tSrS);
                     mask_fn(tSrS, n_block);
                     // Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
-                    Tensor scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(
-                        tSrS, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests, warp_group_idx
-                    );
+                    Tensor scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(tSrS, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests, warp_group_idx);
 
                     if constexpr (LargeHeadDimV && !Is_first_iter)
                     {
@@ -2100,7 +2158,6 @@ namespace flash
                     Tensor tOrP_acc = make_tensor(tSrS.data(), flash::convert_layout_acc_Aregs<TiledMmaPV>(tSrS.layout()));
                     Tensor tOrP = make_tensor_like<Element>(tOrP_acc);
 
-                    // if (!skip || Is_first_iter) convert_type_out(tOrP_acc, tOrP);
                     convert_type_out(tOrP_acc, tOrP);
 
                     if constexpr (Is_FP8 && V_colmajor)
@@ -2113,7 +2170,6 @@ namespace flash
                     {
                         write_P_to_smem(tOrP);
                     }
-                    // if constexpr (!Is_first_iter) { if (!skip) { softmax.rescale_o(tOrO, scores_scale); } }
                     if constexpr (!Is_first_iter)
                     {
                         softmax.rescale_o(tOrO, scores_scale);
@@ -2175,16 +2231,8 @@ namespace flash
                     seqlen_info, m_block, n_block_min, params.window_size_left,
                     params.attention_chunk_divmod, params.qhead_per_khead_divmod);
                 auto no_mask_fn = [](auto &tSrS, int n_block) {};
-                // // (i think) the following loop, loops over the number of k tiles
-                // #pragma unroll 1
-                // for (; n_block >= n_block_min_before_local_mask; --n_block) {
-                //     // if (do_pv_global[i] == false) {continue};
-                //     fwd_step(n_block, no_mask_fn, cute::false_type{} /*is_first_iter*/, cute::false_type{} /*check_inf*/);
-                // }
 
                 bool is_first_iter_skips = true;
-
-                // bool skip = true;
                 for (; read_idx <= skip_list_len; read_idx += 2)
                 {
                     start_idx = read_skip_list[read_idx];

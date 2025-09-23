@@ -11,8 +11,8 @@ constexpr std::tuple<int, int, bool, bool> tile_size_fwd_sm90(
         int headdim, int headdim_v, bool is_causal, bool is_local, int element_size=2,
         bool v_colmajor=false, bool paged_kv_non_TMA=false, bool softcap=false, bool is_skipable=false) {
     // DOR: change this to true to activate intra-warpgroup overlap again
-    const bool maybe_intra_wg_overlap = !is_skipable;
-    // const bool maybe_intra_wg_overlap = true;
+    // const bool maybe_intra_wg_overlap = !is_skipable;
+    const bool maybe_intra_wg_overlap = true;
 
     if (element_size == 2) {
         if (headdim <= 64) {
