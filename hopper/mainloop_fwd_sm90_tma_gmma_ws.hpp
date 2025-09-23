@@ -667,7 +667,6 @@ namespace flash
              cute::tuple<int32_t, int32_t, int32_t, int32_t> block_coord,
              int &work_idx)
         {
-
             // some of these are captured in lambda so can't use structured binding
             int const m_block = get<0>(block_coord);
             int const bidh = get<1>(block_coord);
@@ -700,7 +699,7 @@ namespace flash
             uint64_t const num_k_blocks = cute::ceil_div(get<0>(params.shape_K), kBlockN) + 1;
             const uint32_t q_i = ((uint32_t)m_block);
             uint64_t mask_offset = (bidb * num_heads * num_q_blocks * num_k_blocks) + (bidh * num_q_blocks * num_k_blocks) + (q_i * num_k_blocks);
-            uint32_t *read_skip_list = &params.qk_skip_mask_args.read_skip_list[mask_offset];
+            const uint32_t *read_skip_list = &params.qk_skip_mask_args.read_skip_list[mask_offset];
             // // torch.Size([2, 1, 32, 36, 27])
             // if ((blockIdx.x == 8) && (threadIdx.x == 0)){
             // printf("kBlockM: %d, kBlockN: %d, num_heads: %d, num_q_blocks: %llu, num_k_blocks: %llu, q_i: %u, mask_offset: %llu\n",
@@ -1725,7 +1724,7 @@ namespace flash
             uint64_t const num_k_blocks = cute::ceil_div(get<0>(params.shape_K), kBlockN) + 1;
             const uint32_t q_i = ((uint32_t)m_block);
             uint64_t mask_offset = (bidb * num_heads * num_q_blocks * num_k_blocks) + (bidh * num_q_blocks * num_k_blocks) + (q_i * num_k_blocks);
-            uint32_t *read_skip_list = &params.qk_skip_mask_args.read_skip_list[mask_offset];
+            const uint32_t *read_skip_list = &params.qk_skip_mask_args.read_skip_list[mask_offset];
             uint32_t *write_skip_list = &params.qk_skip_mask_args.write_skip_list[mask_offset];
             // printf("kBlockM: %d, kBlockN: %d, num_heads: %d, num_q_blocks: %llu, num_k_blocks: %llu, q_i: %u, mask_offset: %llu\n",
             //     kBlockM, kBlockN, num_heads, num_q_blocks, num_k_blocks, q_i, mask_offset);
@@ -2036,9 +2035,6 @@ namespace flash
 
                 auto fwd_step = [&](int const n_block, auto mask_fn, auto is_first_iter_type, auto check_inf_type) -> bool
                 {
-                    // bool skip = qk_skip_mask.get(q_i, (uint32_t) n_block);
-                    // assert(!skip);
-
                     static constexpr bool Is_first_iter = decltype(is_first_iter_type)::value;
                     static constexpr bool Check_inf = decltype(check_inf_type)::value;
                     auto smem_pipe_read_prev = smem_pipe_read;
@@ -2049,10 +2045,7 @@ namespace flash
 
                     Tensor tSrS = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
                     consumer_wait(pipeline_k, smem_pipe_read);
-                    // TONY: skip this (QK)
 
-                    // should create a problem
-                    // if (!skip || Is_first_iter) flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS);
                     flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS);
 
                     if constexpr (!HasQv)
@@ -2060,12 +2053,6 @@ namespace flash
                         // wg1 releases wg2
                         warp_scheduler_barrier_arrive();
                         warpgroup_wait<0>();
-
-                        // if (!skip || Is_first_iter) {
-                        // warpgroup_wait<0>();
-                        // }else{
-                        //     warpgroup_wait<1>();
-                        // }
                         pipeline_k.consumer_release(smem_pipe_read); // release K
                     }
                     else
@@ -2084,43 +2071,27 @@ namespace flash
 
                     scoremod_premask_fn(tSrS);
                     mask_fn(tSrS, n_block);
+                    Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
+                    // Tensor scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(
+                    //     tSrS, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests, warp_group_idx
+                    // );
 
-                    // TONY: This is where the row maximum is computed (this is the first stage of the online softmax algorithm)
-                    //.    : Instead of computing the entire softmax on this line, we just search for the row maximum
-                    // Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
-                    // Declare scores_scale with the correct dependent type from the template parameter `Softmax`.
-                    // typename Softmax::TensorT scores_scale;
-
-                    // if (!skip) scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(tSrS, qk_skip_mask, q_i, (uint32_t) n_block, -INFINITY);
-                    // if (!skip) scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(tSrS, qk_skip_mask, q_i, (uint32_t) n_block, -std::numeric_limits<float>::infinity());
-                    // if (!skip || Is_first_iter) scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(tSrS, qk_skip_mask, q_i, (uint32_t) n_block, -7.0f);
-
-                    //  Tensor scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(tSrS, qk_skip_mask, q_i, (uint32_t) n_block);
-                    // Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
-                    Tensor scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf>(
-                        // tSrS, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests[warp_group_idx]
-                        tSrS, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests, warp_group_idx);
-
-                    // if (!skip) scores_scale = softmax.template max_get_scale</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
-
-                    // If do_pv is false, we can skip everything below (pretty much)
                     if constexpr (LargeHeadDimV && !Is_first_iter)
                     {
                         store_scales(scores_scale, smem_pipe_read_prev.index());
                     }
 
-                    // if (!skip || Is_first_iter) softmax.template online_softmax</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
                     softmax.template online_softmax</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
 
                     bool skip = false;
-                    if (thread_idx == 128)
-                    {
-                        skip =
-                            shared_storage.pipelines.skip_tests[0] &&
-                            shared_storage.pipelines.skip_tests[1] &&
-                            shared_storage.pipelines.skip_tests[2] &&
-                            shared_storage.pipelines.skip_tests[3];
-                    }
+                    // if (thread_idx == 128)
+                    // {
+                    //     skip =
+                    //         shared_storage.pipelines.skip_tests[0] &&
+                    //         shared_storage.pipelines.skip_tests[1] &&
+                    //         shared_storage.pipelines.skip_tests[2] &&
+                    //         shared_storage.pipelines.skip_tests[3];
+                    // }
 
                     if constexpr (Is_FP8 && !V_colmajor)
                     {
@@ -2153,14 +2124,13 @@ namespace flash
                     {
                         arrive_on_P_write_barrier();
                     }
-                    // DOR and TONY: not running in out case
+                    // DOR and TONY: running in out case
                     if constexpr (!HasQv)
                     {
                         consumer_wait(pipeline_v, smem_pipe_read);
                     }
                     warp_scheduler_barrier_sync();
                     // TONY: this is P time V
-                    // if (!skip || Is_first_iter) {
                     if constexpr (!MmaPV_use_RS_WG1)
                     {
                         flash::gemm</*zero_init=*/Is_first_iter, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP), tOrV(_, _, _, smem_pipe_read.index()), tOrO);
@@ -2171,7 +2141,6 @@ namespace flash
                         TiledMmaPV_RS tiled_mma_pv_rs;
                         flash::gemm</*zero_init=*/Is_first_iter, /*wg_wait=*/-1>(tiled_mma_pv_rs, tOrP, tOrV(_, _, _, smem_pipe_read.index()), tOrO);
                     }
-                    // }
                     // DOR and TONY: not running in out case
                     if constexpr (!MmaPV_is_RS && MmaPV_use_RS_WG1)
                     {
@@ -2179,11 +2148,6 @@ namespace flash
                     }
 
                     warpgroup_wait<0>();
-                    // if (!skip || Is_first_iter) {
-                    //     warpgroup_wait<0>();
-                    // }else{
-                    //     warpgroup_wait<1>();
-                    // }
                     pipeline_v.consumer_release(smem_pipe_read); // release V
                     return skip;
                 };
