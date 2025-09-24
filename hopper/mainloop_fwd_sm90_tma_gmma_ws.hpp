@@ -1008,6 +1008,7 @@ namespace flash
             // // ++n_block;
             // ++n_block;
 
+            #pragma unroll 1
             for (; read_idx <= skip_list_len; read_idx += 2)
             {
                 start_idx = read_skip_list[read_idx];
@@ -1985,6 +1986,7 @@ namespace flash
 //                     fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/);
 //                 }
                 bool is_first_iter_skips = true;
+                #pragma unroll 1
                 for (; read_idx <= skip_list_len; read_idx += 2)
                 {
                     start_idx = read_skip_list[read_idx];
@@ -2181,6 +2183,7 @@ namespace flash
                 auto no_mask_fn = [](auto &tSrS, int n_block) {};
 
                 bool is_first_iter_skips = true;
+                #pragma unroll 1
                 for (; read_idx <= skip_list_len; read_idx += 2)
                 {
                     start_idx = read_skip_list[read_idx];
@@ -2521,9 +2524,9 @@ namespace flash
                 if (saving_thread)
                 {
                     skip =
-                        shared_storage.pipelines.skip_tests[0] &&
-                        shared_storage.pipelines.skip_tests[1] &&
-                        shared_storage.pipelines.skip_tests[2] &&
+                        shared_storage.pipelines.skip_tests[0] &
+                        shared_storage.pipelines.skip_tests[1] &
+                        shared_storage.pipelines.skip_tests[2] &
                         shared_storage.pipelines.skip_tests[3];
                 }
                 if constexpr (Is_FP8 && !V_colmajor)
@@ -2613,9 +2616,9 @@ namespace flash
                     if (saving_thread)
                     {
                         skip =
-                            shared_storage.pipelines.skip_tests[0] &&
-                            shared_storage.pipelines.skip_tests[1] &&
-                            shared_storage.pipelines.skip_tests[2] &&
+                            shared_storage.pipelines.skip_tests[0] &
+                            shared_storage.pipelines.skip_tests[1] &
+                            shared_storage.pipelines.skip_tests[2] &
                             shared_storage.pipelines.skip_tests[3];
                     }
                     if constexpr (!HasQv)
@@ -2671,6 +2674,7 @@ namespace flash
 //                     fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/);
 //                 }
                 bool is_first_iter_skips = true;
+                #pragma unroll 1
                 for (; read_idx <= skip_list_len; read_idx += 2)
                 {
                     start_idx = read_skip_list[read_idx];
@@ -2804,9 +2808,9 @@ namespace flash
                     if (saving_thread)
                     {
                         skip =
-                            shared_storage.pipelines.skip_tests[0] &&
-                            shared_storage.pipelines.skip_tests[1] &&
-                            shared_storage.pipelines.skip_tests[2] &&
+                            shared_storage.pipelines.skip_tests[0] &
+                            shared_storage.pipelines.skip_tests[1] &
+                            shared_storage.pipelines.skip_tests[2] &
                             shared_storage.pipelines.skip_tests[3];
                     }
 
@@ -2892,6 +2896,7 @@ namespace flash
                 auto no_mask_fn = [](auto &tSrS, int n_block) {};
 
                 bool is_first_iter_skips = true;
+                #pragma unroll 1
                 for (; read_idx <= skip_list_len; read_idx += 2)
                 {
                     start_idx = read_skip_list[read_idx];
