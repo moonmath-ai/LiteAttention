@@ -1986,7 +1986,7 @@ namespace flash
 //                     fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/);
 //                 }
                 bool is_first_iter_skips = true;
-                #pragma unroll 1
+                // #pragma unroll 1
                 for (; read_idx <= skip_list_len; read_idx += 2)
                 {
                     start_idx = read_skip_list[read_idx];
@@ -2183,7 +2183,7 @@ namespace flash
                 auto no_mask_fn = [](auto &tSrS, int n_block) {};
 
                 bool is_first_iter_skips = true;
-                #pragma unroll 1
+                // #pragma unroll 1
                 for (; read_idx <= skip_list_len; read_idx += 2)
                 {
                     start_idx = read_skip_list[read_idx];
@@ -2674,7 +2674,7 @@ namespace flash
 //                     fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/);
 //                 }
                 bool is_first_iter_skips = true;
-                #pragma unroll 1
+                // #pragma unroll 1
                 for (; read_idx <= skip_list_len; read_idx += 2)
                 {
                     start_idx = read_skip_list[read_idx];
@@ -2896,7 +2896,7 @@ namespace flash
                 auto no_mask_fn = [](auto &tSrS, int n_block) {};
 
                 bool is_first_iter_skips = true;
-                #pragma unroll 1
+                // #pragma unroll 1
                 for (; read_idx <= skip_list_len; read_idx += 2)
                 {
                     start_idx = read_skip_list[read_idx];
