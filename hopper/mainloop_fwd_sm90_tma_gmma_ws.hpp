@@ -2492,6 +2492,7 @@ namespace flash
                 cute::copy(smem_tiled_copy_Q, tSsQ_copy_view, tSrQ_copy_view);
             }
 
+            bool const saving_thread = thread_idx == 128;
             // TONY: WE SHOULD disable this for first version
             if constexpr (IntraWGOverlap)
             {
@@ -2517,7 +2518,7 @@ namespace flash
 
                 softmax.template online_softmax</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
                 bool skip = false;
-                if (thread_idx == 128)
+                if (saving_thread)
                 {
                     skip =
                         shared_storage.pipelines.skip_tests[0] &&
@@ -2609,7 +2610,7 @@ namespace flash
                     }
                     softmax.template online_softmax</*Is_first=*/false, Check_inf>(tSrS);
                     bool skip = false;
-                    if (thread_idx == 128)
+                    if (saving_thread)
                     {
                         skip =
                             shared_storage.pipelines.skip_tests[0] &&
@@ -2686,7 +2687,7 @@ namespace flash
                         {
                             skip = fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/);
                         }
-                        if ((skip != is_skipping) && thread_idx == 128)
+                        if (saving_thread && (skip != is_skipping))
                         {
                             write_skip_list[write_idx] = n_block;
                             write_idx++;
@@ -2694,13 +2695,13 @@ namespace flash
                         }
                     }
                     is_skipping = true;
-                    if ((skip != is_skipping) && thread_idx == 128)
+                    if (saving_thread && (skip != is_skipping))
                     {
                         write_skip_list[write_idx] = end_idx;
                         write_idx++;
                     }
                 }
-                if (thread_idx == 128)
+                if (saving_thread)
                 {
                     write_skip_list[0] = write_idx - 1;
                 }
@@ -2800,7 +2801,7 @@ namespace flash
                     softmax.template online_softmax</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
 
                     bool skip = false;
-                    if (thread_idx == 128)
+                    if (saving_thread)
                     {
                         skip =
                             shared_storage.pipelines.skip_tests[0] &&
@@ -2907,7 +2908,7 @@ namespace flash
                         {
                             skip = fwd_step(n_block, no_mask_fn, cute::false_type{} /*is_first_iter*/, cute::false_type{} /*check_inf*/);
                         }
-                        if ((skip != is_skipping) && thread_idx == 128)
+                        if (saving_thread && (skip != is_skipping))
                         {
                             write_skip_list[write_idx] = n_block;
                             write_idx++;
@@ -2915,13 +2916,13 @@ namespace flash
                         }
                     }
                     is_skipping = true;
-                    if ((skip != is_skipping) && thread_idx == 128)
+                    if (saving_thread && (skip != is_skipping))
                     {
                         write_skip_list[write_idx] = end_idx;
                         write_idx++;
                     }
                 }
-                if (thread_idx == 128)
+                if (saving_thread)
                 {
                     write_skip_list[0] = write_idx - 1;
                 }
