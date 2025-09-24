@@ -212,15 +212,11 @@ namespace flash
 
         CUTLASS_DEVICE Softmax(float const softmax_scale_log2_) : softmax_scale_log2(softmax_scale_log2_) {};
 
-        template <bool Is_first, bool Check_inf = false, typename Tensor0>
+        template <bool Is_first, bool Check_inf = false, bool is_wg2 = false, typename Tensor0>
         __forceinline__ __device__ TensorT max_get_scale_detect_qk_skip(
             Tensor0 &acc_s,
-            // QKSkipMask &qk_skip_mask,
-            // uint32_t q_i,
-            // uint32_t k_i,
             const float thr,
-            int skip_tests[4],
-            const bool do_and = false)
+            int skip_tests[4])
         {
             // Reshape acc_s from ((2, 2, V), MMA_M, MMA_N) to (nrow=(2, MMA_M), ncol=(2, V, MMA_N))
             Tensor scores = make_tensor(acc_s.data(), flash::convert_layout_acc_rowcol(acc_s.layout()));
@@ -258,13 +254,23 @@ namespace flash
                     row_sum(mi) *= scores_scale(mi);
                     // do_qk |= (((cur - prev) * softmax_scale_log2) > thr);
                     do_qk |= (((scores_max_local(mi) - prev) * softmax_scale_log2) > thr);
+
+                    // do_qk |= scores_max_local(mi) * thr > prev;
+
+                    // do_qk |= (prev - scores_max_local(mi)) * thr < prev;
+                    // do_qk |= (cur - scores_max_local(mi)) * thr < cur;
+
+                    // prev * thr - scores_max_local(mi) * thr < prev;
+                    // prev * thr - prev < scores_max_local(mi) * thr;
+                    // prev * (thr - 1.0f) < scores_max_local(mi) * thr;
+                    // prev * ((thr - 1.0f)/ thr) < scores_max_local(mi);
                 }
 
                 const bool skip = !__any_sync(0xffffffffu, do_qk);
                 if (threadIdx.x % 32 == 0)
                 {
                     const int32_t warp_idx_in_warpgroup = (threadIdx.x / 32) % 4;
-                    if (do_and)
+                    if constexpr (is_wg2)
                     {
                         skip_tests[warp_idx_in_warpgroup] &= skip;
                     }

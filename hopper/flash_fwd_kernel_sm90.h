@@ -536,9 +536,22 @@ namespace flash
                     {
                         if constexpr (mainloop.Is_skipable)
                         {
-                            tile_valid = mainloop.mma(
-                                params.mainloop, pipeline_k, pipeline_v, smem_pipe_read,
-                                tOrO, softmax, threadIdx.x - MmaThreadOffset, work_idx, seqlen_info, block_coord, shared_storage);
+
+                            const int thread_idx = threadIdx.x - MmaThreadOffset;
+                            // const int warp_group_idx = __shfl_sync(0xFFFFFFFF, thread_idx / cutlass::NumThreadsPerWarpGroup, 0);
+                            if (warp_group_idx == 1){
+                                tile_valid = mainloop.mma_wg1(
+                                    params.mainloop, pipeline_k, pipeline_v, smem_pipe_read,
+                                    tOrO, softmax, thread_idx, work_idx, seqlen_info, block_coord, shared_storage);
+                            }else{
+                                tile_valid = mainloop.mma_wg2(
+                                    params.mainloop, pipeline_k, pipeline_v, smem_pipe_read,
+                                    tOrO, softmax, thread_idx, work_idx, seqlen_info, block_coord, shared_storage);
+                            }
+
+                            // tile_valid = mainloop.mma(
+                            //     params.mainloop, pipeline_k, pipeline_v, smem_pipe_read,
+                            //     tOrO, softmax, threadIdx.x - MmaThreadOffset, work_idx, seqlen_info, block_coord, shared_storage);
                         }
                         else
                         {
@@ -553,9 +566,14 @@ namespace flash
                         {
                             if constexpr (mainloop.Is_skipable)
                             {
-                                tile_valid = mainloop.mma(
+                                const int thread_idx = threadIdx.x - MmaThreadOffset;
+                                tile_valid = mainloop.mma_wg1(
                                     params.mainloop, pipeline_k, pipeline_v, smem_pipe_read,
-                                    tOrO, softmax, threadIdx.x - MmaThreadOffset, work_idx, seqlen_info, block_coord, shared_storage);
+                                    tOrO, softmax, thread_idx, work_idx, seqlen_info, block_coord, shared_storage);
+
+                                // tile_valid = mainloop.mma(
+                                //     params.mainloop, pipeline_k, pipeline_v, smem_pipe_read,
+                                //     tOrO, softmax, threadIdx.x - MmaThreadOffset, work_idx, seqlen_info, block_coord, shared_storage);
                             }
                             else
                             {
