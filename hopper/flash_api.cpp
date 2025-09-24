@@ -917,11 +917,13 @@ mha_fwd(at::Tensor q,   // (b, s_q, h, d) or (total_q, h, d) if there is cu_seql
     // assert(read_skip_list_.has_value() && write_skip_list_.has_value());
     if (read_skip_list_.has_value()) {
         auto qk_skip_mask_tensor = read_skip_list_.value();
-        TORCH_CHECK(qk_skip_mask_tensor.dtype() == torch::kUInt32, "read_skip_list must be uint32 tensor");
+        // TORCH_CHECK(qk_skip_mask_tensor.dtype() == torch::kUInt32, "read_skip_list must be uint32 tensor");
+        TORCH_CHECK(qk_skip_mask_tensor.dtype() == torch::kInt32, "read_skip_list must be int32 tensor");
         TORCH_CHECK(qk_skip_mask_tensor.dim() == 4, "read_skip_list must be 4D tensor with shape [batch, heads, q_blocks, k_blocks]");
         TORCH_CHECK(qk_skip_mask_tensor.is_contiguous(), "read_skip_list must be contiguous");
         
-        uint32_t* data_ptr = static_cast<uint32_t*>(qk_skip_mask_tensor.data_ptr());
+        // uint32_t* data_ptr = static_cast<uint32_t*>(qk_skip_mask_tensor.data_ptr());
+        int* data_ptr = static_cast<int*>(qk_skip_mask_tensor.data_ptr());
         
         params.qk_skip_mask_args.read_skip_list = data_ptr;
         params.qk_skip_mask_args.thr = (float) thr;
@@ -934,11 +936,13 @@ mha_fwd(at::Tensor q,   // (b, s_q, h, d) or (total_q, h, d) if there is cu_seql
 
     if (write_skip_list_.has_value()) {
         auto qk_skip_mask_tensor = write_skip_list_.value();
-        TORCH_CHECK(qk_skip_mask_tensor.dtype() == torch::kUInt32, "write_skip_list must be uint32 tensor");
+        // TORCH_CHECK(qk_skip_mask_tensor.dtype() == torch::kUInt32, "write_skip_list must be uint32 tensor");
+        TORCH_CHECK(qk_skip_mask_tensor.dtype() == torch::kInt32, "write_skip_list must be int32 tensor");
         TORCH_CHECK(qk_skip_mask_tensor.dim() == 4, "write_skip_list must be 4D tensor with shape [batch, heads, q_blocks, k_blocks]");
         TORCH_CHECK(qk_skip_mask_tensor.is_contiguous(), "write_skip_list must be contiguous");
         
-        uint32_t* data_ptr = static_cast<uint32_t*>(qk_skip_mask_tensor.data_ptr());
+        // uint32_t* data_ptr = static_cast<uint32_t*>(qk_skip_mask_tensor.data_ptr());
+        int* data_ptr = static_cast<int*>(qk_skip_mask_tensor.data_ptr());
         params.qk_skip_mask_args.write_skip_list = data_ptr;
     } else {
         params.qk_skip_mask_args.write_skip_list = nullptr;

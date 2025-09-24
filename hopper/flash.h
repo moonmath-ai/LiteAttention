@@ -11,8 +11,8 @@
 
 struct QKSkipMaskArgs
 {
-    uint32_t *read_skip_list;
-    uint32_t *write_skip_list;
+    int *read_skip_list;
+    int *write_skip_list;
     float thr;
 };
 

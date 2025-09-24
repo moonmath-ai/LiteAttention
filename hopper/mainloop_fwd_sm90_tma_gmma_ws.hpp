@@ -699,12 +699,7 @@ namespace flash
             uint64_t const num_k_blocks = cute::ceil_div(get<0>(params.shape_K), kBlockN) + 1;
             const uint32_t q_i = ((uint32_t)m_block);
             uint64_t mask_offset = (bidb * num_heads * num_q_blocks * num_k_blocks) + (bidh * num_q_blocks * num_k_blocks) + (q_i * num_k_blocks);
-            const uint32_t *read_skip_list = &params.qk_skip_mask_args.read_skip_list[mask_offset];
-            // // torch.Size([2, 1, 32, 36, 27])
-            // if ((blockIdx.x == 8) && (threadIdx.x == 0)){
-            // printf("kBlockM: %d, kBlockN: %d, num_heads: %d, num_q_blocks: %llu, num_k_blocks: %llu, q_i: %u, mask_offset: %llu\n",
-            //     kBlockM, kBlockN, num_heads, num_q_blocks, num_k_blocks, q_i, mask_offset);
-            // }
+            const int *read_skip_list = &params.qk_skip_mask_args.read_skip_list[mask_offset];
             // ~~~~~~~~~~~~~~~~~ end of define skip list ~~~~~~~~~~~~~~~~~
 
             Tensor sQ = make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_q.data()), SmemLayoutQ{});
@@ -913,10 +908,10 @@ namespace flash
             // int n_block = n_block_max - 1;
             // int n_block = n_block_min;
 
-            uint32_t skip_list_len = read_skip_list[0];
-            uint32_t read_idx = 1;
-            uint32_t start_idx = read_skip_list[read_idx];
-            uint32_t end_idx = read_skip_list[read_idx + 1];
+            int skip_list_len = read_skip_list[0];
+            int read_idx = 1;
+            int start_idx = read_skip_list[read_idx];
+            int end_idx = read_skip_list[read_idx + 1];
             int n_block = start_idx;
 
             int warp_idx_in_warpgroup = __shfl_sync(0xffffffff, (threadIdx.x / 32) % 4, 0);
@@ -1725,13 +1720,13 @@ namespace flash
             uint64_t const num_k_blocks = cute::ceil_div(get<0>(params.shape_K), kBlockN) + 1;
             const uint32_t q_i = ((uint32_t)m_block);
             uint64_t mask_offset = (bidb * num_heads * num_q_blocks * num_k_blocks) + (bidh * num_q_blocks * num_k_blocks) + (q_i * num_k_blocks);
-            const uint32_t *read_skip_list = &params.qk_skip_mask_args.read_skip_list[mask_offset];
+            const int *read_skip_list = &params.qk_skip_mask_args.read_skip_list[mask_offset];
             // ~~~~~~~~~~~~~~~~~ end of define skip list ~~~~~~~~~~~~~~~~~
             // ~~~~~~~~~~~~~~~~~ skip list init ~~~~~~~~~~~~~~~~~
-            uint32_t skip_list_len = read_skip_list[0];
-            uint32_t read_idx = 1;
-            uint32_t start_idx = read_skip_list[read_idx];
-            uint32_t end_idx = read_skip_list[read_idx + 1];
+            int skip_list_len = read_skip_list[0];
+            int read_idx = 1;
+            int start_idx = read_skip_list[read_idx];
+            int end_idx = read_skip_list[read_idx + 1];
             // ~~~~~~~~~~~~~~~~~ end of skip list init ~~~~~~~~~~
 
             int const seqlen_q = seqlen_info.seqlen_q;
@@ -2387,17 +2382,17 @@ namespace flash
             uint64_t const num_k_blocks = cute::ceil_div(get<0>(params.shape_K), kBlockN) + 1;
             const uint32_t q_i = ((uint32_t)m_block);
             uint64_t mask_offset = (bidb * num_heads * num_q_blocks * num_k_blocks) + (bidh * num_q_blocks * num_k_blocks) + (q_i * num_k_blocks);
-            const uint32_t *read_skip_list = &params.qk_skip_mask_args.read_skip_list[mask_offset];
-            uint32_t *write_skip_list = &params.qk_skip_mask_args.write_skip_list[mask_offset];
+            const int *read_skip_list = &params.qk_skip_mask_args.read_skip_list[mask_offset];
+            int *write_skip_list = &params.qk_skip_mask_args.write_skip_list[mask_offset];
             // ~~~~~~~~~~~~~~~~~ end of define skip list ~~~~~~~~~~~~~~~~~
             // ~~~~~~~~~~~~~~~~~ skip list init ~~~~~~~~~~~~~~~~~
             uint32_t skip_list_len = read_skip_list[0];
-            uint32_t read_idx = 1;
-            uint32_t write_idx = 1;
+            int read_idx = 1;
+            int write_idx = 1;
             bool is_skipping = true;
 
-            uint32_t start_idx = read_skip_list[read_idx];
-            uint32_t end_idx = read_skip_list[read_idx + 1];
+            int start_idx = read_skip_list[read_idx];
+            int end_idx = read_skip_list[read_idx + 1];
             // ~~~~~~~~~~~~~~~~~ end of skip list init ~~~~~~~~~~
 
             int const seqlen_q = seqlen_info.seqlen_q;
