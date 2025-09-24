@@ -209,6 +209,11 @@ namespace flash
         using TensorT = decltype(make_tensor<float>(Shape<Int<kNRows>>{}));
         TensorT row_max, row_sum;
         float const softmax_scale_log2; // (log2(e) * 1/sqrt(128)) * q_dequant * k_dequant
+        // int const warp_idx_in_warpgroup = (threadIdx.x / 32) % 4;
+        int const warp_idx_in_warpgroup = __shfl_sync(0xffffffff, (threadIdx.x / 32) % 4, 0);
+        // bool const is_warp_leader = (threadIdx.x % 32) == 0;
+        bool const is_warp_leader = cute::elect_one_sync();
+
 
         CUTLASS_DEVICE Softmax(float const softmax_scale_log2_) : softmax_scale_log2(softmax_scale_log2_) {};
 
@@ -267,9 +272,10 @@ namespace flash
                 }
 
                 const bool skip = !__any_sync(0xffffffffu, do_qk);
-                if (threadIdx.x % 32 == 0)
+                // if (threadIdx.x % 32 == 0)
+                if (is_warp_leader)
                 {
-                    const int32_t warp_idx_in_warpgroup = (threadIdx.x / 32) % 4;
+                    // const int32_t warp_idx_in_warpgroup = (threadIdx.x / 32) % 4;
                     if constexpr (is_wg2)
                     {
                         skip_tests[warp_idx_in_warpgroup] &= skip;
