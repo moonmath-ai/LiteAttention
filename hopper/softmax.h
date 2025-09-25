@@ -31,7 +31,12 @@ namespace flash
 #pragma unroll
             for (int mi = 0; mi < size<0>(tensor); mi++)
             {
-                summary(mi) = zero_init && ni == 0 ? tensor(mi, ni) : op(summary(mi), tensor(mi, ni));
+                if constexpr (zero_init){
+                    summary(mi) = ni == 0 ? tensor(mi, ni) : op(summary(mi), tensor(mi, ni));
+                }else{
+                    summary(mi) = op(summary(mi), tensor(mi, ni));
+                }
+                // summary(mi) = zero_init && ni == 0 ? tensor(mi, ni) : op(summary(mi), tensor(mi, ni));
             }
         }
     }
@@ -116,7 +121,6 @@ namespace flash
         // bool const is_warp_leader = (threadIdx.x % 32) == 0;
         bool const is_warp_leader = cute::elect_one_sync();
 
-
         CUTLASS_DEVICE Softmax(float const softmax_scale_log2_) : softmax_scale_log2(softmax_scale_log2_) {};
 
         template <bool Is_first, bool Check_inf = false, bool is_wg2 = false, typename Tensor0>
@@ -174,10 +178,8 @@ namespace flash
                 }
 
                 const bool skip = !__any_sync(0xffffffffu, do_qk);
-                // if (threadIdx.x % 32 == 0)
                 if (is_warp_leader)
                 {
-                    // const int32_t warp_idx_in_warpgroup = (threadIdx.x / 32) % 4;
                     if constexpr (is_wg2)
                     {
                         skip_tests[warp_idx_in_warpgroup] &= skip;
@@ -186,7 +188,6 @@ namespace flash
                     {
                         skip_tests[warp_idx_in_warpgroup] = skip;
                     }
-                    // skip_tests[warp_idx_in_warpgroup] = skip;
                 }
             }
 
@@ -211,14 +212,6 @@ namespace flash
                 Tensor scores_max_prev = make_fragment_like(row_max);
                 cute::copy(row_max, scores_max_prev);
                 flash::template reduce_max</*zero_init=*/false>(scores, row_max);
-// TONY: at this point we should have the row_max
-// float diff_max = scores_max_prev(mi) - row_max(mi); // compute the difference between prev max and curr max
-// float THR = -7.0f; // tunable parameter (trivial)
-// bool do_pv = diff_max > THR;
-// broadcast this value between the entire warpgroup
-// do_pv = __syncthreads_or(mask, do_pv); // this does it for the entire block
-// save do_pv to data structure, for use in the next time step
-// if (do_pv) {
 #pragma unroll
                 for (int mi = 0; mi < size(row_max); ++mi)
                 {
@@ -228,7 +221,6 @@ namespace flash
                     scores_scale(mi) = exp2f((scores_max_prev(mi) - scores_max_cur) * softmax_scale_log2);
                     row_sum(mi) *= scores_scale(mi);
                 }
-                // }
             }
             return scores_scale;
         };
@@ -262,7 +254,7 @@ namespace flash
                     static constexpr float sum_scale = 1.f / float(1 << Max_offset);
                     sum *= sum_scale;
                 }
-                row_sum(mi) = (sum == 0.f || sum != sum) ? -INFINITY : row_max(mi) * (softmax_scale_log2 * float(M_LN2)) + __logf(sum);
+                row_sum(mi) = ((sum == 0.f) | (sum != sum)) ? -INFINITY : row_max(mi) * (softmax_scale_log2 * float(M_LN2)) + __logf(sum);
             }
             return scores_scale;
         };
