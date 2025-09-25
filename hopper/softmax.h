@@ -19,7 +19,7 @@ namespace flash
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-    template <bool zero_init = true, typename Engine0, typename Layout0, typename Engine1, typename Layout1, typename Operator>
+    template <bool const zero_init = true, typename Engine0, typename Layout0, typename Engine1, typename Layout1, typename Operator>
     __device__ __forceinline__ void thread_reduce_(Tensor<Engine0, Layout0> const &tensor, Tensor<Engine1, Layout1> &summary, Operator &op)
     {
         static_assert(Layout0::rank == 2, "Only support 2D Tensor");
@@ -59,14 +59,14 @@ namespace flash
         quad_allreduce_(summary, summary, op);
     }
 
-    template <bool zero_init = true, typename Engine0, typename Layout0, typename Engine1, typename Layout1>
+    template <bool const zero_init = true, typename Engine0, typename Layout0, typename Engine1, typename Layout1>
     __device__ __forceinline__ void reduce_max(Tensor<Engine0, Layout0> const &tensor, Tensor<Engine1, Layout1> &max)
     {
         MaxOp<float> max_op;
         reduce_<zero_init>(tensor, max, max_op);
     }
 
-    template <bool zero_init = true, bool warp_reduce = true, typename Engine0, typename Layout0, typename Engine1, typename Layout1>
+    template <bool const zero_init = true, bool warp_reduce = true, typename Engine0, typename Layout0, typename Engine1, typename Layout1>
     __device__ __forceinline__ void reduce_sum(Tensor<Engine0, Layout0> const &tensor, Tensor<Engine1, Layout1> &sum)
     {
         SumOp<float> sum_op;
@@ -78,7 +78,7 @@ namespace flash
     }
 
     // Apply the exp to all the elements.
-    template <bool Scale_max = true, bool Check_inf = true, int Max_offset = 0,
+    template <bool const Scale_max = true, bool const Check_inf = true, int const Max_offset = 0,
               typename Engine0, typename Layout0, typename Engine1, typename Layout1>
     __forceinline__ __device__ void scale_apply_exp2(Tensor<Engine0, Layout0> &tensor, Tensor<Engine1, Layout1> const &max, const float scale)
     {
@@ -93,16 +93,29 @@ namespace flash
         {
             // If max is -inf, then all elements must have been -inf (possibly due to masking).
             // We don't want (-inf - (-inf)) since that would give NaN.
-            const float max_scaled = Check_inf
-                                         ? (max(mi) == -INFINITY ? 0.f : (!Scale_max ? max(mi) : max(mi) * scale) - max_offset)
-                                         : (!Scale_max ? max(mi) : max(mi) * scale) - max_offset;
-#pragma unroll
-            for (int ni = 0; ni < size<1>(tensor); ++ni)
-            {
-                // Instead of computing exp(x - max), we compute exp2(x * log_2(e) -
-                // max * log_2(e)). This allows the compiler to use the ffma
-                // instruction instead of fadd and fmul separately.
-                tensor(mi, ni) = exp2f(tensor(mi, ni) * scale - max_scaled);
+            // const float max_scaled = Check_inf
+            //                              ? (max(mi) == -INFINITY ? 0.f : (!Scale_max ? max(mi) : max(mi) * scale) - max_offset)
+            //                              : (!Scale_max ? max(mi) : max(mi) * scale) - max_offset;
+            if constexpr (Check_inf){
+                const float max_scaled = max(mi) == -INFINITY ? 0.f : (!Scale_max ? max(mi) : max(mi) * scale) - max_offset;
+    #pragma unroll
+                for (int ni = 0; ni < size<1>(tensor); ++ni)
+                {
+                    // Instead of computing exp(x - max), we compute exp2(x * log_2(e) -
+                    // max * log_2(e)). This allows the compiler to use the ffma
+                    // instruction instead of fadd and fmul separately.
+                    tensor(mi, ni) = exp2f(tensor(mi, ni) * scale - max_scaled);
+                }
+            }else{
+                const float max_scaled = (!Scale_max ? max(mi) : max(mi) * scale) - max_offset;
+    #pragma unroll
+                for (int ni = 0; ni < size<1>(tensor); ++ni)
+                {
+                    // Instead of computing exp(x - max), we compute exp2(x * log_2(e) -
+                    // max * log_2(e)). This allows the compiler to use the ffma
+                    // instruction instead of fadd and fmul separately.
+                    tensor(mi, ni) = exp2f(tensor(mi, ni) * scale - max_scaled);
+                }
             }
         }
     }
@@ -123,7 +136,7 @@ namespace flash
 
         CUTLASS_DEVICE Softmax(float const softmax_scale_log2_) : softmax_scale_log2(softmax_scale_log2_) {};
 
-        template <bool Is_first, bool Check_inf = false, bool is_wg2 = false, typename Tensor0>
+        template <bool const Is_first, bool const Check_inf = false, bool const is_wg2 = false, typename Tensor0>
         __forceinline__ __device__ TensorT max_get_scale_detect_qk_skip(
             Tensor0 &acc_s,
             const float thr,
@@ -157,9 +170,15 @@ namespace flash
                 {
                     // update row max
                     row_max(mi) = max(row_max(mi), scores_max_local(mi));
-                    float cur = !Check_inf
-                                    ? row_max(mi)
-                                    : (row_max(mi) == -INFINITY ? 0.0f : row_max(mi));
+                    // float cur = !Check_inf
+                    //                 ? row_max(mi)
+                    //                 : (row_max(mi) == -INFINITY ? 0.0f : row_max(mi));
+                    float cur;
+                    if constexpr (Check_inf){
+                        cur = row_max(mi) == -INFINITY ? 0.0f : row_max(mi);
+                    }else{
+                        cur = row_max(mi);
+                    }
                     float prev = scores_max_prev(mi);
                     scores_scale(mi) = exp2f((prev - cur) * softmax_scale_log2);
                     row_sum(mi) *= scores_scale(mi);
@@ -195,7 +214,7 @@ namespace flash
         };
 
         // TONY: acc_s is Q times K for one tile
-        template <bool Is_first, bool Check_inf = false, typename Tensor0>
+        template <bool const Is_first, bool const Check_inf = false, typename Tensor0>
         __forceinline__ __device__ TensorT max_get_scale(Tensor0 &acc_s)
         { // pass in a bool ref
             // Reshape acc_s from ((2, 2, V), MMA_M, MMA_N) to (nrow=(2, MMA_M), ncol=(2, V, MMA_N))
@@ -215,9 +234,17 @@ namespace flash
 #pragma unroll
                 for (int mi = 0; mi < size(row_max); ++mi)
                 {
-                    float scores_max_cur = !Check_inf
-                                               ? row_max(mi)
-                                               : (row_max(mi) == -INFINITY ? 0.0f : row_max(mi));
+                    // float scores_max_cur = !Check_inf
+                    //                            ? row_max(mi)
+                    //                            : (row_max(mi) == -INFINITY ? 0.0f : row_max(mi));
+
+                    float scores_max_cur;
+                    if constexpr (Check_inf){
+                        scores_max_cur = row_max(mi) == -INFINITY ? 0.0f : row_max(mi);
+                    }else{
+                        scores_max_cur = row_max(mi);
+                    }
+
                     scores_scale(mi) = exp2f((scores_max_prev(mi) - scores_max_cur) * softmax_scale_log2);
                     row_sum(mi) *= scores_scale(mi);
                 }
@@ -225,7 +252,7 @@ namespace flash
             return scores_scale;
         };
 
-        template <bool Is_first, bool Check_inf = false, typename Tensor0>
+        template <bool const Is_first, bool const Check_inf = false, typename Tensor0>
         __forceinline__ __device__ void online_softmax(Tensor0 &acc_s)
         {
             // Reshape acc_s from ((2, 2, V), MMA_M, MMA_N) to (nrow=(2, MMA_M), ncol=(2, V, MMA_N))
@@ -246,7 +273,8 @@ namespace flash
             for (int mi = 0; mi < size(row_sum); ++mi)
             {
                 float sum = row_sum(mi);
-                float inv_sum = (sum == 0.f || sum != sum) ? 0.f : 1.f / sum;
+                // float inv_sum = (sum == 0.f || sum != sum) ? 0.f : 1.f / sum;
+                float inv_sum = (sum == 0.f | sum != sum) ? 0.f : 1.f / sum;
                 scores_scale(mi) = inv_sum * final_scale;
                 // For FP8, we might have scaled the output of exp by 2**8 so we need to divide sum by that amount.
                 if constexpr (Max_offset != 0)
