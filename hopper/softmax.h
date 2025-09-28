@@ -31,9 +31,12 @@ namespace flash
 #pragma unroll
             for (int mi = 0; mi < size<0>(tensor); mi++)
             {
-                if constexpr (zero_init){
+                if constexpr (zero_init)
+                {
                     summary(mi) = ni == 0 ? tensor(mi, ni) : op(summary(mi), tensor(mi, ni));
-                }else{
+                }
+                else
+                {
                     summary(mi) = op(summary(mi), tensor(mi, ni));
                 }
                 // summary(mi) = zero_init && ni == 0 ? tensor(mi, ni) : op(summary(mi), tensor(mi, ni));
@@ -77,8 +80,42 @@ namespace flash
         }
     }
 
+    // __device__ __forceinline__ float exp2_approx_fast(float x) {
+    //     // Polynomial approximation optimized for range (-3, 0]
+    //     return (1.0f + x * (0.693147f + x * (0.240226f + x * (0.0555041f + x * 0.0096181f)))) * (x < -3.0f);
+    // }
+
+    // __device__ __forceinline__ float exp2_approx_direct_minus3(float x) {
+    //     const float x2 = x * x;
+    //     const float x3 = x2 * x; 
+    //     const float x4 = x3 * x;
+    //     return (0.93989f + 0.58398f * x + 0.15738f * x2 + 0.02136f * x3 + 0.00120229f * x4) * (x < -3.0f);
+    // }
+
+    // __device__ __forceinline__ float exp2_approx_horner_direct_minus3(float x) {
+    //     return (0.93989f + x * (0.58398f + x * (0.15738f + x * (0.02136f + x * 0.00120229f)))) * (x < -3.0f);
+    // }
+
+    // __device__ __forceinline__ float exp2_approx_horner_minus3(float x) {
+    //     const float h = x + 3.0f;
+    //     return 0.125f + h * (0.0866434f + h * (0.0300283f + h * (0.00693822f + h * 0.00120229f))) * (x < -3.0f);
+    // }
+
+    // __device__ __forceinline__ float exp2_approx_minimax_minus3(float x) {
+    //     const float h = x + 3.0f;
+    //     // 0.125 + (x + 3) * (0.0866434 + (x + 3) * (0.0301124 + (x + 3) * (0.00685432 + (x + 3) * 0.00118967)));
+    //     // Coefficients optimized for minimal maximum error in [-3, 0]
+    //     return 0.125f + h * (0.0866434f + h * (0.0301124f + h * (0.00685432f + h * 0.00118967f)));
+    // }
+
+    // __device__ __forceinline__ float exp2_approx_horner_minus3_5th(float x) {
+    //     const float h = x + 3.0f;
+    //     // 0.125 + (x + 3) * (0.0866434 + (x + 3) * (0.0300283 + (x + 3) * (0.00693822 + (x + 3) * (0.00120229 + (x + 3) * 0.00016668))))
+    //     return 0.125f + h * (0.0866434f + h * (0.0300283f + h * (0.00693822f + h * (0.00120229f + h * 0.00016668f))));
+    // }
+
     // Apply the exp to all the elements.
-    template <bool const Scale_max = true, bool const Check_inf = true, int const Max_offset = 0,
+    template <bool const Scale_max = true, bool const Check_inf = true, int const Max_offset = 0, bool const is_skipable = false,
               typename Engine0, typename Layout0, typename Engine1, typename Layout1>
     __forceinline__ __device__ void scale_apply_exp2(Tensor<Engine0, Layout0> &tensor, Tensor<Engine1, Layout1> const &max, const float scale)
     {
@@ -96,25 +133,38 @@ namespace flash
             // const float max_scaled = Check_inf
             //                              ? (max(mi) == -INFINITY ? 0.f : (!Scale_max ? max(mi) : max(mi) * scale) - max_offset)
             //                              : (!Scale_max ? max(mi) : max(mi) * scale) - max_offset;
-            if constexpr (Check_inf){
+            if constexpr (Check_inf)
+            {
                 const float max_scaled = max(mi) == -INFINITY ? 0.f : (!Scale_max ? max(mi) : max(mi) * scale) - max_offset;
-    #pragma unroll
+#pragma unroll
                 for (int ni = 0; ni < size<1>(tensor); ++ni)
                 {
                     // Instead of computing exp(x - max), we compute exp2(x * log_2(e) -
                     // max * log_2(e)). This allows the compiler to use the ffma
                     // instruction instead of fadd and fmul separately.
-                    tensor(mi, ni) = exp2f(tensor(mi, ni) * scale - max_scaled);
+                    if constexpr(is_skipable){
+                        tensor(mi, ni) = exp2_approx_horner_minus3_5th(tensor(mi, ni) * scale - max_scaled);
+                    }else{
+                        tensor(mi, ni) = exp2f(tensor(mi, ni) * scale - max_scaled);
+                    }
+                    // tensor(mi, ni) = exp2f(tensor(mi, ni) * scale - max_scaled);
                 }
-            }else{
+            }
+            else
+            {
                 const float max_scaled = (!Scale_max ? max(mi) : max(mi) * scale) - max_offset;
-    #pragma unroll
+#pragma unroll
                 for (int ni = 0; ni < size<1>(tensor); ++ni)
                 {
                     // Instead of computing exp(x - max), we compute exp2(x * log_2(e) -
                     // max * log_2(e)). This allows the compiler to use the ffma
                     // instruction instead of fadd and fmul separately.
-                    tensor(mi, ni) = exp2f(tensor(mi, ni) * scale - max_scaled);
+                    if constexpr(is_skipable){
+                        tensor(mi, ni) = exp2_approx_horner_minus3_5th(tensor(mi, ni) * scale - max_scaled);
+                    }else{
+                        tensor(mi, ni) = exp2f(tensor(mi, ni) * scale - max_scaled);
+                    }
+                    // tensor(mi, ni) = exp2f(tensor(mi, ni) * scale - max_scaled);
                 }
             }
         }
@@ -133,6 +183,7 @@ namespace flash
         int const warp_idx_in_warpgroup = __shfl_sync(0xffffffff, (threadIdx.x / 32) % 4, 0);
         // bool const is_warp_leader = (threadIdx.x % 32) == 0;
         bool const is_warp_leader = cute::elect_one_sync();
+        bool skip = false;
 
         CUTLASS_DEVICE Softmax(float const softmax_scale_log2_) : softmax_scale_log2(softmax_scale_log2_) {};
 
@@ -174,9 +225,12 @@ namespace flash
                     //                 ? row_max(mi)
                     //                 : (row_max(mi) == -INFINITY ? 0.0f : row_max(mi));
                     float cur;
-                    if constexpr (Check_inf){
+                    if constexpr (Check_inf)
+                    {
                         cur = row_max(mi) == -INFINITY ? 0.0f : row_max(mi);
-                    }else{
+                    }
+                    else
+                    {
                         cur = row_max(mi);
                     }
                     float prev = scores_max_prev(mi);
@@ -190,13 +244,23 @@ namespace flash
                     // do_qk |= (prev - scores_max_local(mi)) * thr < prev;
                     // do_qk |= (cur - scores_max_local(mi)) * thr < cur;
 
+                    // (((scores_max_local(mi) - prev) * softmax_scale_log2) > thr);
+
+                    // 1.2
+                    // do_qk |= (prev - scores_max_local(mi)) * thr < prev;
+
+                    // (1 - scores_max_local(mi)/prev) * thr < 1;
+                    // 1 - scores_max_local(mi)/prev < 1/thr;
+                    // 1 - 1/thr < - scores_max_local(mi)/prev;
+
                     // prev * thr - scores_max_local(mi) * thr < prev;
                     // prev * thr - prev < scores_max_local(mi) * thr;
                     // prev * (thr - 1.0f) < scores_max_local(mi) * thr;
                     // prev * ((thr - 1.0f)/ thr) < scores_max_local(mi);
                 }
 
-                const bool skip = !__any_sync(0xffffffffu, do_qk);
+                // const bool skip = !__any_sync(0xffffffffu, do_qk);
+                skip = !__any_sync(0xffffffffu, do_qk);
                 if (is_warp_leader)
                 {
                     if constexpr (is_wg2)
@@ -239,9 +303,12 @@ namespace flash
                     //                            : (row_max(mi) == -INFINITY ? 0.0f : row_max(mi));
 
                     float scores_max_cur;
-                    if constexpr (Check_inf){
+                    if constexpr (Check_inf)
+                    {
                         scores_max_cur = row_max(mi) == -INFINITY ? 0.0f : row_max(mi);
-                    }else{
+                    }
+                    else
+                    {
                         scores_max_cur = row_max(mi);
                     }
 
@@ -252,13 +319,33 @@ namespace flash
             return scores_scale;
         };
 
-        template <bool const Is_first, bool const Check_inf = false, typename Tensor0>
+        // template <bool const Is_first, bool const Check_inf = false, typename Tensor0>
+        // __forceinline__ __device__ void online_softmax_skipable(Tensor0 &acc_s)
+        // {
+        //     // Reshape acc_s from ((2, 2, V), MMA_M, MMA_N) to (nrow=(2, MMA_M), ncol=(2, V, MMA_N))
+        //     Tensor scores = make_tensor(acc_s.data(), flash::convert_layout_acc_rowcol(acc_s.layout()));
+        //     static_assert(CUTE_STATIC_V(size<0>(scores)) == kNRows);
+        //     // if (!skip)
+        //     // {
+        //     //     flash::template scale_apply_exp2</*Scale_max=*/true, Check_inf, Max_offset>(scores, row_max, softmax_scale_log2);
+        //     //     // We don't do the reduce across threads here since we don't need to use the row_sum.
+        //     //     // We do that reduce at the end when we need to normalize the softmax.
+        //     //     flash::reduce_sum</*zero_init=*/Is_first, /*warp_reduce=*/false>(scores, row_sum);
+        //     // }
+        //     flash::template scale_apply_exp2</*Scale_max=*/true, Check_inf, Max_offset>(scores, row_max, softmax_scale_log2);
+        //     // We don't do the reduce across threads here since we don't need to use the row_sum.
+        //     // We do that reduce at the end when we need to normalize the softmax.
+        //     flash::reduce_sum</*zero_init=*/Is_first, /*warp_reduce=*/false>(scores, row_sum);
+        // };
+
+        template <bool const Is_first, bool const Check_inf = false, bool const is_skipable = false, typename Tensor0>
         __forceinline__ __device__ void online_softmax(Tensor0 &acc_s)
         {
             // Reshape acc_s from ((2, 2, V), MMA_M, MMA_N) to (nrow=(2, MMA_M), ncol=(2, V, MMA_N))
             Tensor scores = make_tensor(acc_s.data(), flash::convert_layout_acc_rowcol(acc_s.layout()));
             static_assert(CUTE_STATIC_V(size<0>(scores)) == kNRows);
-            flash::template scale_apply_exp2</*Scale_max=*/true, Check_inf, Max_offset>(scores, row_max, softmax_scale_log2);
+            // flash::template scale_apply_exp2</*Scale_max=*/true, Check_inf, Max_offset, is_skipable>(scores, row_max, softmax_scale_log2);
+            flash::template scale_apply_exp2</*Scale_max=*/true, Check_inf, Max_offset, false>(scores, row_max, softmax_scale_log2);
             // We don't do the reduce across threads here since we don't need to use the row_sum.
             // We do that reduce at the end when we need to normalize the softmax.
             flash::reduce_sum</*zero_init=*/Is_first, /*warp_reduce=*/false>(scores, row_sum);
@@ -303,6 +390,7 @@ namespace flash
                 }
             }
         };
+
     };
 
 } // namespace flash

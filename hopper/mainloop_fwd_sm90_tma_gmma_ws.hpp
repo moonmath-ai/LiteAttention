@@ -1008,7 +1008,7 @@ namespace flash
             // // ++n_block;
             // ++n_block;
 
-            #pragma unroll 1
+#pragma unroll 1
             for (; read_idx <= skip_list_len; read_idx += 2)
             {
                 start_idx = read_skip_list[read_idx];
@@ -1579,16 +1579,16 @@ namespace flash
         template <typename SharedStorage, typename FrgTensorO, typename Softmax>
         CUTLASS_DEVICE bool
         mma_wg1(Params const &params,
-            MainloopPipelineK pipeline_k,
-            MainloopPipelineV pipeline_v,
-            PipelineState &smem_pipe_read,
-            FrgTensorO &tOrO,
-            Softmax &softmax,
-            int const thread_idx,
-            int &work_idx,
-            SeqlenInfo_t const &seqlen_info,
-            cute::tuple<int32_t, int32_t, int32_t, int32_t> block_coord,
-            SharedStorage &shared_storage)
+                MainloopPipelineK pipeline_k,
+                MainloopPipelineV pipeline_v,
+                PipelineState &smem_pipe_read,
+                FrgTensorO &tOrO,
+                Softmax &softmax,
+                int const thread_idx,
+                int &work_idx,
+                SeqlenInfo_t const &seqlen_info,
+                cute::tuple<int32_t, int32_t, int32_t, int32_t> block_coord,
+                SharedStorage &shared_storage)
         {
             static_assert(is_rmem<FrgTensorO>::value, "O tensor must be rmem resident.");
             // DOR: height of the Q block
@@ -1849,8 +1849,7 @@ namespace flash
                 Tensor scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/true, true, false /*is_wg2*/>(
                     tSrS, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests);
                 // Don't need to store scales to send to WG1 (in the case of LargeHeadDimV) since it's 1.f
-
-                softmax.template online_softmax</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
+                softmax.template online_softmax</*Is_first=*/true, /*Check_inf=*/true, true /*is_skipable*/>(tSrS);
                 if constexpr (Is_FP8 && !V_colmajor)
                 {
                     flash::permute_Cregs_fp8(tSrS);
@@ -1928,38 +1927,121 @@ namespace flash
                         softmax.template max_get_scale_detect_qk_skip</*Is_first=*/false, Check_inf, false /*is_wg2*/>(
                             tSrS, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests),
                         scores_scale);
-                    // TODO: it is possible to update the mask from wg2 now for n_block?
-                    if constexpr (LargeHeadDimV)
-                    {
-                        store_scales(scores_scale, smem_pipe_read_v.index());
+                    
+                    if(softmax.skip){
+                        if constexpr (!HasQv)
+                        {
+                            warpgroup_wait<0>();
+                            pipeline_v.consumer_release(smem_pipe_read_v); // release V
+                        }
+                        clear(tOrP);
+                        if constexpr (!MmaPV_is_RS)
+                        {
+                            write_P_to_smem(tOrP);
+                        }
+                        if constexpr (!RescaleOBeforeGemm)
+                        {
+                            softmax.rescale_o(tOrO, scores_scale);
+                            // softmax.rescale_o2(tOrO, scores_scale);
+                            // tOrO = make_tensor(tOrO.data(), tOrO.layout()); // to avoid compiler bug
+                            // tOrO = make_tensor(tOrO.data(), flash::convert_layout_acc_rowcol(tOrO.layout()));
+                        }
+                        if constexpr (!MmaPV_is_RS)
+                        {
+                            arrive_on_P_write_barrier();
+                        }
                     }
-                    softmax.template online_softmax</*Is_first=*/false, Check_inf>(tSrS);
-                    if constexpr (!HasQv)
-                    {
-                        warpgroup_wait<0>();
-                        pipeline_v.consumer_release(smem_pipe_read_v); // release V
+                    else{
+                    // if (!softmax.skip){
+                        if constexpr (LargeHeadDimV)
+                        {
+                            store_scales(scores_scale, smem_pipe_read_v.index());
+                        }
+                        softmax.template online_softmax</*Is_first=*/false, Check_inf, true /*is_skipable*/>(tSrS);
+                        // softmax.template online_softmax_skipable</*Is_first=*/false, Check_inf>(tSrS);
+                        if constexpr (!HasQv)
+                        {
+                            warpgroup_wait<0>();
+                            pipeline_v.consumer_release(smem_pipe_read_v); // release V
+                        }
+                        if constexpr (Is_FP8 && !V_colmajor)
+                        {
+                            flash::permute_Cregs_fp8(tSrS);
+                        }
+                        convert_type_out(make_tensor(tSrS.data(), tOrP.layout()), tOrP);
+                        if constexpr (Is_FP8 && V_colmajor)
+                        {
+                            flash::permute_Aregs_fp8(tOrP);
+                        }
+                        if constexpr (!MmaPV_is_RS)
+                        {
+                            write_P_to_smem(tOrP);
+                        }
+                        if constexpr (!RescaleOBeforeGemm)
+                        {
+                            softmax.rescale_o(tOrO, scores_scale);
+                        }
+                        if constexpr (!MmaPV_is_RS)
+                        {
+                            arrive_on_P_write_barrier();
+                        }
                     }
-                    if constexpr (Is_FP8 && !V_colmajor)
-                    {
-                        flash::permute_Cregs_fp8(tSrS);
-                    }
-                    convert_type_out(make_tensor(tSrS.data(), tOrP.layout()), tOrP);
-                    if constexpr (Is_FP8 && V_colmajor)
-                    {
-                        flash::permute_Aregs_fp8(tOrP);
-                    }
-                    if constexpr (!MmaPV_is_RS)
-                    {
-                        write_P_to_smem(tOrP);
-                    }
-                    if constexpr (!RescaleOBeforeGemm)
-                    {
-                        softmax.rescale_o(tOrO, scores_scale);
-                    }
-                    if constexpr (!MmaPV_is_RS)
-                    {
-                        arrive_on_P_write_barrier();
-                    }
+
+                    // if constexpr (!MmaPV_is_RS)
+                    // {
+                    //     write_P_to_smem(tOrP);
+                    // }
+                    // if constexpr (!RescaleOBeforeGemm)
+                    // {
+                    //     softmax.rescale_o(tOrO, scores_scale);
+                    // }
+                    // if constexpr (!MmaPV_is_RS)
+                    // {
+                    //     arrive_on_P_write_barrier();
+                    // }
+
+                    // if constexpr (!MmaPV_is_RS)
+                    // {
+                    //     write_P_to_smem(tOrP);
+                    // }
+                    // if constexpr (!MmaPV_is_RS)
+                    // {
+                    //     arrive_on_P_write_barrier();
+                    // }
+
+                    // // TODO: it is possible to update the mask from wg2 now for n_block?
+                    // if constexpr (LargeHeadDimV)
+                    // {
+                    //     store_scales(scores_scale, smem_pipe_read_v.index());
+                    // }
+                    // // softmax.template online_softmax</*Is_first=*/false, Check_inf>(tSrS);
+                    // softmax.template online_softmax_skipable</*Is_first=*/false, Check_inf>(tSrS);
+                    // if constexpr (!HasQv)
+                    // {
+                    //     warpgroup_wait<0>();
+                    //     pipeline_v.consumer_release(smem_pipe_read_v); // release V
+                    // }
+                    // if constexpr (Is_FP8 && !V_colmajor)
+                    // {
+                    //     flash::permute_Cregs_fp8(tSrS);
+                    // }
+                    // convert_type_out(make_tensor(tSrS.data(), tOrP.layout()), tOrP);
+                    // if constexpr (Is_FP8 && V_colmajor)
+                    // {
+                    //     flash::permute_Aregs_fp8(tOrP);
+                    // }
+                    // if constexpr (!MmaPV_is_RS)
+                    // {
+                    //     write_P_to_smem(tOrP);
+                    // }
+                    // if constexpr (!RescaleOBeforeGemm)
+                    // {
+                    //     softmax.rescale_o(tOrO, scores_scale);
+                    // }
+                    // if constexpr (!MmaPV_is_RS)
+                    // {
+                    //     arrive_on_P_write_barrier();
+                    // }
                 };
 
                 if constexpr (Is_causal || Is_local)
@@ -1980,11 +2062,11 @@ namespace flash
                     seqlen_info, m_block, n_block_min, params.window_size_left,
                     params.attention_chunk_divmod, params.qhead_per_khead_divmod);
                 auto no_mask_fn = [](auto &tSrS, int n_block) {};
-// #pragma unroll 1
-//                 for (; n_block >= n_block_min_before_local_mask; --n_block)
-//                 {
-//                     fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/);
-//                 }
+                // #pragma unroll 1
+                //                 for (; n_block >= n_block_min_before_local_mask; --n_block)
+                //                 {
+                //                     fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/);
+                //                 }
                 bool is_first_iter_skips = true;
                 // #pragma unroll 1
                 for (; read_idx <= skip_list_len; read_idx += 2)
@@ -2093,13 +2175,13 @@ namespace flash
                     mask_fn(tSrS, n_block);
                     // Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
                     Tensor scores_scale = softmax.template max_get_scale_detect_qk_skip</*Is_first=*/Is_first_iter, Check_inf, false /*is_wg2*/>(tSrS, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests);
-
                     if constexpr (LargeHeadDimV && !Is_first_iter)
                     {
                         store_scales(scores_scale, smem_pipe_read_prev.index());
                     }
 
-                    softmax.template online_softmax</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
+                    softmax.template online_softmax</*Is_first=*/Is_first_iter, Check_inf, true /*is_skipable*/>(tSrS);
+                    // softmax.template online_softmax_skipable</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
 
                     if constexpr (Is_FP8 && !V_colmajor)
                     {
@@ -2243,16 +2325,16 @@ namespace flash
         template <typename SharedStorage, typename FrgTensorO, typename Softmax>
         CUTLASS_DEVICE bool
         mma_wg2(Params const &params,
-            MainloopPipelineK pipeline_k,
-            MainloopPipelineV pipeline_v,
-            PipelineState &smem_pipe_read,
-            FrgTensorO &tOrO,
-            Softmax &softmax,
-            int const thread_idx,
-            int &work_idx,
-            SeqlenInfo_t const &seqlen_info,
-            cute::tuple<int32_t, int32_t, int32_t, int32_t> block_coord,
-            SharedStorage &shared_storage)
+                MainloopPipelineK pipeline_k,
+                MainloopPipelineV pipeline_v,
+                PipelineState &smem_pipe_read,
+                FrgTensorO &tOrO,
+                Softmax &softmax,
+                int const thread_idx,
+                int &work_idx,
+                SeqlenInfo_t const &seqlen_info,
+                cute::tuple<int32_t, int32_t, int32_t, int32_t> block_coord,
+                SharedStorage &shared_storage)
         {
             static_assert(is_rmem<FrgTensorO>::value, "O tensor must be rmem resident.");
             // DOR: height of the Q block
@@ -2519,7 +2601,8 @@ namespace flash
                     tSrS, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests);
                 // Don't need to store scales to send to WG1 (in the case of LargeHeadDimV) since it's 1.f
 
-                softmax.template online_softmax</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
+                softmax.template online_softmax</*Is_first=*/true, /*Check_inf=*/true, true /*is_skipable*/>(tSrS);
+                // softmax.template online_softmax_skipable</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
                 bool skip = false;
                 if (saving_thread)
                 {
@@ -2606,48 +2689,137 @@ namespace flash
                         softmax.template max_get_scale_detect_qk_skip</*Is_first=*/false, Check_inf, true /*is_wg2*/>(
                             tSrS, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests),
                         scores_scale);
-                    // TODO: it is possible to update the mask from wg2 now for n_block?
-                    if constexpr (LargeHeadDimV)
-                    {
-                        store_scales(scores_scale, smem_pipe_read_v.index());
+                    
+                    // bool skip = false;
+                    if (softmax.skip){
+                        if constexpr (!HasQv)
+                        {
+                            warpgroup_wait<0>();
+                            pipeline_v.consumer_release(smem_pipe_read_v); // release V
+                        }
+                        clear(tOrP);
+                        bool skip = false;
+                        if (saving_thread)
+                        {
+                            skip =
+                                shared_storage.pipelines.skip_tests[0] &
+                                shared_storage.pipelines.skip_tests[1] &
+                                shared_storage.pipelines.skip_tests[2] &
+                                shared_storage.pipelines.skip_tests[3];
+                        }
+
+                        if constexpr (!MmaPV_is_RS)
+                        {
+                            write_P_to_smem(tOrP);
+                        }
+                        if constexpr (!RescaleOBeforeGemm)
+                        {
+                            softmax.rescale_o(tOrO, scores_scale);
+                            // softmax.rescale_o2(tOrO, scores_scale);
+                            // tOrO = make_tensor(tOrO.data(), tOrO.layout()); // to avoid compiler bug
+                            // tOrO = make_tensor(tOrO.data(), flash::convert_layout_acc_rowcol(tOrO.layout()));
+                        }
+                        if constexpr (!MmaPV_is_RS)
+                        {
+                            arrive_on_P_write_barrier();
+                        }
+                        return skip;
                     }
-                    softmax.template online_softmax</*Is_first=*/false, Check_inf>(tSrS);
-                    bool skip = false;
-                    if (saving_thread)
-                    {
-                        skip =
-                            shared_storage.pipelines.skip_tests[0] &
-                            shared_storage.pipelines.skip_tests[1] &
-                            shared_storage.pipelines.skip_tests[2] &
-                            shared_storage.pipelines.skip_tests[3];
+                    // if (!softmax.skip){
+                    else{
+                        // TODO: it is possible to update the mask from wg2 now for n_block?
+                        if constexpr (LargeHeadDimV)
+                        {
+                            store_scales(scores_scale, smem_pipe_read_v.index());
+                        }
+                        softmax.template online_softmax</*Is_first=*/false, Check_inf, true /*is_skipable*/>(tSrS);
+                        // softmax.template online_softmax_skipable</*Is_first=*/false, Check_inf>(tSrS);
+                        if constexpr (!HasQv)
+                        {
+                            warpgroup_wait<0>();
+                            pipeline_v.consumer_release(smem_pipe_read_v); // release V
+                        }
+                        if constexpr (Is_FP8 && !V_colmajor)
+                        {
+                            flash::permute_Cregs_fp8(tSrS);
+                        }
+                        convert_type_out(make_tensor(tSrS.data(), tOrP.layout()), tOrP);
+                        if constexpr (Is_FP8 && V_colmajor)
+                        {
+                            flash::permute_Aregs_fp8(tOrP);
+                        }
+                        if constexpr (!MmaPV_is_RS)
+                        {
+                            write_P_to_smem(tOrP);
+                        }
+                        if constexpr (!RescaleOBeforeGemm)
+                        {
+                            softmax.rescale_o(tOrO, scores_scale);
+                        }
+                        if constexpr (!MmaPV_is_RS)
+                        {
+                            arrive_on_P_write_barrier();
+                        }
+                        return false;
                     }
-                    if constexpr (!HasQv)
-                    {
-                        warpgroup_wait<0>();
-                        pipeline_v.consumer_release(smem_pipe_read_v); // release V
-                    }
-                    if constexpr (Is_FP8 && !V_colmajor)
-                    {
-                        flash::permute_Cregs_fp8(tSrS);
-                    }
-                    convert_type_out(make_tensor(tSrS.data(), tOrP.layout()), tOrP);
-                    if constexpr (Is_FP8 && V_colmajor)
-                    {
-                        flash::permute_Aregs_fp8(tOrP);
-                    }
-                    if constexpr (!MmaPV_is_RS)
-                    {
-                        write_P_to_smem(tOrP);
-                    }
-                    if constexpr (!RescaleOBeforeGemm)
-                    {
-                        softmax.rescale_o(tOrO, scores_scale);
-                    }
-                    if constexpr (!MmaPV_is_RS)
-                    {
-                        arrive_on_P_write_barrier();
-                    }
-                    return skip;
+                    // if constexpr (!MmaPV_is_RS)
+                    // {
+                    //     write_P_to_smem(tOrP);
+                    // }
+                    // if constexpr (!RescaleOBeforeGemm)
+                    // {
+                    //     softmax.rescale_o(tOrO, scores_scale);
+                    // }
+                    // if constexpr (!MmaPV_is_RS)
+                    // {
+                    //     arrive_on_P_write_barrier();
+                    // }
+
+                    // return skip;
+
+                    // // TODO: it is possible to update the mask from wg2 now for n_block?
+                    // if constexpr (LargeHeadDimV)
+                    // {
+                    //     store_scales(scores_scale, smem_pipe_read_v.index());
+                    // }
+                    // softmax.template online_softmax</*Is_first=*/false, Check_inf>(tSrS);
+                    // // softmax.template online_softmax_skipable</*Is_first=*/false, Check_inf>(tSrS);
+                    // bool skip = false;
+                    // if (saving_thread)
+                    // {
+                    //     skip =
+                    //         shared_storage.pipelines.skip_tests[0] &
+                    //         shared_storage.pipelines.skip_tests[1] &
+                    //         shared_storage.pipelines.skip_tests[2] &
+                    //         shared_storage.pipelines.skip_tests[3];
+                    // }
+                    // if constexpr (!HasQv)
+                    // {
+                    //     warpgroup_wait<0>();
+                    //     pipeline_v.consumer_release(smem_pipe_read_v); // release V
+                    // }
+                    // if constexpr (Is_FP8 && !V_colmajor)
+                    // {
+                    //     flash::permute_Cregs_fp8(tSrS);
+                    // }
+                    // convert_type_out(make_tensor(tSrS.data(), tOrP.layout()), tOrP);
+                    // if constexpr (Is_FP8 && V_colmajor)
+                    // {
+                    //     flash::permute_Aregs_fp8(tOrP);
+                    // }
+                    // if constexpr (!MmaPV_is_RS)
+                    // {
+                    //     write_P_to_smem(tOrP);
+                    // }
+                    // if constexpr (!RescaleOBeforeGemm)
+                    // {
+                    //     softmax.rescale_o(tOrO, scores_scale);
+                    // }
+                    // if constexpr (!MmaPV_is_RS)
+                    // {
+                    //     arrive_on_P_write_barrier();
+                    // }
+                    // return skip;
                 };
 
                 if constexpr (Is_causal || Is_local)
@@ -2668,11 +2840,11 @@ namespace flash
                     seqlen_info, m_block, n_block_min, params.window_size_left,
                     params.attention_chunk_divmod, params.qhead_per_khead_divmod);
                 auto no_mask_fn = [](auto &tSrS, int n_block) {};
-// #pragma unroll 1
-//                 for (; n_block >= n_block_min_before_local_mask; --n_block)
-//                 {
-//                     fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/);
-//                 }
+                // #pragma unroll 1
+                //                 for (; n_block >= n_block_min_before_local_mask; --n_block)
+                //                 {
+                //                     fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/);
+                //                 }
                 bool is_first_iter_skips = true;
                 // #pragma unroll 1
                 for (; read_idx <= skip_list_len; read_idx += 2)
@@ -2802,7 +2974,8 @@ namespace flash
                         store_scales(scores_scale, smem_pipe_read_prev.index());
                     }
 
-                    softmax.template online_softmax</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
+                    // softmax.template online_softmax</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
+                    softmax.template online_softmax_skipable</*Is_first=*/Is_first_iter, Check_inf, true /*is_skipable*/>(tSrS);
 
                     bool skip = false;
                     if (saving_thread)
