@@ -40,6 +40,130 @@ namespace flash
 
     using namespace cute;
 
+    // ============================================================================
+    // Helper struct for reading skip lists
+    // Encapsulates all the logic for iterating through skip list ranges
+    // ============================================================================
+    struct SkipListReader
+    {
+        const int *list_ptr;
+        int skip_list_len;
+        int read_idx = 1;
+        int start_idx;
+        int end_idx;
+
+        // Initialize the reader with calculated offset
+        template <typename TileShape_MNK, typename ParamsType>
+        __device__ __forceinline__ 
+        void init(const ParamsType &params, int bidb, int bidh, int m_block)
+        {
+            static constexpr int kBlockM = get<0>(TileShape_MNK{});
+            static constexpr int kBlockN = get<1>(TileShape_MNK{});
+            
+            int const num_heads = get<2>(params.shape_Q);
+            uint64_t const num_q_blocks = cute::ceil_div(get<0>(params.shape_Q), kBlockM);
+            uint64_t const num_k_blocks = cute::ceil_div(get<0>(params.shape_K), kBlockN) + 1;
+            const uint32_t q_i = ((uint32_t)m_block);
+            uint64_t mask_offset = (bidb * num_heads * num_q_blocks * num_k_blocks) + 
+                                   (bidh * num_q_blocks * num_k_blocks) + 
+                                   (q_i * num_k_blocks);
+            
+            list_ptr = &params.qk_skip_mask_args.read_skip_list[mask_offset];
+            skip_list_len = list_ptr[0];
+            // read_idx = 1;
+            load_range();
+        }
+
+        __device__ __forceinline__ 
+        void load_range()
+        {
+            start_idx = list_ptr[read_idx];
+            end_idx = list_ptr[read_idx + 1];
+        }
+
+        // Advance to the next skip list range
+        __device__ __forceinline__ 
+        void advance()
+        {
+            read_idx += 2;
+        }
+
+        // Check if we have more ranges to process
+        __device__ __forceinline__ 
+        bool has_more() const
+        {
+            return read_idx <= skip_list_len;
+        }
+    };
+
+    // ============================================================================
+    // Helper struct for writing skip lists
+    // Encapsulates all the logic for updating skip lists based on skip detection
+    // ============================================================================
+    struct SkipListWriter
+    {
+        int *list_ptr;
+        int write_idx = 1;
+        bool is_skipping = true;
+        bool is_saving_thread;
+
+        // Initialize the writer with calculated offset
+        template <typename TileShape_MNK, typename ParamsType>
+        __device__ __forceinline__ 
+        void init(const ParamsType &params, int bidb, int bidh, int m_block, bool saving_thread)
+        {
+            static constexpr int kBlockM = get<0>(TileShape_MNK{});
+            static constexpr int kBlockN = get<1>(TileShape_MNK{});
+            
+            int const num_heads = get<2>(params.shape_Q);
+            uint64_t const num_q_blocks = cute::ceil_div(get<0>(params.shape_Q), kBlockM);
+            uint64_t const num_k_blocks = cute::ceil_div(get<0>(params.shape_K), kBlockN) + 1;
+            const uint32_t q_i = ((uint32_t)m_block);
+            uint64_t mask_offset = (bidb * num_heads * num_q_blocks * num_k_blocks) + 
+                                   (bidh * num_q_blocks * num_k_blocks) + 
+                                   (q_i * num_k_blocks);
+            
+            list_ptr = &params.qk_skip_mask_args.write_skip_list[mask_offset];
+            // write_idx = 1;
+            // is_skipping = true;
+            is_saving_thread = saving_thread;
+        }
+
+        // Record a transition in skip state
+        __device__ __forceinline__ 
+        void record_transition(bool skip, int n_block)
+        {
+            if (is_saving_thread && (skip != is_skipping))
+            {
+                list_ptr[write_idx] = n_block;
+                write_idx++;
+                is_skipping = skip;
+            }
+        }
+
+        // Record the end of a range (force transition to skipping)
+        __device__ __forceinline__ 
+        void record_range_end(bool skip, int end_idx)
+        {
+            is_skipping = true;
+            if (is_saving_thread && (skip != is_skipping))
+            {
+                list_ptr[write_idx] = end_idx;
+                write_idx++;
+            }
+        }
+
+        // Finalize the skip list by writing the count
+        __device__ __forceinline__ 
+        void finalize()
+        {
+            if (is_saving_thread)
+            {
+                list_ptr[0] = write_idx - 1;
+            }
+        }
+    };
+
     // Main collective mainloop class for Flash Attention forward pass
     // Template parameters:
     // - Stages: Number of pipeline stages for overlapping compute and memory operations
@@ -688,18 +812,20 @@ namespace flash
 
             // ~~~~~~~~~~~~~~~~~ define skip list ~~~~~~~~~~~~~~~~~
             // DOR: height of the Q block
-            static constexpr int kBlockM = get<0>(TileShape_MNK{});
+            // static constexpr int kBlockM = get<0>(TileShape_MNK{});
             // DOR: height of the K/V block
-            static constexpr int kBlockN = get<1>(TileShape_MNK{});
+            // static constexpr int kBlockN = get<1>(TileShape_MNK{});
             // static constexpr int MmaWarpGroups = size(TiledMmaPV{}) / cutlass::NumThreadsPerWarpGroup;
 
-            int const num_heads = get<2>(params.shape_Q);
+            // int const num_heads = get<2>(params.shape_Q);
             // int const num_q_blocks = cute::ceil_div(get<0>(params.shape_Q), kBlockM / MmaWarpGroups);
-            uint64_t const num_q_blocks = cute::ceil_div(get<0>(params.shape_Q), kBlockM);
-            uint64_t const num_k_blocks = cute::ceil_div(get<0>(params.shape_K), kBlockN) + 1;
-            const uint32_t q_i = ((uint32_t)m_block);
-            uint64_t mask_offset = (bidb * num_heads * num_q_blocks * num_k_blocks) + (bidh * num_q_blocks * num_k_blocks) + (q_i * num_k_blocks);
-            const int *read_skip_list = &params.qk_skip_mask_args.read_skip_list[mask_offset];
+            // uint64_t const num_q_blocks = cute::ceil_div(get<0>(params.shape_Q), kBlockM);
+            // uint64_t const num_k_blocks = cute::ceil_div(get<0>(params.shape_K), kBlockN) + 1;
+            // const uint32_t q_i = ((uint32_t)m_block);
+            // uint64_t mask_offset = (bidb * num_heads * num_q_blocks * num_k_blocks) + (bidh * num_q_blocks * num_k_blocks) + (q_i * num_k_blocks);
+            // const int *read_skip_list = &params.qk_skip_mask_args.read_skip_list[mask_offset];
+            SkipListReader skip_reader;
+            skip_reader.init<TileShape_MNK>(params, bidb, bidh, m_block);
             // ~~~~~~~~~~~~~~~~~ end of define skip list ~~~~~~~~~~~~~~~~~
 
             Tensor sQ = make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_q.data()), SmemLayoutQ{});
@@ -908,11 +1034,11 @@ namespace flash
             // int n_block = n_block_max - 1;
             // int n_block = n_block_min;
 
-            int skip_list_len = read_skip_list[0];
-            int read_idx = 1;
-            int start_idx = read_skip_list[read_idx];
-            int end_idx = read_skip_list[read_idx + 1];
-            int n_block = start_idx;
+            // int skip_list_len = read_skip_list[0];
+            // int read_idx = 1;
+            // int start_idx = read_skip_list[read_idx];
+            // int end_idx = read_skip_list[read_idx + 1];
+            int n_block = skip_reader.start_idx;
 
             int warp_idx_in_warpgroup = __shfl_sync(0xffffffff, (threadIdx.x / 32) % 4, 0);
             // If this is true, we're guaranteed that only the first warp will execute this function
@@ -1009,11 +1135,12 @@ namespace flash
             // ++n_block;
 
             #pragma unroll 1
-            for (; read_idx <= skip_list_len; read_idx += 2)
+            for (; skip_reader.has_more(); skip_reader.advance())
             {
-                start_idx = read_skip_list[read_idx];
-                end_idx = read_skip_list[read_idx + 1];
-                for (n_block = start_idx; n_block < end_idx; n_block++)
+                // start_idx = read_skip_list[read_idx];
+                // end_idx = read_skip_list[read_idx + 1];
+                skip_reader.load_range();
+                for (n_block = skip_reader.start_idx; n_block < skip_reader.end_idx; n_block++)
                 {
                     // this happens only in the first iteration of the loop
                     if (n_block == n_block_prev) [[unlikely]]
@@ -1716,24 +1843,26 @@ namespace flash
             };
 
             // ~~~~~~~~~~~~~~~~~ define skip list ~~~~~~~~~~~~~~~~~
-            int const num_heads = get<2>(params.shape_Q);
-            uint64_t const num_q_blocks = cute::ceil_div(get<0>(params.shape_Q), kBlockM);
-            uint64_t const num_k_blocks = cute::ceil_div(get<0>(params.shape_K), kBlockN) + 1;
-            const uint32_t q_i = ((uint32_t)m_block);
-            uint64_t mask_offset = (bidb * num_heads * num_q_blocks * num_k_blocks) + (bidh * num_q_blocks * num_k_blocks) + (q_i * num_k_blocks);
-            const int *read_skip_list = &params.qk_skip_mask_args.read_skip_list[mask_offset];
+            // int const num_heads = get<2>(params.shape_Q);
+            // uint64_t const num_q_blocks = cute::ceil_div(get<0>(params.shape_Q), kBlockM);
+            // uint64_t const num_k_blocks = cute::ceil_div(get<0>(params.shape_K), kBlockN) + 1;
+            // const uint32_t q_i = ((uint32_t)m_block);
+            // uint64_t mask_offset = (bidb * num_heads * num_q_blocks * num_k_blocks) + (bidh * num_q_blocks * num_k_blocks) + (q_i * num_k_blocks);
+            // const int *read_skip_list = &params.qk_skip_mask_args.read_skip_list[mask_offset];
+            SkipListReader skip_reader;
+            skip_reader.init<TileShape_MNK>(params, bidb, bidh, m_block);
             // ~~~~~~~~~~~~~~~~~ end of define skip list ~~~~~~~~~~~~~~~~~
             // ~~~~~~~~~~~~~~~~~ skip list init ~~~~~~~~~~~~~~~~~
-            int skip_list_len = read_skip_list[0];
-            int read_idx = 1;
-            int start_idx = read_skip_list[read_idx];
-            int end_idx = read_skip_list[read_idx + 1];
+            // int skip_list_len = read_skip_list[0];
+            // int read_idx = 1;
+            // int start_idx = read_skip_list[read_idx];
+            // int end_idx = read_skip_list[read_idx + 1];
             // ~~~~~~~~~~~~~~~~~ end of skip list init ~~~~~~~~~~
 
             int const seqlen_q = seqlen_info.seqlen_q;
             int const seqlen_k = seqlen_info.seqlen_k;
             // int n_block = n_block_max - 1;
-            int n_block = start_idx;
+            int n_block = skip_reader.start_idx;
 
             flash::Mask<kBlockM, kBlockN, PackGQA, TiledMmaQK> mask(
                 thread_idx, seqlen_q, seqlen_k, params.window_size_left, params.window_size_right, 0 /*sink_token_length*/,
@@ -1987,11 +2116,12 @@ namespace flash
 //                 }
                 bool is_first_iter_skips = true;
                 // #pragma unroll 1
-                for (; read_idx <= skip_list_len; read_idx += 2)
+                for (; skip_reader.has_more(); skip_reader.advance())
                 {
-                    start_idx = read_skip_list[read_idx];
-                    end_idx = read_skip_list[read_idx + 1];
-                    for (n_block = start_idx; n_block < end_idx; n_block++)
+                    // start_idx = read_skip_list[read_idx];
+                    // end_idx = read_skip_list[read_idx + 1];
+                    skip_reader.load_range();
+                    for (n_block = skip_reader.start_idx; n_block < skip_reader.end_idx; n_block++)
                     {
                         // this happens only in the first iteration of the loop
                         if (is_first_iter_skips) [[unlikely]]
@@ -2184,11 +2314,12 @@ namespace flash
 
                 bool is_first_iter_skips = true;
                 // #pragma unroll 1
-                for (; read_idx <= skip_list_len; read_idx += 2)
+                for (; skip_reader.has_more(); skip_reader.advance())
                 {
-                    start_idx = read_skip_list[read_idx];
-                    end_idx = read_skip_list[read_idx + 1];
-                    for (n_block = start_idx; n_block < end_idx; n_block++)
+                    // start_idx = read_skip_list[read_idx];
+                    // end_idx = read_skip_list[read_idx + 1];
+                    skip_reader.load_range();
+                    for (n_block = skip_reader.start_idx; n_block < skip_reader.end_idx; n_block++)
                     {
                         // this happens only in the first iteration of the loop
                         if (is_first_iter_skips) [[unlikely]]
@@ -2380,28 +2511,33 @@ namespace flash
             };
 
             // ~~~~~~~~~~~~~~~~~ define skip list ~~~~~~~~~~~~~~~~~
-            int const num_heads = get<2>(params.shape_Q);
-            uint64_t const num_q_blocks = cute::ceil_div(get<0>(params.shape_Q), kBlockM);
-            uint64_t const num_k_blocks = cute::ceil_div(get<0>(params.shape_K), kBlockN) + 1;
-            const uint32_t q_i = ((uint32_t)m_block);
-            uint64_t mask_offset = (bidb * num_heads * num_q_blocks * num_k_blocks) + (bidh * num_q_blocks * num_k_blocks) + (q_i * num_k_blocks);
-            const int *read_skip_list = &params.qk_skip_mask_args.read_skip_list[mask_offset];
-            int *write_skip_list = &params.qk_skip_mask_args.write_skip_list[mask_offset];
+            // int const num_heads = get<2>(params.shape_Q);
+            // uint64_t const num_q_blocks = cute::ceil_div(get<0>(params.shape_Q), kBlockM);
+            // uint64_t const num_k_blocks = cute::ceil_div(get<0>(params.shape_K), kBlockN) + 1;
+            // const uint32_t q_i = ((uint32_t)m_block);
+            // uint64_t mask_offset = (bidb * num_heads * num_q_blocks * num_k_blocks) + (bidh * num_q_blocks * num_k_blocks) + (q_i * num_k_blocks);
+            // const int *read_skip_list = &params.qk_skip_mask_args.read_skip_list[mask_offset];
+            // int *write_skip_list = &params.qk_skip_mask_args.write_skip_list[mask_offset];
+            SkipListReader skip_reader;
+            skip_reader.init<TileShape_MNK>(params, bidb, bidh, m_block);
+            bool const saving_thread = thread_idx == 128;
+            SkipListWriter skip_writer;
+            skip_writer.init<TileShape_MNK>(params, bidb, bidh, m_block, saving_thread);
             // ~~~~~~~~~~~~~~~~~ end of define skip list ~~~~~~~~~~~~~~~~~
             // ~~~~~~~~~~~~~~~~~ skip list init ~~~~~~~~~~~~~~~~~
-            uint32_t skip_list_len = read_skip_list[0];
-            int read_idx = 1;
-            int write_idx = 1;
-            bool is_skipping = true;
+            // uint32_t skip_list_len = read_skip_list[0];
+            // int read_idx = 1;
+            // int write_idx = 1;
+            // bool is_skipping = true;
 
-            int start_idx = read_skip_list[read_idx];
-            int end_idx = read_skip_list[read_idx + 1];
+            // int start_idx = read_skip_list[read_idx];
+            // int end_idx = read_skip_list[read_idx + 1];
             // ~~~~~~~~~~~~~~~~~ end of skip list init ~~~~~~~~~~
 
             int const seqlen_q = seqlen_info.seqlen_q;
             int const seqlen_k = seqlen_info.seqlen_k;
             // int n_block = n_block_max - 1;
-            int n_block = start_idx;
+            int n_block = skip_reader.start_idx;
 
             flash::Mask<kBlockM, kBlockN, PackGQA, TiledMmaQK> mask(
                 thread_idx, seqlen_q, seqlen_k, params.window_size_left, params.window_size_right, 0 /*sink_token_length*/,
@@ -2495,7 +2631,7 @@ namespace flash
                 cute::copy(smem_tiled_copy_Q, tSsQ_copy_view, tSrQ_copy_view);
             }
 
-            bool const saving_thread = thread_idx == 128;
+            // bool const saving_thread = thread_idx == 128;  // Already defined with skip_writer initialization
             // TONY: WE SHOULD disable this for first version
             if constexpr (IntraWGOverlap)
             {
@@ -2675,11 +2811,12 @@ namespace flash
 //                 }
                 bool is_first_iter_skips = true;
                 // #pragma unroll 1
-                for (; read_idx <= skip_list_len; read_idx += 2)
+                for (; skip_reader.has_more(); skip_reader.advance())
                 {
-                    start_idx = read_skip_list[read_idx];
-                    end_idx = read_skip_list[read_idx + 1];
-                    for (n_block = start_idx; n_block < end_idx; n_block++)
+                    // start_idx = read_skip_list[read_idx];
+                    // end_idx = read_skip_list[read_idx + 1];
+                    skip_reader.load_range();
+                    for (n_block = skip_reader.start_idx; n_block < skip_reader.end_idx; n_block++)
                     {
                         // this happens only in the first iteration of the loop
                         if (is_first_iter_skips) [[unlikely]]
@@ -2691,24 +2828,27 @@ namespace flash
                         {
                             skip = fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/);
                         }
-                        if (saving_thread && (skip != is_skipping))
-                        {
-                            write_skip_list[write_idx] = n_block;
-                            write_idx++;
-                            is_skipping = skip;
-                        }
+                        // if (saving_thread && (skip != is_skipping))
+                        // {
+                        //     write_skip_list[write_idx] = n_block;
+                        //     write_idx++;
+                        //     is_skipping = skip;
+                        // }
+                        skip_writer.record_transition(skip, n_block);
                     }
-                    is_skipping = true;
-                    if (saving_thread && (skip != is_skipping))
-                    {
-                        write_skip_list[write_idx] = end_idx;
-                        write_idx++;
-                    }
+                    // is_skipping = true;
+                    // if (saving_thread && (skip != is_skipping))
+                    // {
+                    //     write_skip_list[write_idx] = end_idx;
+                    //     write_idx++;
+                    // }
+                    skip_writer.record_range_end(skip, skip_reader.end_idx);
                 }
-                if (saving_thread)
-                {
-                    write_skip_list[0] = write_idx - 1;
-                }
+                // if (saving_thread)
+                // {
+                //     write_skip_list[0] = write_idx - 1;
+                // }
+                skip_writer.finalize();
                 // Separate masking iterations on the left for local attention
                 if constexpr (Is_local)
                 {
@@ -2897,11 +3037,12 @@ namespace flash
 
                 bool is_first_iter_skips = true;
                 // #pragma unroll 1
-                for (; read_idx <= skip_list_len; read_idx += 2)
+                for (; skip_reader.has_more(); skip_reader.advance())
                 {
-                    start_idx = read_skip_list[read_idx];
-                    end_idx = read_skip_list[read_idx + 1];
-                    for (n_block = start_idx; n_block < end_idx; n_block++)
+                    // start_idx = read_skip_list[read_idx];
+                    // end_idx = read_skip_list[read_idx + 1];
+                    skip_reader.load_range();
+                    for (n_block = skip_reader.start_idx; n_block < skip_reader.end_idx; n_block++)
                     {
                         // this happens only in the first iteration of the loop
                         if (is_first_iter_skips) [[unlikely]]
@@ -2913,24 +3054,27 @@ namespace flash
                         {
                             skip = fwd_step(n_block, no_mask_fn, cute::false_type{} /*is_first_iter*/, cute::false_type{} /*check_inf*/);
                         }
-                        if (saving_thread && (skip != is_skipping))
-                        {
-                            write_skip_list[write_idx] = n_block;
-                            write_idx++;
-                            is_skipping = skip;
-                        }
+                        // if (saving_thread && (skip != is_skipping))
+                        // {
+                        //     write_skip_list[write_idx] = n_block;
+                        //     write_idx++;
+                        //     is_skipping = skip;
+                        // }
+                        skip_writer.record_transition(skip, n_block);
                     }
-                    is_skipping = true;
-                    if (saving_thread && (skip != is_skipping))
-                    {
-                        write_skip_list[write_idx] = end_idx;
-                        write_idx++;
-                    }
+                    // is_skipping = true;
+                    // if (saving_thread && (skip != is_skipping))
+                    // {
+                    //     write_skip_list[write_idx] = end_idx;
+                    //     write_idx++;
+                    // }
+                    skip_writer.record_range_end(skip, skip_reader.end_idx);
                 }
-                if (saving_thread)
-                {
-                    write_skip_list[0] = write_idx - 1;
-                }
+                // if (saving_thread)
+                // {
+                //     write_skip_list[0] = write_idx - 1;
+                // }
+                skip_writer.finalize();
 
                 // DOR and TONY: not running in our case
                 // Separate masking iterations on the left for local attention
