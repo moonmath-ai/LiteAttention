@@ -71,14 +71,18 @@ namespace flash
             list_ptr = &params.qk_skip_mask_args.read_skip_list[mask_offset];
             skip_list_len = list_ptr[0];
             // read_idx = 1;
-            // TODO: find a better way to handle the edge case in which we skip everything
-            if (skip_list_len != 0){
-                load_range();
-            }else{
-                start_idx = 0;
-                end_idx = 0;
-            }
-            // load_range();
+
+            // // TODO: find a better way to handle the edge case in which we skip everything
+            // if (skip_list_len != 0){
+            //     load_range();
+            // }else{
+            //     start_idx = 0;
+            //     end_idx = 0;
+            // }
+
+            // we ignore the edge case which skip_list_len == 0 because even in this case
+            // we will be better off loading the first range because it's like to use the first range 2 timesteps ago
+            load_range();
         }
 
         __device__ __forceinline__ 
@@ -943,14 +947,14 @@ namespace flash
             {
                 if constexpr (Transpose_V)
                 {
-#pragma unroll
+                    #pragma unroll
                     for (int i = 0; i < size<1, 1>(tTranssVt); ++i)
                     {
                         Tensor tTransrV = make_fragment_like(tTranssV(_, make_coord(_, _0{}), _0{}));
                         static_assert(size<0>(tTransrV) == 16);
                         Tensor tTransrV_64 = recast<uint2>(tTransrV);
                         cute::copy(s2r_tiled_copy_vt, tTranssVt(_, make_coord(_, i), stage), tTransrV);
-#pragma unroll
+                        #pragma unroll
                         for (int j = 0; j < size(tTransrV_64); ++j)
                         {
                             uint32_t upper = tTransrV_64[j].x;
@@ -1457,7 +1461,7 @@ namespace flash
             auto store_scales = [&](auto &scales, int stage)
             {
                 static_assert(CUTE_STATIC_V(size(scales)) == CUTE_STATIC_V(size(taccOcO_row)));
-#pragma unroll
+                #pragma unroll
                 for (int mi = 0; mi < size(taccOcO_row); ++mi)
                 {
                     if (get<1>(taccOcO_row(_0{})) == 0)
@@ -1747,7 +1751,7 @@ namespace flash
                     int const n_block_min_causal_local_mask = BlockMN_t::get_n_block_min_causal_local_mask(
                         seqlen_info, m_block, n_block_min, params.window_size_right,
                         params.attention_chunk_divmod, params.qhead_per_khead_divmod);
-#pragma unroll 1
+                    #pragma unroll 1
                     for (; n_block >= n_block_min_causal_local_mask; --n_block)
                     {
                         fwd_step(n_block, mask_fn, cute::true_type{} /*check_inf*/);
@@ -1759,32 +1763,33 @@ namespace flash
                     params.attention_chunk_divmod, params.qhead_per_khead_divmod);
                 auto no_mask_fn = [](auto &tSrS, int n_block) {};
                 if constexpr (!Is_skipable){
-#pragma unroll 1
+                    #pragma unroll 1
                     for (; n_block >= n_block_min_before_local_mask; --n_block)
                     {
                         fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/);
                     }
                 }else{
-                    bool is_first_iter_skips = true;
-                    for (; skip_reader.has_more(); skip_reader.advance())
+
+                    if constexpr (IsSkipWriter) skip_writer.record_transition(skip, n_block);
+                    ++n_block;
+                    do
                     {
-                        skip_reader.load_range();
-                        for (n_block = skip_reader.start_idx; n_block < skip_reader.end_idx; n_block++)
+                        for (; n_block < skip_reader.end_idx; n_block++)
                         {
-                            // this happens only in the first iteration of the loop
-                            if (is_first_iter_skips) [[unlikely]]
-                            {
-                                is_first_iter_skips = false;
-                                // continue;
-                            }
-                            else
-                            {
-                                skip = fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/);
-                            }
+                            skip = fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/);
                             if constexpr (IsSkipWriter) skip_writer.record_transition(skip, n_block);
                         }
+
                         if constexpr (IsSkipWriter) skip_writer.record_range_end(skip, skip_reader.end_idx);
-                    }
+
+                        skip_reader.advance();
+                        if (!skip_reader.has_more()) break;
+
+                        skip_reader.load_range();
+                        n_block = skip_reader.start_idx;
+
+                    } while (true);
+
                     if constexpr (IsSkipWriter) skip_writer.finalize();
                 }
 
@@ -1793,7 +1798,7 @@ namespace flash
                 {
                     auto local_mask_fn = [&](auto &tSrS, int n_block)
                     { mask.template apply<false /*Seqlenk_mask*/, false /*Causal_mask*/, Is_local>(tSrS, m_block, n_block); };
-#pragma unroll 1
+                    #pragma unroll 1
                     for (; n_block >= n_block_min; --n_block)
                     {
                         fwd_step(n_block, local_mask_fn, cute::bool_constant<Is_local>{} /*check_inf*/);
@@ -1949,6 +1954,7 @@ namespace flash
 
                     warpgroup_wait<0>();
                     pipeline_v.consumer_release(smem_pipe_read); // release V
+                    return skip;
                 };
 
                 auto first_iter_mask_fn = [&](auto &tSrS, int n_block)
@@ -1963,7 +1969,7 @@ namespace flash
                     int const n_block_min_causal_local_mask = BlockMN_t::get_n_block_min_causal_local_mask(
                         seqlen_info, m_block, n_block_min, params.window_size_right,
                         params.attention_chunk_divmod, params.qhead_per_khead_divmod);
-#pragma unroll 1
+                    #pragma unroll 1
                     for (; n_block >= n_block_min_causal_local_mask; --n_block)
                     {
                         fwd_step(n_block, mask_fn, cute::false_type{} /*is_first_iter*/, cute::true_type{} /*check_inf*/);
@@ -1974,32 +1980,32 @@ namespace flash
                     params.attention_chunk_divmod, params.qhead_per_khead_divmod);
                 auto no_mask_fn = [](auto &tSrS, int n_block) {};
                 if constexpr (!Is_skipable){
-#pragma unroll 1
+                    #pragma unroll 1
                     for (; n_block >= n_block_min_before_local_mask; --n_block)
                     {
                         fwd_step(n_block, no_mask_fn, cute::false_type{} /*is_first_iter*/, cute::false_type{} /*check_inf*/);
                     }
                 }else{
-                    bool is_first_iter_skips = true;
-                    for (; skip_reader.has_more(); skip_reader.advance())
+                    if constexpr (IsSkipWriter) skip_writer.record_transition(skip, n_block);
+                    ++n_block;
+                    do
                     {
-                        skip_reader.load_range();
-                        for (n_block = skip_reader.start_idx; n_block < skip_reader.end_idx; n_block++)
+                        for (; n_block < skip_reader.end_idx; n_block++)
                         {
-                            // this happens only in the first iteration of the loop
-                            if (is_first_iter_skips) [[unlikely]]
-                            {
-                                is_first_iter_skips = false;
-                                // continue;
-                            }
-                            else
-                            {
-                                skip = fwd_step(n_block, no_mask_fn, cute::false_type{} /*is_first_iter*/, cute::false_type{} /*check_inf*/);
-                            }
+                            skip = fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/, cute::false_type{} /*is_first_iter*/);
                             if constexpr (IsSkipWriter) skip_writer.record_transition(skip, n_block);
                         }
+
                         if constexpr (IsSkipWriter) skip_writer.record_range_end(skip, skip_reader.end_idx);
-                    }
+
+                        skip_reader.advance();
+                        if (!skip_reader.has_more()) break;
+
+                        skip_reader.load_range();
+                        n_block = skip_reader.start_idx;
+
+                    } while (true);
+
                     if constexpr (IsSkipWriter) skip_writer.finalize();
                 }
 
@@ -2008,7 +2014,7 @@ namespace flash
                 {
                     auto local_mask_fn = [&](auto &tSrS, int n_block)
                     { mask.template apply<false /*Seqlenk_mask*/, false /*Causal_mask*/, Is_local>(tSrS, m_block, n_block); };
-#pragma unroll 1
+                    #pragma unroll 1
                     for (; n_block >= n_block_min; --n_block)
                     {
                         fwd_step(n_block, local_mask_fn, cute::false_type{} /*is_first_iter*/, cute::bool_constant<Is_local>{} /*check_inf*/);
@@ -2090,7 +2096,7 @@ namespace flash
             auto load_scales = [&](auto &scales, int stage)
             {
                 static_assert(CUTE_STATIC_V(size(scales)) == CUTE_STATIC_V(size(taccOcO_row)));
-#pragma unroll
+                #pragma unroll
                 for (int mi = 0; mi < size(taccOcO_row); ++mi)
                 {
                     scales(mi) = sScale(get<0>(taccOcO_row(mi)), stage);
@@ -2113,8 +2119,8 @@ namespace flash
             cutlass::arch::NamedBarrier::arrive(NumMmaThreads, static_cast<uint32_t>(FwdNamedBarriers::PEmpty) /*id*/);
             pipeline_v.consumer_release(smem_pipe_read); // release V
             --n_block;
-
-#pragma unroll 1
+            
+            #pragma unroll 1
             for (; n_block >= n_block_min; --n_block)
             {
                 cutlass::arch::NamedBarrier::sync(NumMmaThreads, static_cast<uint32_t>(FwdNamedBarriers::PFull) /*id*/);
@@ -2247,8 +2253,8 @@ namespace flash
             // if (thread_idx == 0) { printf("Producer: Done loading V, n_block = %d, n_block_new_min = %d\n", n_block, n_block_new_min); }
             ++smem_pipe_write;
             --n_block;
-// if (thread_idx == 0) { printf("Producer: before for loop\n"); }
-#pragma unroll 1
+            // if (thread_idx == 0) { printf("Producer: before for loop\n"); }
+            #pragma unroll 1
             for (; n_block >= n_block_new_min; --n_block)
             {
                 if (should_load_KV)
@@ -2356,7 +2362,7 @@ namespace flash
             Tensor cK = cute::make_identity_tensor(select<1, 2>(TileShape_MNK{})); // (BLK_N,BLK_K) -> (blk_n,blk_k)
             Tensor tKcK = gmem_thr_copy_kv.partition_D(cK);
             Tensor tKpK = make_tensor<bool>(make_shape(size<2>(tKsK)));
-#pragma unroll
+            #pragma unroll
             for (int k = 0; k < size(tKpK); ++k)
             {
                 tKpK(k) = get<1>(tKcK(_0{}, _0{}, k)) < get<1>(params.shape_K);
@@ -2364,7 +2370,7 @@ namespace flash
             Tensor cV = cute::make_identity_tensor(select<2, 1>(TileShape_MNK_PV{})); // (BLK_N,BLK_K_V) -> (blk_n,blk_k_v)
             Tensor tVcV = cute::conditional_return<SameHeadDim>(tKcK, gmem_thr_copy_kv.partition_D(cV));
             Tensor tVpV_ = make_tensor<bool>(make_shape(size<2>(tVsV)));
-#pragma unroll
+            #pragma unroll
             for (int k = 0; k < size(tVpV_); ++k)
             {
                 tVpV_(k) = get<1>(tVcV(_0{}, _0{}, k)) < params.headdim_v;
@@ -2436,8 +2442,8 @@ namespace flash
                 cutlass::arch::NamedBarrier::sync(cutlass::NumThreadsPerWarpGroup, static_cast<uint32_t>(FwdNamedBarriers::WarpSchedulerWG1) - 1 + flash::canonical_warp_group_idx_nosync() /*id*/);
                 pipeline_v_new.consumer_release(smem_pipe_read);
             };
-
-#pragma unroll 1
+            
+            #pragma unroll 1
             for (int n_block = n_block_new_max - 1; n_block >= n_block_new_min; --n_block)
             {
                 if constexpr (PagedKVNonTMA)
