@@ -71,7 +71,14 @@ namespace flash
             list_ptr = &params.qk_skip_mask_args.read_skip_list[mask_offset];
             skip_list_len = list_ptr[0];
             // read_idx = 1;
+            // TODO: find a better way to handle the edge case in which we skip everything
+            if (skip_list_len != 0){
             load_range();
+            }else{
+                start_idx = 0;
+                end_idx = 0;
+            }
+            // load_range();
         }
 
         __device__ __forceinline__ 
