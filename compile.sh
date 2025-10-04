@@ -8,8 +8,8 @@ echo "Setting Flash Attention environment variables..."
 # In order as they appear in setup.py (lines 47-68)
 export FLASH_ATTENTION_DISABLE_BACKWARD=TRUE      # Line 47 - No training
 
-# export FLASH_ATTENTION_DISABLE_SPLIT=TRUE       # Line 48 - If sequences fit in memory  
-export FLASH_ATTENTION_DISABLE_SPLIT=FALSE        # Line 48 - If sequences fit in memory  
+export FLASH_ATTENTION_DISABLE_SPLIT=TRUE       # Line 48 - If sequences fit in memory  
+# export FLASH_ATTENTION_DISABLE_SPLIT=FALSE        # Line 48 - If sequences fit in memory  
 
 export FLASH_ATTENTION_DISABLE_PAGEDKV=TRUE       # Line 49 - Not needed without autoregressive
 # export FLASH_ATTENTION_DISABLE_PAGEDKV=FALSE    # Line 49 - Not needed without autoregressive
