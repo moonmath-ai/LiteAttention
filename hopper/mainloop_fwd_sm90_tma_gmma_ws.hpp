@@ -1026,17 +1026,13 @@ namespace flash
                 pipeline_vt.consumer_release(smem_pipe_read);
             };
 
-            int n_block = [&]
-            {
-                if constexpr (Is_skipable)
-                {
-                    return skip_reader.start_idx;
+            int n_block;
+            if constexpr (Is_skipable){
+                n_block = skip_reader.start_idx;
                 }
-                else
-                {
-                    return n_block_max - 1;
+            else{
+                n_block = n_block_max - 1;
                 }
-            }();
 
             int warp_idx_in_warpgroup = __shfl_sync(0xffffffff, (threadIdx.x / 32) % 4, 0);
             // If this is true, we're guaranteed that only the first warp will execute this function
@@ -1475,16 +1471,13 @@ namespace flash
 
             int const seqlen_q = seqlen_info.seqlen_q;
             int const seqlen_k = seqlen_info.seqlen_k;
-            // int n_block = n_block_max - 1;
-            int n_block = [&]
-            {
+            int n_block;
                 if constexpr (Is_skipable){
-                    return skip_reader.start_idx;
+                n_block = skip_reader.start_idx;
                 }
                 else{
-                    return n_block_max - 1;
+                n_block = n_block_max - 1;
                 }
-            }();
 
             flash::Mask<kBlockM, kBlockN, PackGQA, TiledMmaQK> mask(
                 thread_idx, seqlen_q, seqlen_k, params.window_size_left, params.window_size_right, 0 /*sink_token_length*/,
