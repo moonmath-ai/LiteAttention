@@ -810,460 +810,10 @@ namespace flash
                 }
             }
 
-            // ~~~~~~~~~~~~~~~~~ define skip list ~~~~~~~~~~~~~~~~~
-            // DOR: height of the Q block
-            // static constexpr int kBlockM = get<0>(TileShape_MNK{});
-            // DOR: height of the K/V block
-            // static constexpr int kBlockN = get<1>(TileShape_MNK{});
-            // static constexpr int MmaWarpGroups = size(TiledMmaPV{}) / cutlass::NumThreadsPerWarpGroup;
-
-            // int const num_heads = get<2>(params.shape_Q);
-            // int const num_q_blocks = cute::ceil_div(get<0>(params.shape_Q), kBlockM / MmaWarpGroups);
-            // uint64_t const num_q_blocks = cute::ceil_div(get<0>(params.shape_Q), kBlockM);
-            // uint64_t const num_k_blocks = cute::ceil_div(get<0>(params.shape_K), kBlockN) + 1;
-            // const uint32_t q_i = ((uint32_t)m_block);
-            // uint64_t mask_offset = (bidb * num_heads * num_q_blocks * num_k_blocks) + (bidh * num_q_blocks * num_k_blocks) + (q_i * num_k_blocks);
-            // const int *read_skip_list = &params.qk_skip_mask_args.read_skip_list[mask_offset];
             SkipListReader skip_reader;
-            skip_reader.init<TileShape_MNK>(params, bidb, bidh, m_block);
-            // ~~~~~~~~~~~~~~~~~ end of define skip list ~~~~~~~~~~~~~~~~~
-
-            Tensor sQ = make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_q.data()), SmemLayoutQ{});
-            Tensor sK = make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_k.data()), SmemLayoutK{});
-            Tensor sK_pi = as_position_independent_swizzle_tensor(sK);
-            // as_position_independent_swizzle_tensor makes address calculation easier when we do LDSM & STSM to transpose.
-            // But it requires smem_vt and smem_v to be aligned to e.g 512 bytes.
-            Tensor sVt = [&]
+            if constexpr (Is_skipable)
             {
-                if constexpr (!Transpose_V)
-                {
-                    return make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_v.data()), SmemLayoutVt{});
-                }
-                else
-                {
-                    return cute::as_position_independent_swizzle_tensor(make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_vt.data()), SmemLayoutVt{}));
-                }
-            }();
-            // Only used if Transpose_V
-            Tensor sV = cute::as_position_independent_swizzle_tensor(make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_v.data()), SmemLayoutVtMma{}));
-            // Only used if we're using cp.async to load V
-            Tensor sVcpasync = [&]
-            {
-                if constexpr (!Transpose_V)
-                {
-                    return cute::as_position_independent_swizzle_tensor(make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_v.data()), SmemLayoutVCpAsync{}));
-                }
-                else
-                {
-                    return cute::as_position_independent_swizzle_tensor(make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_vt.data()), SmemLayoutVCpAsync{}));
-                }
-            }();
-            Tensor sQv = make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_qv.data()), SmemLayoutQv{});
-
-            int const thread_idx = threadIdx.x % NumProducerThreads;
-            int const bidh_kv = !PackGQA ? params.qhead_per_khead_divmod.divide(bidh) : bidh;
-            int const bidb_kv = params.kv_batch_idx == nullptr ? bidb : params.kv_batch_idx[bidb];
-
-            // Prepare the TMA loads
-            uint32_t block_rank_in_cluster = cute::block_rank_in_cluster();
-            constexpr uint32_t cluster_shape_x = get<0>(ClusterShape());
-            uint2 cluster_local_block_id = {block_rank_in_cluster % cluster_shape_x, block_rank_in_cluster / cluster_shape_x};
-
-            bool const is_varlen_q = Varlen && params.cu_seqlens_q;
-            bool const is_varlen_k = Varlen && params.cu_seqlens_k;
-            Tensor mQ = params.tma_load_Q.get_tma_tensor(params.shape_Q)(_, _, bidh, !is_varlen_q ? bidb : 0);
-            Tensor mK_TMA = params.tma_load_K.get_tma_tensor(params.shape_K)(_, _, bidh_kv, _);
-            auto shape_V = make_shape(params.headdim_v, get<0>(params.shape_K), get<2>(params.shape_K), get<3>(params.shape_K));
-            Tensor mVt_TMA = params.tma_load_V.get_tma_tensor(shape_V)(_, _, bidh_kv, _);
-
-            Tensor gQ = local_tile(domain_offset(make_coord(seqlen_info.offset_q, _0{}), mQ), select<0, 2>(TileShape_MNK{}), make_coord(m_block, _0{})); // (M, K)
-            // if (cute::thread0()) { printf("Varlen = %d, params.leftpad_k = %p, leftpad_k = %d\n", Varlen, params.leftpad_k, leftpad_k); }
-            Tensor gK_TMA = local_tile(domain_offset(make_coord(seqlen_info.offset_k, _0{}, _0{}), mK_TMA), select<1, 2>(TileShape_MNK{}), make_coord(_, _0{}, _));      // (N, K, _, _)
-            Tensor gVt_TMA = local_tile(domain_offset(make_coord(_0{}, seqlen_info.offset_k, _0{}), mVt_TMA), select<1, 2>(TileShape_MNK_PV{}), make_coord(_0{}, _, _)); // (K, N, _, _)
-
-            auto block_tma_Q = params.tma_load_Q.get_slice(_0{});
-            Tensor tQgQ = group_modes<0, 3>(block_tma_Q.partition_S(gQ)); // (TMA)
-            Tensor tQsQ = group_modes<0, 3>(block_tma_Q.partition_D(sQ)); // (TMA)
-            if (Use_TMA_Q && thread_idx == 0)
-            {
-                prefetch(params.tma_load_Q, tQgQ);
-            }
-            // tma_partition doesn't handle position_independent_swizzle_tensor correctly, so we need to do it manually
-            auto block_tma_K = params.tma_load_K.get_slice(cluster_local_block_id.x);
-            Tensor tKgK_TMA = group_modes<0, 3>(block_tma_K.partition_S(gK_TMA)); // (TMA, k, batch)
-            Tensor tKsK_TMA = group_modes<0, 3>(block_tma_K.partition_D(sK));     // (TMA, PIPE)
-            auto block_tma_V = params.tma_load_V.get_slice(cluster_local_block_id.x);
-            Tensor tVgVt_TMA = group_modes<0, 3>(block_tma_V.partition_S(gVt_TMA)); // (TMA, k, batch)
-            Tensor tVsVt_TMA = group_modes<0, 3>(block_tma_V.partition_D(sVt));     // (TMA, PIPE)
-            auto [tQvgQv, tQvsQv] = [&]
-            {
-                if constexpr (HasQv)
-                {
-                    auto shape_Qv = make_shape(get<0>(params.shape_Q), params.headdim_v, get<2>(params.shape_Q), get<3>(params.shape_Q));
-                    Tensor mQv = params.tma_load_Qv.get_tma_tensor(shape_Qv)(_, _, bidh, !is_varlen_q ? bidb : 0);
-                    Tensor gQv = local_tile(domain_offset(make_coord(seqlen_info.offset_q, _0{}), mQv), select<0, 2>(TileShape_MNK_QV{}), make_coord(m_block, _0{})); // (M, Kv)
-                    auto block_tma_Qv = params.tma_load_Qv.get_slice(_0{});
-                    Tensor tQvgQv = group_modes<0, 3>(block_tma_Qv.partition_S(gQv)); // (TMA)
-                    Tensor tQvsQv = group_modes<0, 3>(block_tma_Qv.partition_D(sQv)); // (TMA)
-                    return cute::make_tuple(tQvgQv, tQvsQv);
-                }
-                else
-                {
-                    return cute::make_tuple(nullptr, nullptr);
-                }
-            }();
-
-            // This is used to index into the batch dimension of mK and mV
-            int const bidb_kv_idx = !is_varlen_k && !params.ptr_pagetable ? bidb_kv : 0;
-
-            using PagedKVManager_t = PagedKVManager<get<1>(TileShape_MNK{}), get<2>(TileShape_MNK{}), get<1>(TileShape_MNK_PV{}), NumProducerThreads, Element, Transpose_V || !IntraWGOverlap /*KV_Same_Iter*/>;
-            PagedKVManager_t paged_kv_manager(
-                params.ptr_pagetable, params.shape_pagetable, params.stride_pagetable,
-                params.ptr_K, params.shape_K, params.stride_K,
-                params.ptr_V, params.headdim_v, params.stride_V,
-                params.page_size_divmod, params.blockN_per_page_size_divmod,
-                bidb_kv, bidh_kv, thread_idx, seqlen_info.seqlen_k, seqlen_info.leftpad_k, bidb_kv_idx);
-
-            // Set up for transposing V, only used if Transpose_V
-            S2RTiledCopyVt s2r_tiled_copy_vt;
-            R2STiledCopyV r2s_tiled_copy_v;
-            auto s2r_thr_copy_vt = s2r_tiled_copy_vt.get_thread_slice(thread_idx);
-            auto r2s_thr_copy_v = r2s_tiled_copy_v.get_thread_slice(thread_idx);
-            // flat_divide(sVt, LDSM_divide_shape{}):  (64, 8, kHeadDim / 64, kBlockN / 8, kStages)
-            Tensor tTranssVt_ = s2r_thr_copy_vt.partition_S(flat_divide(sVt, LDSM_divide_shape{})); // ((16, 1), 1, 1, kHeadDim / 64, kBlockN / 32, kStages)
-            // flat_divide(sV, STSM_divide_shape{}):  (8, 16, kHeadDim / 8, (4, kBlockN / 64), kStages)
-            Tensor tTranssV_ = r2s_thr_copy_v.partition_D(flat_divide(sV, STSM_divide_shape{})); // ((16, 1), 1, 1, kHeadDim / 64, (2, kBlockN / 64), kStages)
-            CUTE_STATIC_ASSERT_V(rank(tTranssVt_) == rank(tTranssV_));
-            CUTE_STATIC_ASSERT_V(size<0>(tTranssVt_) == size<0>(tTranssV_));
-            CUTE_STATIC_ASSERT_V(size<1>(tTranssVt_) == size<1>(tTranssV_));
-            CUTE_STATIC_ASSERT_V(size<2>(tTranssVt_) == size<2>(tTranssV_));
-            CUTE_STATIC_ASSERT_V(size<3>(tTranssVt_) == size<3>(tTranssV_));
-            CUTE_STATIC_ASSERT_V(size<4>(tTranssVt_) == size<4>(tTranssV_));
-            // DOR: returne here and understand this better!
-            // Faster to have 2 LDSM.T, byte permute, STSM for better ILP
-            static constexpr int Transpose_ILP = (size<2>(tTranssVt_) * size<3>(tTranssVt_)) % 2 == 0 ? 2 : 1;
-            Tensor tTranssVt = logical_divide(group_modes<1, rank(tTranssVt_) - 1>(tTranssVt_), Shape<Underscore, Int<Transpose_ILP>>{}); // ((16, 1), (2, kHeadDim / 64 * kBlockN / 32 / 2), kStages)
-            Tensor tTranssV = logical_divide(group_modes<1, rank(tTranssV_) - 1>(tTranssV_), Shape<Underscore, Int<Transpose_ILP>>{});    // ((16, 1), (2, kHeadDim / 64 * kBlockN / 32 / 2), kStages)
-            auto transpose_V = [&](int stage)
-            {
-                if constexpr (Transpose_V)
-                {
-#pragma unroll
-                    for (int i = 0; i < size<1, 1>(tTranssVt); ++i)
-                    {
-                        Tensor tTransrV = make_fragment_like(tTranssV(_, make_coord(_, _0{}), _0{}));
-                        static_assert(size<0>(tTransrV) == 16);
-                        Tensor tTransrV_64 = recast<uint2>(tTransrV);
-                        cute::copy(s2r_tiled_copy_vt, tTranssVt(_, make_coord(_, i), stage), tTransrV);
-#pragma unroll
-                        for (int j = 0; j < size(tTransrV_64); ++j)
-                        {
-                            uint32_t upper = tTransrV_64[j].x;
-                            uint32_t lower = tTransrV_64[j].y;
-                            tTransrV_64[j].x = __byte_perm(upper, lower, 0x6420);
-                            tTransrV_64[j].y = __byte_perm(upper, lower, 0x7531);
-                        }
-                        cute::copy(r2s_tiled_copy_v, tTransrV, tTranssV(_, make_coord(_, i), stage));
-                    }
-                }
-            };
-
-            uint16_t mcast_mask_kv = 0;
-            if constexpr (cute::is_same_v<GmemTiledCopyKV, SM90_TMA_LOAD_MULTICAST>)
-            {
-                auto block_layout = Layout<ClusterShape>{}; // (m,n) -> block_id
-                for (int m = 0; m < size<0>(block_layout); ++m)
-                {
-                    mcast_mask_kv |= (uint16_t(1) << block_layout(m, cluster_local_block_id.y, _0{}));
-                }
-            }
-
-            auto load_K = [&](int const n_block, auto const &smem_pipe_write, auto need_seqlenk_masking_type)
-            {
-                pipeline_k.producer_acquire(smem_pipe_write);
-                if constexpr (!PagedKVNonTMA)
-                {
-                    auto [n_block_idx, bidb_kv_idx] = paged_kv_manager.get_indices_for_K_TMA();
-                    copy(params.tma_load_K.with(*pipeline_k.producer_get_barrier(smem_pipe_write), mcast_mask_kv, TMA::CacheHintSm90::EVICT_LAST),
-                         tKgK_TMA(_, n_block_idx, bidb_kv_idx), tKsK_TMA(_, smem_pipe_write.index()));
-                }
-                else
-                {
-                    constexpr bool Seqlenk_mask = decltype(need_seqlenk_masking_type)::value;
-                    paged_kv_manager.template load_K<Seqlenk_mask>(n_block, sK_pi(_, _, smem_pipe_write.index()));
-                    pipeline_k.producer_commit(smem_pipe_write, cutlass::arch::cpasync_barrier_arrive);
-                }
-            };
-
-            auto load_V = [&](int const n_block, auto const &smem_pipe_write, auto need_seqlenk_masking_type)
-            {
-                auto pipeline_v_load = cute::conditional_return<!Transpose_V>(pipeline_v, pipeline_vt);
-                pipeline_v_load.producer_acquire(smem_pipe_write);
-                if constexpr (!PagedKVNonTMA)
-                {
-                    auto [n_block_idx, bidb_kv_idx] = paged_kv_manager.get_indices_for_V_TMA();
-                    copy(params.tma_load_V.with(*pipeline_v_load.producer_get_barrier(smem_pipe_write), mcast_mask_kv, TMA::CacheHintSm90::EVICT_LAST),
-                         tVgVt_TMA(_, n_block_idx, bidb_kv_idx), tVsVt_TMA(_, smem_pipe_write.index()));
-                }
-                else
-                {
-                    constexpr bool Seqlenk_mask = decltype(need_seqlenk_masking_type)::value;
-                    paged_kv_manager.template load_V<Seqlenk_mask>(n_block, sVcpasync(_, _, smem_pipe_write.index()));
-                    pipeline_v_load.producer_commit(smem_pipe_write, cutlass::arch::cpasync_barrier_arrive);
-                }
-            };
-
-            auto copy_Vt_to_V = [&](auto const &smem_pipe_write)
-            {
-                // Instead of maintaining smem_pipe_read as a separate variable, we can just use smem_pipe_write,
-                // and exploit the invariance that smem_pipe_write.phase() == smem_pipe_read.phase() ^ 1.
-                // This saves 1 or 2 registers.
-                PipelineState smem_pipe_read{smem_pipe_write.index(), smem_pipe_write.phase() ^ 1, smem_pipe_write.count()};
-                pipeline_vt.consumer_wait(smem_pipe_read);
-                pipeline_v.producer_acquire(smem_pipe_write);
-                transpose_V(smem_pipe_write.index());
-                // SMEM fence to make sure V is transposed before math
-                cutlass::arch::fence_view_async_shared();
-                pipeline_v.producer_commit(smem_pipe_write);
-                // Very important: PipelineTmaAsync::consumer_release assumes that the warpgroup is synchronized
-                // before calling. Without this we get race conditions.
-                cutlass::arch::NamedBarrier::sync(cutlass::NumThreadsPerWarpGroup, cutlass::arch::ReservedNamedBarriers::TransposeBarrier /*id*/);
-                pipeline_vt.consumer_release(smem_pipe_read);
-            };
-
-            // int n_block = n_block_max - 1;
-            // int n_block = n_block_min;
-
-            // int skip_list_len = read_skip_list[0];
-            // int read_idx = 1;
-            // int start_idx = read_skip_list[read_idx];
-            // int end_idx = read_skip_list[read_idx + 1];
-            int n_block = skip_reader.start_idx;
-
-            int warp_idx_in_warpgroup = __shfl_sync(0xffffffff, (threadIdx.x / 32) % 4, 0);
-            // If this is true, we're guaranteed that only the first warp will execute this function
-            static constexpr bool SingleProducerWarp = NumProducerThreads == cutlass::NumThreadsPerWarp;
-            bool should_load_KV = !Use_TMA_KV || ((SingleProducerWarp || warp_idx_in_warpgroup == 0) && cute::elect_one_sync());
-
-            if (should_load_KV)
-            {
-                // int j_block = middle_out_indexing(n_block);
-                if constexpr (PagedKVNonTMA)
-                {
-                    paged_kv_manager.template load_page_table<true /*Seqlenk_mask*/, true /*First_iter*/>(n_block);
-                    // paged_kv_manager.template load_page_table<true /*Seqlenk_mask*/, true /*First_iter*/>(j_block);
-                }
-                else
-                {
-                    paged_kv_manager.template load_page_table_TMA<true /*First_iter*/>(n_block);
-                    // paged_kv_manager.template load_page_table_TMA<true /*First_iter*/>(j_block);
-                }
-                if constexpr (Transpose_V)
-                {
-                    load_V(n_block, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/);
-                }
-                // if (thread_idx == 0) { printf("Producer: main load, before load_K, index = %d\n", smem_pipe_write.index());}
-                load_K(n_block, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/);
-                // load_K(j_block, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/);
-                // if (thread_idx == 0) { printf("Producer: main load, after load K, index = %d\n", smem_pipe_write.index());}
-            }
-
-            if constexpr (Use_TMA_Q)
-            {
-                // Wait for the MMA warpgroups to signal that smem_q is ready
-                if (SingleProducerWarp || warp_idx_in_warpgroup == 0)
-                {
-                    cutlass::arch::NamedBarrier::sync(NumMmaThreadsQK + cutlass::NumThreadsPerWarp, static_cast<uint32_t>(FwdNamedBarriers::QueryEmpty) /*id*/);
-                }
-
-                if ((SingleProducerWarp || warp_idx_in_warpgroup == 0) && cute::elect_one_sync())
-                {
-                    shared_storage.pipelines.barrier_Q.arrive_and_expect_tx(TmaTransactionBytesQ);
-                    copy(params.tma_load_Q.with(reinterpret_cast<typename cutlass::arch::ClusterTransactionBarrier::ValueType &>(shared_storage.pipelines.barrier_Q), 0 /*mcast_mask*/, !Split ? TMA::CacheHintSm90::EVICT_FIRST : TMA::CacheHintSm90::EVICT_LAST),
-                         tQgQ, tQsQ);
-                    if constexpr (HasQv)
-                    {
-                        shared_storage.pipelines.barrier_Qv.arrive_and_expect_tx(TmaTransactionBytesQv);
-                        copy(params.tma_load_Qv.with(reinterpret_cast<typename cutlass::arch::ClusterTransactionBarrier::ValueType &>(shared_storage.pipelines.barrier_Qv), 0 /*mcast_mask*/, !Split ? TMA::CacheHintSm90::EVICT_FIRST : TMA::CacheHintSm90::EVICT_LAST),
-                             tQvgQv, tQvsQv);
-                    }
-                }
-            }
-            else
-            { // Load Q with cp.async
-                cutlass::arch::NamedBarrier::sync(NumMmaThreadsQK + NumProducerThreads, static_cast<uint32_t>(FwdNamedBarriers::QueryEmpty) /*id*/);
-                Tensor mQ = make_tensor(make_gmem_ptr(params.ptr_Q + seqlen_info.offset_q * get<0>(params.stride_Q)), params.shape_Q_packed, params.stride_Q_packed)(_, _, bidh, !is_varlen_q ? bidb : 0);
-                Tensor sQ_pi = cute::as_position_independent_swizzle_tensor(sQ);
-                using PackGQAt = flash::PackGQAManager<get<0>(TileShape_MNK{}), get<2>(TileShape_MNK{}), NumProducerThreads, Element>;
-                PackGQAt::load_Q(mQ, sQ_pi, params.qhead_per_khead_divmod, thread_idx, seqlen_info.seqlen_q, m_block);
-                auto &barrier_Q = shared_storage.pipelines.barrier_Q;
-                cutlass::arch::cpasync_barrier_arrive(reinterpret_cast<uint64_t *>(&barrier_Q));
-                barrier_Q.arrive();
-                if constexpr (HasQv)
-                {
-                    Tensor mQv = make_tensor(make_gmem_ptr(params.ptr_Qv + seqlen_info.offset_q * get<0>(params.stride_Qv)), params.shape_Qv_packed, params.stride_Qv_packed)(_, _, bidh, !is_varlen_q ? bidb : 0);
-                    Tensor sQv_pi = cute::as_position_independent_swizzle_tensor(sQv);
-                    using PackGQAt = flash::PackGQAManager<get<0>(TileShape_MNK_QV{}), get<2>(TileShape_MNK_QV{}), NumProducerThreads, Element>;
-                    PackGQAt::load_Q(mQv, sQv_pi, params.qhead_per_khead_divmod, thread_idx, seqlen_info.seqlen_q, m_block);
-                    auto &barrier_Qv = shared_storage.pipelines.barrier_Qv;
-                    cutlass::arch::cpasync_barrier_arrive(reinterpret_cast<uint64_t *>(&barrier_Qv));
-                    barrier_Qv.arrive();
-                }
-            }
-
-            // Wait for the MMA WGs to signal that smem_v are ready and V can be copied from gmem
-            // Need ClusterBarrier, not just NamedBarrier. Otherwise we might have CTA 0 finishing the
-            // TMA store on O first, call TMA multicast load on V, before CTA 1 can finishing TMA store on O.
-            // if (thread_idx == 0) { printf("Producer: main load, before barrier_O, work_idx = %d\n", work_idx);}
-            shared_storage.pipelines.barrier_O.wait((work_idx + 1) % 2);
-            // if (thread_idx == 0) { printf("Producer: main load, after barrier_O\n");}
-
-            // DOR: entering this if
-            if constexpr (!Transpose_V && !IntraWGOverlap)
-            {
-                // int j_block = middle_out_indexing(n_block);
-                if (should_load_KV)
-                {
-                    load_V(n_block, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/);
-                }
-                // if (should_load_KV) { load_V(j_block, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/); }
-            }
-            // int n_block_prev;
-            int n_block_prev = n_block;
-            // --n_block;
-            // // ++n_block;
-            // ++n_block;
-
-            #pragma unroll 1
-            for (; skip_reader.has_more(); skip_reader.advance())
-            {
-                // start_idx = read_skip_list[read_idx];
-                // end_idx = read_skip_list[read_idx + 1];
-                skip_reader.load_range();
-                for (n_block = skip_reader.start_idx; n_block < skip_reader.end_idx; n_block++)
-                {
-                    // this happens only in the first iteration of the loop
-                    if (n_block == n_block_prev) [[unlikely]]
-                        continue;
-
-                    PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
-                    ++smem_pipe_write;
-                    if (should_load_KV)
-                    {
-                        if constexpr (PagedKVNonTMA)
-                        {
-                            paged_kv_manager.template load_page_table<false /*Seqlenk_mask*/>(n_block);
-                            // paged_kv_manager.template load_page_table<false /*Seqlenk_mask*/>(j_block);
-                        }
-                        else
-                        {
-                            paged_kv_manager.load_page_table_TMA(n_block);
-                            // paged_kv_manager.load_page_table_TMA(j_block);
-                        }
-                        if constexpr (Transpose_V)
-                        {
-                            load_V(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/);
-                        }
-                        load_K(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/);
-                        // load_K(j_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/);
-                        if constexpr (!Transpose_V)
-                        {
-                            if constexpr (IntraWGOverlap)
-                            {
-                                load_V(n_block_prev, smem_pipe_write_v, cute::true_type{} /*Seqlenk_mask*/);
-                            }
-                            else
-                            {
-                                load_V(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/);
-                                // load_V(j_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/);
-                            }
-                        }
-                    }
-                    n_block_prev = n_block;
-                    if constexpr (Transpose_V)
-                    {
-                        copy_Vt_to_V(smem_pipe_write_v);
-                    }
-                }
-            }
-
-            // #pragma unroll (!Transpose_V && Use_TMA_KV ? 2 : 1)
-            // // for (; n_block < n_block_max; ++n_block) {
-            // for (; n_block >= n_block_min; --n_block) {
-            //     PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
-            //     ++smem_pipe_write;
-            //     if (should_load_KV) {
-            //             if constexpr (PagedKVNonTMA) {
-            //                 paged_kv_manager.template load_page_table<false /*Seqlenk_mask*/>(n_block);
-            //                 // paged_kv_manager.template load_page_table<false /*Seqlenk_mask*/>(j_block);
-            //             } else {
-            //                 paged_kv_manager.load_page_table_TMA(n_block);
-            //                 // paged_kv_manager.load_page_table_TMA(j_block);
-            //             }
-            //             if constexpr (Transpose_V) { load_V(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/); }
-            //             load_K(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/);
-            //             // load_K(j_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/);
-            //         if constexpr (!Transpose_V) {
-            //             if constexpr (IntraWGOverlap) {
-            //                 load_V(n_block_prev, smem_pipe_write_v, cute::true_type{} /*Seqlenk_mask*/);
-            //             } else {
-            //                 load_V(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/);
-            //                 // load_V(j_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/);
-            //             }
-            //         }
-            //     }
-            //     n_block_prev = n_block;
-            //     if constexpr (Transpose_V) { copy_Vt_to_V(smem_pipe_write_v); }
-            // }
-
-            scheduler_prefetch();
-            if constexpr (!Transpose_V && IntraWGOverlap)
-            {
-                if (should_load_KV)
-                {
-                    load_V(n_block_prev, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/);
-                }
-            }
-            if constexpr (Transpose_V)
-            {
-                copy_Vt_to_V(smem_pipe_write);
-            }
-            ++smem_pipe_write;
-            // At the end, all threads have the correct smem_pipe_write.
-            ++work_idx;
-        }
-
-        template <typename SchedulerPrefetch, typename SharedStorage>
-        CUTLASS_DEVICE void
-        load_no_skip(Params const &params,
-                     MainloopPipelineK pipeline_k,
-                     MainloopPipelineV pipeline_v,
-                     MainloopPipelineVt pipeline_vt,
-                     PipelineState &smem_pipe_write,
-                     SharedStorage &shared_storage,
-                     SchedulerPrefetch const &scheduler_prefetch,
-                     SeqlenInfo_t const &seqlen_info,
-                     cute::tuple<int32_t, int32_t, int32_t, int32_t> block_coord,
-                     int &work_idx)
-        {
-
-            // some of these are captured in lambda so can't use structured binding
-            int const m_block = get<0>(block_coord);
-            int const bidh = get<1>(block_coord);
-            int const bidb = get<2>(block_coord);
-            int const split_idx = get<3>(block_coord);
-            auto [n_block_min, n_block_max] = BlockMN_t::get_n_block_min_max(
-                seqlen_info, m_block, bidb, split_idx, params.num_splits,
-                params.window_size_left, params.window_size_right, params.attention_chunk_divmod,
-                params.qhead_per_khead_divmod);
-            // It's possible to have n_block_max <= n_block_min. Loading K can cause illegal memory access.
-            if constexpr (Is_causal || Is_local || Varlen || Split)
-            {
-                if (n_block_max <= n_block_min)
-                {
-                    scheduler_prefetch();
-                    return;
-                }
+                skip_reader.init<TileShape_MNK>(params, bidb, bidh, m_block);
             }
 
             Tensor sQ = make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_q.data()), SmemLayoutQ{});
@@ -1469,8 +1019,17 @@ namespace flash
                 pipeline_vt.consumer_release(smem_pipe_read);
             };
 
-            int n_block = n_block_max - 1;
-            // int n_block = n_block_min;
+            int n_block = [&]
+            {
+                if constexpr (Is_skipable)
+                {
+                    return skip_reader.start_idx;
+                }
+                else
+                {
+                    return n_block_max - 1;
+                }
+            }();
 
             int warp_idx_in_warpgroup = __shfl_sync(0xffffffff, (threadIdx.x / 32) % 4, 0);
             // If this is true, we're guaranteed that only the first warp will execute this function
@@ -1479,16 +1038,13 @@ namespace flash
 
             if (should_load_KV)
             {
-                // int j_block = middle_out_indexing(n_block);
                 if constexpr (PagedKVNonTMA)
                 {
                     paged_kv_manager.template load_page_table<true /*Seqlenk_mask*/, true /*First_iter*/>(n_block);
-                    // paged_kv_manager.template load_page_table<true /*Seqlenk_mask*/, true /*First_iter*/>(j_block);
                 }
                 else
                 {
                     paged_kv_manager.template load_page_table_TMA<true /*First_iter*/>(n_block);
-                    // paged_kv_manager.template load_page_table_TMA<true /*First_iter*/>(j_block);
                 }
                 if constexpr (Transpose_V)
                 {
@@ -1496,7 +1052,6 @@ namespace flash
                 }
                 // if (thread_idx == 0) { printf("Producer: main load, before load_K, index = %d\n", smem_pipe_write.index());}
                 load_K(n_block, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/);
-                // load_K(j_block, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/);
                 // if (thread_idx == 0) { printf("Producer: main load, after load K, index = %d\n", smem_pipe_write.index());}
             }
 
@@ -1550,46 +1105,24 @@ namespace flash
             shared_storage.pipelines.barrier_O.wait((work_idx + 1) % 2);
             // if (thread_idx == 0) { printf("Producer: main load, after barrier_O\n");}
 
-            // DOR: entering this if
-            if constexpr (!Transpose_V && !IntraWGOverlap)
+            // Lambda to load K and V for a given n_block
+            auto load_KV_for_block = [&](int n_block, int n_block_prev, PipelineState& smem_pipe_write, PipelineState& smem_pipe_write_v)
             {
-                // int j_block = middle_out_indexing(n_block);
-                if (should_load_KV)
-                {
-                    load_V(n_block, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/);
-                }
-                // if (should_load_KV) { load_V(j_block, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/); }
-            }
-            int n_block_prev = n_block;
-            --n_block;
-// ++n_block;
-#pragma unroll(!Transpose_V && Use_TMA_KV ? 2 : 1)
-            // for (; n_block < n_block_max; ++n_block) {
-            for (; n_block >= n_block_min; --n_block)
-            {
-                // int j_block = middle_out_indexing(n_block);
-                PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
-                ++smem_pipe_write;
                 if (should_load_KV)
                 {
                     if constexpr (PagedKVNonTMA)
                     {
                         paged_kv_manager.template load_page_table<false /*Seqlenk_mask*/>(n_block);
-                        // paged_kv_manager.template load_page_table<false /*Seqlenk_mask*/>(j_block);
                     }
                     else
                     {
                         paged_kv_manager.load_page_table_TMA(n_block);
-                        // paged_kv_manager.load_page_table_TMA(j_block);
                     }
                     if constexpr (Transpose_V)
                     {
                         load_V(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/);
                     }
-
                     load_K(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/);
-                    // load_K(j_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/);
-
                     if constexpr (!Transpose_V)
                     {
                         if constexpr (IntraWGOverlap)
@@ -1599,16 +1132,54 @@ namespace flash
                         else
                         {
                             load_V(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/);
-                            // load_V(j_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/);
                         }
                     }
                 }
-                n_block_prev = n_block;
-                if constexpr (Transpose_V)
+            };
+
+            if constexpr (!Transpose_V && !IntraWGOverlap)
+            {
+                if (should_load_KV)
                 {
-                    copy_Vt_to_V(smem_pipe_write_v);
+                    load_V(n_block, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/);
                 }
             }
+
+            int n_block_prev = n_block;
+            if constexpr (!Is_skipable){ --n_block; }
+
+            if constexpr (Is_skipable){
+                #pragma unroll 1
+                for (; skip_reader.has_more(); skip_reader.advance())
+                {
+                    skip_reader.load_range();
+                    for (n_block = skip_reader.start_idx; n_block < skip_reader.end_idx; n_block++)
+                    {
+                        // this happens only in the first iteration of the loop
+                        if (n_block == n_block_prev) [[unlikely]]
+                            continue;
+
+                        PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
+                        ++smem_pipe_write;
+                        load_KV_for_block(n_block, n_block_prev, smem_pipe_write, smem_pipe_write_v);
+                        n_block_prev = n_block;
+                        if constexpr (Transpose_V)
+                        {
+                            copy_Vt_to_V(smem_pipe_write_v);
+                        }
+                    }
+                }
+            }else{
+                #pragma unroll (!Transpose_V && Use_TMA_KV ? 2 : 1)
+                for (; n_block >= n_block_min; --n_block) {
+                    PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
+                    ++smem_pipe_write;
+                    load_KV_for_block(n_block, n_block_prev, smem_pipe_write, smem_pipe_write_v);
+                    n_block_prev = n_block;
+                    if constexpr (Transpose_V) { copy_Vt_to_V(smem_pipe_write_v); }
+                }
+            }
+
             scheduler_prefetch();
             if constexpr (!Transpose_V && IntraWGOverlap)
             {
