@@ -73,7 +73,7 @@ namespace flash
             // read_idx = 1;
             // TODO: find a better way to handle the edge case in which we skip everything
             if (skip_list_len != 0){
-            load_range();
+                load_range();
             }else{
                 start_idx = 0;
                 end_idx = 0;
@@ -1029,10 +1029,10 @@ namespace flash
             int n_block;
             if constexpr (Is_skipable){
                 n_block = skip_reader.start_idx;
-                }
+            }
             else{
                 n_block = n_block_max - 1;
-                }
+            }
 
             int warp_idx_in_warpgroup = __shfl_sync(0xffffffff, (threadIdx.x / 32) % 4, 0);
             // If this is true, we're guaranteed that only the first warp will execute this function
@@ -1149,30 +1149,43 @@ namespace flash
             }
 
             int n_block_prev = n_block;
-            if constexpr (!Is_skipable){ --n_block; }
 
             if constexpr (Is_skipable){
+                // finish the first range
+                ++n_block;
+
+                #pragma unroll 1
+                for (; n_block < skip_reader.end_idx; n_block++)
+                {
+                    PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
+                    ++smem_pipe_write;
+                    load_KV_for_block(n_block, n_block_prev, smem_pipe_write, smem_pipe_write_v);
+                    n_block_prev = n_block;
+                    if constexpr (Transpose_V){ copy_Vt_to_V(smem_pipe_write_v); }
+                }
+                
+                skip_reader.advance();
+
                 #pragma unroll 1
                 for (; skip_reader.has_more(); skip_reader.advance())
                 {
                     skip_reader.load_range();
+                    #pragma unroll 1
                     for (n_block = skip_reader.start_idx; n_block < skip_reader.end_idx; n_block++)
                     {
-                        // this happens only in the first iteration of the loop
-                        if (n_block == n_block_prev) [[unlikely]]
-                            continue;
+                        // // this happens only in the first iteration of the loop
+                        // if (n_block == n_block_prev) [[unlikely]]
+                        //     continue;
 
                         PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
                         ++smem_pipe_write;
                         load_KV_for_block(n_block, n_block_prev, smem_pipe_write, smem_pipe_write_v);
                         n_block_prev = n_block;
-                        if constexpr (Transpose_V)
-                        {
-                            copy_Vt_to_V(smem_pipe_write_v);
-                        }
+                        if constexpr (Transpose_V){ copy_Vt_to_V(smem_pipe_write_v); }
                     }
                 }
             }else{
+                --n_block;
                 #pragma unroll (!Transpose_V && Use_TMA_KV ? 2 : 1)
                 for (; n_block >= n_block_min; --n_block) {
                     PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
@@ -1472,12 +1485,12 @@ namespace flash
             int const seqlen_q = seqlen_info.seqlen_q;
             int const seqlen_k = seqlen_info.seqlen_k;
             int n_block;
-                if constexpr (Is_skipable){
+            if constexpr (Is_skipable){
                 n_block = skip_reader.start_idx;
-                }
-                else{
+            }
+            else{
                 n_block = n_block_max - 1;
-                }
+            }
 
             flash::Mask<kBlockM, kBlockN, PackGQA, TiledMmaQK> mask(
                 thread_idx, seqlen_q, seqlen_k, params.window_size_left, params.window_size_right, 0 /*sink_token_length*/,
@@ -1571,7 +1584,6 @@ namespace flash
                 cute::copy(smem_tiled_copy_Q, tSsQ_copy_view, tSrQ_copy_view);
             }
 
-            // TONY: WE SHOULD disable this for first version
             if constexpr (IntraWGOverlap)
             {
                 Tensor tSrS = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
