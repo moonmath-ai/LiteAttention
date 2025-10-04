@@ -447,20 +447,6 @@ namespace flash
                     mainloop.load(params.mainloop, pipeline_k, pipeline_v, pipeline_vt, smem_pipe_write,
                                     shared_storage, scheduler_prefetch, seqlen_info, block_coord, work_idx);
 
-                    // // pipeline_vt won't be used if we don't need to transpose V.
-                    // if constexpr (mainloop.Is_skipable)
-                    // {
-                    //     mainloop.load(params.mainloop, pipeline_k, pipeline_v, pipeline_vt, smem_pipe_write,
-                    //                   shared_storage, scheduler_prefetch, seqlen_info, block_coord, work_idx);
-                    // }
-                    // else
-                    // {
-                    //     mainloop.load_no_skip(params.mainloop, pipeline_k, pipeline_v, pipeline_vt, smem_pipe_write,
-                    //                           shared_storage, scheduler_prefetch, seqlen_info, block_coord, work_idx);
-                    // }
-
-                    // mainloop.load(params.mainloop, pipeline_k, pipeline_v, pipeline_vt, smem_pipe_write,
-                    //                          shared_storage, scheduler_prefetch, seqlen_info, block_coord, work_idx);
                 }
                 mainloop.load_tail(pipeline_k, pipeline_v, pipeline_vt, smem_pipe_write, shared_storage, work_idx);
             }
@@ -537,61 +523,26 @@ namespace flash
                     // Attention output (GEMM-II) accumulator.
                     Tensor tOrO = partition_fragment_C(tiled_mma_pv, select<0, 1>(TileShape_MNK_PV{}));
                     bool tile_valid;
+                    const int thread_idx = threadIdx.x - MmaThreadOffset;
                     if constexpr (!LargeHeadDimV)
                     {
-                        if constexpr (mainloop.Is_skipable)
-                        {
-
-                            const int thread_idx = threadIdx.x - MmaThreadOffset;
-                            // const int warp_group_idx = __shfl_sync(0xFFFFFFFF, thread_idx / cutlass::NumThreadsPerWarpGroup, 0);
-                            if (warp_group_idx == 1){
-                                tile_valid = mainloop.mma_wg1(
-                                    params.mainloop, pipeline_k, pipeline_v, smem_pipe_read,
-                                    tOrO, softmax, thread_idx, work_idx, seqlen_info, block_coord, shared_storage);
-                            }else{
-                                tile_valid = mainloop.mma_wg2(
-                                    params.mainloop, pipeline_k, pipeline_v, smem_pipe_read,
-                                    tOrO, softmax, thread_idx, work_idx, seqlen_info, block_coord, shared_storage);
-                            }
-
-                            // tile_valid = mainloop.mma(
-                            //     params.mainloop, pipeline_k, pipeline_v, smem_pipe_read,
-                            //     tOrO, softmax, threadIdx.x - MmaThreadOffset, work_idx, seqlen_info, block_coord, shared_storage);
-                        }
-                        else
-                        {
-                            tile_valid = mainloop.mma_no_skip(
-                                params.mainloop, pipeline_k, pipeline_v, smem_pipe_read,
-                                tOrO, softmax, threadIdx.x - MmaThreadOffset, work_idx, seqlen_info, block_coord, shared_storage);
-                        }
+                        tile_valid = mainloop.mma_dispatch(
+                            params.mainloop, pipeline_k, pipeline_v, smem_pipe_read,
+                            tOrO, softmax, thread_idx, work_idx, seqlen_info, block_coord, shared_storage);
                     }
                     else
                     { // mma_pv might not compile if !LargeHeadDimV
                         if (warp_group_idx == 1)
                         {
-                            if constexpr (mainloop.Is_skipable)
-                            {
-                                const int thread_idx = threadIdx.x - MmaThreadOffset;
-                                tile_valid = mainloop.mma_wg1(
-                                    params.mainloop, pipeline_k, pipeline_v, smem_pipe_read,
-                                    tOrO, softmax, thread_idx, work_idx, seqlen_info, block_coord, shared_storage);
-
-                                // tile_valid = mainloop.mma(
-                                //     params.mainloop, pipeline_k, pipeline_v, smem_pipe_read,
-                                //     tOrO, softmax, threadIdx.x - MmaThreadOffset, work_idx, seqlen_info, block_coord, shared_storage);
-                            }
-                            else
-                            {
-                                tile_valid = mainloop.mma_no_skip(
-                                    params.mainloop, pipeline_k, pipeline_v, smem_pipe_read,
-                                    tOrO, softmax, threadIdx.x - MmaThreadOffset, work_idx, seqlen_info, block_coord, shared_storage);
-                            }
+                            tile_valid = mainloop.mma_dispatch(
+                                params.mainloop, pipeline_k, pipeline_v, smem_pipe_read,
+                                tOrO, softmax, thread_idx, work_idx, seqlen_info, block_coord, shared_storage);
                         }
                         else
                         {
                             tile_valid = mainloop.mma_pv(
                                 params.mainloop, pipeline_v, smem_pipe_read,
-                                tOrO, softmax, threadIdx.x - MmaThreadOffset, seqlen_info, block_coord, shared_storage);
+                                tOrO, softmax, thread_idx, seqlen_info, block_coord, shared_storage);
                         }
                     }
                     // Do this here before the epilogue so that the next tile is ready to go.
