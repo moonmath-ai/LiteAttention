@@ -649,7 +649,7 @@ setup(
     packages=find_packages(
         exclude=(
             "build",
-            "csrc",
+            "csrc", 
             "include",
             "tests",
             "dist",
