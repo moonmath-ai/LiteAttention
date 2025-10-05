@@ -177,8 +177,10 @@ struct Flash_fwd_params : public Qkv_params
     int arch;
     int num_sm;
 
+    // lite attention related
     QKSkipMaskArgs qk_skip_mask_args;
     bool is_skipable;
+    // ~~~~~~~~~~~~~~~~
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
