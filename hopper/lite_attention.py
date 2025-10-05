@@ -206,8 +206,8 @@ class LiteAttention:
             k=key, 
             v=value,
             softmax_scale=scale,
-            read_skip_list=read_list,
-            write_skip_list=write_list,
+            attn_read_list=read_list,
+            attn_write_list=write_list,
             thr=self.threshold
         )
 
