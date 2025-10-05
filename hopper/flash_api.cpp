@@ -1742,8 +1742,8 @@ TORCH_LIBRARY(flash_attn_3, m) {
         "bool? pack_gqa = None,"
         "int sm_margin = 0,"
         // "Tensor? qk_skip_mask_args = None,"
-        "Tensor? read_skip_mask = None,"
-        "Tensor? write_skip_mask = None,"
+        "Tensor? attn_read_list = None,"
+        "Tensor? attn_write_list = None,"
         "float thr = -3.0) -> (Tensor(out!), Tensor, Tensor, Tensor)"
     );
     m.def("bwd("
