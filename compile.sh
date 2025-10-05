@@ -28,13 +28,21 @@ export FLASH_ATTENTION_DISABLE_VARLEN=TRUE        # Line 56 - Be careful, might 
 # export FLASH_ATTENTION_DISABLE_VARLEN=FALSE     # Line 56 - Be careful, might need this for batching
 
 export FLASH_ATTENTION_DISABLE_CLUSTER=TRUE       # Line 57 - Usually not needed
-export FLASH_ATTENTION_DISABLE_HDIM64=TRUE        # Line 58 - Don't need 64 (you use 128)
-export FLASH_ATTENTION_DISABLE_HDIM96=TRUE        # Line 59 - Don't need 96 (you use 128)
-# export FLASH_ATTENTION_DISABLE_HDIM128=TRUE     # Line 60 - DON'T disable this (you need 128)
-export FLASH_ATTENTION_DISABLE_HDIM192=TRUE       # Line 61 - Don't need 192 (you use 128)
 
-export FLASH_ATTENTION_DISABLE_HDIM256=TRUE       # Line 62 - Don't need 256 (you use 128)
-# export FLASH_ATTENTION_DISABLE_HDIM256=FALSE    # Line 62 - Don't need 256 (you use 128)
+# export FLASH_ATTENTION_DISABLE_HDIM64=TRUE        # Line 58 - Don't need 64 (you use 128)
+export FLASH_ATTENTION_DISABLE_HDIM64=FALSE        # Line 58 - Don't need 64 (you use 128)
+
+# export FLASH_ATTENTION_DISABLE_HDIM96=TRUE        # Line 59 - Don't need 96 (you use 128)
+export FLASH_ATTENTION_DISABLE_HDIM96=FALSE        # Line 59 - Don't need 96 (you use 128)
+
+# export FLASH_ATTENTION_DISABLE_HDIM128=TRUE     # Line 60 - DON'T disable this (you need 128)
+export FLASH_ATTENTION_DISABLE_HDIM128=FALSE     # Line 60 - DON'T disable this (you need 128)
+
+# export FLASH_ATTENTION_DISABLE_HDIM192=TRUE       # Line 61 - Don't need 192 (you use 128)
+export FLASH_ATTENTION_DISABLE_HDIM192=FALSE       # Line 61 - Don't need 192 (you use 128)
+
+# export FLASH_ATTENTION_DISABLE_HDIM256=TRUE       # Line 62 - Don't need 256 (you use 128)
+export FLASH_ATTENTION_DISABLE_HDIM256=FALSE    # Line 62 - Don't need 256 (you use 128)
 
 export FLASH_ATTENTION_DISABLE_SM80=TRUE          # Line 63 - H100 only (SM90)
 export FLASH_ATTENTION_DISABLE_HDIMDIFF64=TRUE    # Line 67 - Disable different V head dims
