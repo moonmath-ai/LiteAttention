@@ -1770,6 +1770,7 @@ namespace flash
                     }
                 }else{
 
+                    // TODO: consider switching back to the version where we test first iter insdie the loop (seems to be faster)
                     if constexpr (IsSkipWriter) skip_writer.record_transition(skip, n_block);
                     ++n_block;
                     do
@@ -1986,6 +1987,7 @@ namespace flash
                         fwd_step(n_block, no_mask_fn, cute::false_type{} /*is_first_iter*/, cute::false_type{} /*check_inf*/);
                     }
                 }else{
+                    // TODO: consider switching back to the version where we test first iter insdie the loop (seems to be faster)
                     if constexpr (IsSkipWriter) skip_writer.record_transition(skip, n_block);
                     ++n_block;
                     do
