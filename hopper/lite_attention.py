@@ -31,7 +31,7 @@ class LiteAttention:
         >>> print(f"Skipped {lite_attn.get_skip_percentage():.2%} computations")
     """
     
-    def __init__(self, enable_skipping: bool = True, threshold: float = -3.0, calc_percentage: bool = False, verbose: bool = False):
+    def __init__(self, enable_skipping: bool = True, threshold: float = -3.0, max_batch_size: int = 4, calc_percentage: bool = False, verbose: bool = False):
         # Internal skip list management
         self._skip_list = None
         self._phase = 0
@@ -41,6 +41,7 @@ class LiteAttention:
         self._last_v_colmajor = None
         self._last_dtype = None
         self._last_device = None
+        self._last_num_heads = None
 
         self._last_percentage = 0.0
         
@@ -52,6 +53,8 @@ class LiteAttention:
         # we print warrnings if reinitializing the skip lists during the forward pass
         self.verbose = verbose
         self.verbose_reinitialization = False
+
+        self.max_batch_size = max_batch_size
 
     @staticmethod
     def ceil_div(x, y):
@@ -130,10 +133,11 @@ class LiteAttention:
     def _init_skip_list(self, query: torch.Tensor, value: torch.Tensor) -> torch.Tensor:
         """Initialize skip list tensors based on query shape."""
         batch, seq_len, heads, head_dim = query.shape
+        assert batch <= self.max_batch_size, "batch size must be less than or equal to max_batch_size (modify max_batch_size in LiteAttention constructor)"
         v_colmajor = value.shape[-3] == head_dim
         dtype = query.dtype
         device = query.device
-        return LiteAttention.init_skip_list(batch, seq_len, heads, head_dim, v_colmajor, dtype, device)
+        return LiteAttention.init_skip_list(self.max_batch_size, seq_len, heads, head_dim, v_colmajor, dtype, device)
     
     
     def _get_read_write_lists(self, query: torch.Tensor, value: torch.Tensor) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
@@ -144,6 +148,7 @@ class LiteAttention:
         current_seq_len = query.shape[1]
         head_dim = query.shape[-1]
         current_head_dim = head_dim
+        current_num_heads = query.shape[2]
         v_colmajor = value.shape[-3] == head_dim
         dtype = query.dtype
         device = query.device
@@ -155,7 +160,8 @@ class LiteAttention:
             self._last_head_dim != current_head_dim or
             self._last_v_colmajor != v_colmajor or
             self._last_dtype != dtype or
-            self._last_device != device
+            self._last_device != device or
+            self._last_num_heads != current_num_heads
             ):
 
             self._skip_list = self._init_skip_list(query, value)
@@ -166,6 +172,7 @@ class LiteAttention:
             self._last_v_colmajor = v_colmajor
             self._last_dtype = dtype
             self._last_device = device
+            self._last_num_heads = current_num_heads
 
             if self.verbose and self.verbose_reinitialization:
                 print(f"warrning: reinitialized skip list during the forward pass")
@@ -229,6 +236,7 @@ class LiteAttention:
         self._last_device = None
         self.verbose_reinitialization = False
         self._last_percentage = 0.0
+        self._last_num_heads = None
     
     def set_threshold(self, threshold: float):
         """Update the threshold value for skip list optimization."""
