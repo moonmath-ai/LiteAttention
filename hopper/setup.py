@@ -398,7 +398,7 @@ if not SKIP_CUDA_BUILD:
     check_if_cuda_home_none(PACKAGE_NAME)
     _, bare_metal_version = get_cuda_bare_metal_version(CUDA_HOME)
     if bare_metal_version < Version("12.3"):
-        raise RuntimeError("FlashAttention-3 is only supported on CUDA 12.3 and above")
+        raise RuntimeError("Lite Attention is only supported on CUDA 12.3 and above")
 
     # ptxas 12.8 gives the best perf currently
     # We want to use the nvcc front end from 12.6 however, since if we use nvcc 12.8
@@ -563,7 +563,7 @@ if not SKIP_CUDA_BUILD:
 
     ext_modules.append(
         CUDAExtension(
-            name=f"{PACKAGE_NAME}._C",
+            name=f"flash_attn_3._C",
             sources=sources,
             extra_compile_args={
                 "cxx": ["-O3", "-std=c++17", "-DPy_LIMITED_API=0x03090000"] + feature_args,
@@ -657,8 +657,8 @@ setup(
             "benchmarks",
         )
     ),
-    py_modules=["flash_attn_interface"],
-    description="FlashAttention-3",
+    py_modules=["lite_attention"],
+    description="Lite Attention",
     long_description=long_description,
     long_description_content_type="text/markdown",
     classifiers=[
