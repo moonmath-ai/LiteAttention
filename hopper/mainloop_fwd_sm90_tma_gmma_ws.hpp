@@ -1351,7 +1351,7 @@ namespace flash
             cute::tuple<int32_t, int32_t, int32_t, int32_t> block_coord,
             SharedStorage &shared_storage)
         {
-            static constexpr bool IsSkipWriter = warp_group_idx == NumMmaWarpGroups - 1;
+            static constexpr bool IsSkipWriter = warp_group_idx == (NumMmaWarpGroups - 1);
 
             static_assert(is_rmem<FrgTensorO>::value, "O tensor must be rmem resident.");
             // DOR: height of the Q block
@@ -1378,7 +1378,6 @@ namespace flash
                 }
             }
 
-            // // DOR: cool way to hint the compiler to make this value a warp uniform
             // int warp_group_idx = __shfl_sync(0xFFFFFFFF, thread_idx / cutlass::NumThreadsPerWarpGroup, 0);
 
             /* DOR: in the video there is this comment here:
@@ -1481,7 +1480,7 @@ namespace flash
             if constexpr (Is_skipable){
                 skip_reader.init<TileShape_MNK>(params, bidb, bidh, m_block);
             }
-            bool const saving_thread = thread_idx == 128;
+            bool const saving_thread = (thread_idx % 128) == 0;
             if constexpr (Is_skipable && IsSkipWriter){
                 skip_writer.init<TileShape_MNK>(params, bidb, bidh, m_block, saving_thread);
             }
