@@ -62,4 +62,4 @@ self.attn.enable_skip_optimization(enable=False)
 
 LiteAttention is build on top of FA3 which has a BSD 3-Clause license. As such the original code maintains that license and any new code for LiteAttention is distributed under an MIT license.
 
-See LICENSE-BSD and LICENSE-MIT for further details.
+See [LICENSE-BSD](LICENSE-BSD) and [LICENSE-MIT](LICENSE-MIT) for further details.
