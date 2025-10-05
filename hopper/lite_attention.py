@@ -8,7 +8,7 @@ of read and write skip lists, hiding the complexity from users.
 import torch
 from typing import Optional, Tuple
 
-from src.flash_attn_interface import flash_attn_func
+from _internal.flash_attn_interface import flash_attn_func
 
 
 class LiteAttention:

@@ -43,6 +43,10 @@ from lite_attention import LiteAttention,
 
 # In your model, set the attention class to be LiteAttention with an optional threshold
 self.attn = LiteAttention(threshold=-6.0)
+.
+.
+.
+hidden_states_a_raw = self.attn(query, key, value, scale)
 
 # If you don't know the threshold at the point of initialization, you can set it later via the set_threshold function
 self.attn = LiteAttention()

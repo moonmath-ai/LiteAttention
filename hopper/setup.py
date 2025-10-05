@@ -527,13 +527,13 @@ if not SKIP_CUDA_BUILD:
         sources_bwd_sm90 = []
         sources_bwd_sm80 = []
     sources = (
-        ["flash_api.cpp"]
+        ["_internal/cpp/flash_api.cpp"]
         + (sources_fwd_sm80 if not DISABLE_SM8x else []) + sources_fwd_sm90
         + (sources_bwd_sm80 if not DISABLE_SM8x else []) + sources_bwd_sm90
     )
     if not DISABLE_SPLIT:
-        sources += ["flash_fwd_combine.cu"]
-    sources += ["flash_prepare_scheduler.cu"]
+        sources += ["_internal/cpp/flash_fwd_combine.cu"]
+    sources += ["_internal/cpp/flash_prepare_scheduler.cu"]
     nvcc_flags = [
         "-O3",
         "-std=c++17",
@@ -558,6 +558,7 @@ if not SKIP_CUDA_BUILD:
         )
     include_dirs = [
         Path(this_dir),
+        Path(this_dir) / "_internal" / "cpp",
         cutlass_dir / "include",
     ]
 
