@@ -6,9 +6,9 @@ of read and write skip lists, hiding the complexity from users.
 """
 
 import torch
-from typing import Optional, Tuple, Dict, Any
+from typing import Optional, Tuple
 
-import flash_attn_interface
+from flash_attn_interface import flash_attn_func
 
 
 class LiteAttention:
@@ -18,7 +18,7 @@ class LiteAttention:
     
     Args:
         enable_skipping (bool, optional): Whether to enable skip list optimizations. Defaults to False.
-        threshold (float, optional): Threshold value for skip list optimization. Defaults to 10.0.
+        threshold (float, optional): Threshold value for skip list optimization. Defaults to -3.0.
         
     Example:
         >>> # Basic usage without skip optimization
@@ -201,7 +201,7 @@ class LiteAttention:
         read_list, write_list = self._get_read_write_lists(query, value)
         
         # Perform flash attention 3 with skip lists
-        output = flash_attn_interface.flash_attn_func(
+        output = flash_attn_func(
             q=query,
             k=key, 
             v=value,
