@@ -43,26 +43,17 @@ class LiteAttention:
         self.calc_percentage = calc_percentage
         self.threshold = threshold
     
-    def _init_skip_list(self, query: torch.Tensor) -> torch.Tensor:
-        """Initialize skip list tensors based on query shape."""
-        batch, seq_len, heads, head_dim = query.shape
+        # we print warrnings if reinitializing the skip lists during the forward pass
+        self.verbose = verbose
+        self.verbose_reinitialization = False
 
-        assert head_dim == 128, "head_dim must be 128"
-
-        qtiles = self._ceil_div(seq_len, 128)
-        ktiles = self._ceil_div(seq_len, 176)
-        
-        skip_list = torch.zeros(2, 3, heads, qtiles, ktiles + 1, dtype=torch.int32, device=query.device)
-        skip_list[0, :, :, :, 2] = ktiles
-        skip_list[0, :, :, :, 0] = 2  # First element is the length of skip list
-        
-        return skip_list
-    
-    def _ceil_div(self, x: int, y: int) -> int:
+    @staticmethod
+    def ceil_div(x, y):
         """Ceiling division utility function."""
         return (x + y - 1) // y
     
-    def _calc_percentage(self, read_list: torch.Tensor) -> float:
+    @staticmethod
+    def calc_percentage(read_list: torch.Tensor) -> float:
         """Calculate the percentage of non-skipped attention computations."""
         read_list = read_list.to(torch.int64)
         skip_lengths = read_list[:, :, :, 0] // 2
@@ -87,7 +78,59 @@ class LiteAttention:
         
         return total_not_skipped / total_possible if total_possible > 0 else 1.0
     
-    def _get_read_write_lists(self, query: torch.Tensor) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+    @staticmethod
+    def get_MN(head_dim, element_size, v_colmajor=False):
+        """Get the tile sizes of tiles for the key and value tensors."""
+        if element_size == 2:
+            if head_dim <= 64:
+                return 192, 192
+            elif head_dim <= 96:
+                return 192, 144
+            elif head_dim <= 128:
+                return 128, 176
+            elif head_dim <= 192:
+                return 128, 112
+            else:
+                return 128, 80
+        else:
+            if head_dim <= 64:
+                return 192, 160
+            elif head_dim <= 96:
+                return 192, 128
+            elif head_dim <= 128:
+                return 128, (192 if v_colmajor else 224)
+            elif head_dim <= 192:
+                return 128, 160
+            else:
+                return 128, 128
+
+    @staticmethod
+    def init_skip_list(batch, seq_len, heads, head_dim, v_colmajor, dtype, device) -> torch.Tensor:
+        """Initialize skip list tensors based on query shape."""
+
+        # the number of bytes needed to represent dtype (size(dtype) if it where C code)
+        element_size = dtype.itemsize
+        kTileM, kTileN = LiteAttention.get_MN(head_dim, element_size, v_colmajor)
+
+        qtiles = LiteAttention.ceil_div(seq_len, kTileM)
+        ktiles = LiteAttention.ceil_div(seq_len, kTileN)
+        
+        skip_list = torch.zeros(2, batch, heads, qtiles, ktiles + 1, dtype=torch.int32, device=device)
+        skip_list[:, :, :, :, 2] = ktiles
+        skip_list[:, :, :, :, 0] = 2  # First element is the length of skip list
+        
+        return skip_list
+
+    def _init_skip_list(self, query: torch.Tensor, value: torch.Tensor) -> torch.Tensor:
+        """Initialize skip list tensors based on query shape."""
+        batch, seq_len, heads, head_dim = query.shape
+        v_colmajor = value.shape[-3] == head_dim
+        dtype = query.dtype
+        device = query.device
+        return LiteAttention.init_skip_list(batch, seq_len, heads, head_dim, v_colmajor, dtype, device)
+    
+    
+    def _get_read_write_lists(self, query: torch.Tensor, value: torch.Tensor) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
         """Get the current read and write lists for this attention step."""
         if not self.enable_skipping:
             return None, None
@@ -100,7 +143,7 @@ class LiteAttention:
             self._skip_list.device != query.device
             ):
 
-            self._skip_list = self._init_skip_list(query)
+            self._skip_list = self._init_skip_list(query, value)
             self._phase = 0
             self._last_seq_len = current_seq_len
         
@@ -131,7 +174,7 @@ class LiteAttention:
             torch.Tensor: Attention output of shape (batch, seq_len, heads * head_dim)
         """
         # Get read and write lists (internal mask management)
-        read_list, write_list = self._get_read_write_lists(query)
+        read_list, write_list = self._get_read_write_lists(query, value)
         
         # Perform flash attention 3 with skip lists
         output = flash_attn_interface.flash_attn_func(
@@ -147,7 +190,7 @@ class LiteAttention:
         # Calculate and store statistics if enabled
         if self.enable_skipping and (read_list is not None) and self.calc_percentage:
             real_batch_size = query.shape[0]
-            self._last_percentage = self._calc_percentage(read_list[:real_batch_size])
+            self._last_percentage = self.calc_percentage(read_list[:real_batch_size])
         
         return output
     
