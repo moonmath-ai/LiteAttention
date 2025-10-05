@@ -20,6 +20,8 @@ cores. With `ninja` compiling takes 3-5 minutes on a 64-core machine using CUDA 
 
 ## Installation
 
+Clone this repo and build from source
+
 ```sh
 cd hopper
 python setup.py install
@@ -35,40 +37,25 @@ MAX_JOBS=4 pip install flash-attn --no-build-isolation
 
 ## How to use LiteAttention
 
-The main functions implement scaled dot product attention (softmax(Q @ K^T *
-softmax_scale) @ V):
 ```python
 from lite_attention import LiteAttention, 
 
 
-flash_attn_func(q, k, v, dropout_p=0.0, softmax_scale=None, causal=False,
-                window_size=(-1, -1), alibi_slopes=None, deterministic=False):
-"""dropout_p should be set to 0.0 during evaluation
-Supports multi-query and grouped-query attention (MQA/GQA) by passing in KV with fewer heads
-than Q. Note that the number of heads in Q must be divisible by the number of heads in KV.
-For example, if Q has 6 heads and K, V have 2 heads, head 0, 1, 2 of Q will attention to head
-0 of K, V, and head 3, 4, 5 of Q will attention to head 1 of K, V.
-If window_size != (-1, -1), implements sliding window local attention. Query at position i
-will only attend to keys between
-[i + seqlen_k - seqlen_q - window_size[0], i + seqlen_k - seqlen_q + window_size[1]] inclusive.
+# In your model, set the attention class to be LiteAttention with an optional threshold
+self.attn = LiteAttention(threshold=-6.0)
 
-Arguments:
-    q: (batch_size, seqlen, nheads, headdim)
-    k: (batch_size, seqlen, nheads_k, headdim)
-    v: (batch_size, seqlen, nheads_k, headdim)
-    dropout_p: float. Dropout probability.
-    softmax_scale: float. The scaling of QK^T before applying softmax.
-        Default to 1 / sqrt(headdim).
-    causal: bool. Whether to apply causal attention mask (e.g., for auto-regressive modeling).
-    window_size: (left, right). If not (-1, -1), implements sliding window local attention.
-    alibi_slopes: (nheads,) or (batch_size, nheads), fp32. A bias of
-        (-alibi_slope * |i + seqlen_k - seqlen_q - j|)
-        is added to the attention score of query i and key j.
-    deterministic: bool. Whether to use the deterministic implementation of the backward pass,
-        which is slightly slower and uses more memory. The forward pass is always deterministic.
-Return:
-    out: (batch_size, seqlen, nheads, headdim).
-"""
+# If you don't know the threshold at the point of initialization, you can set it later via the set_threshold function
+self.attn = LiteAttention()
+.
+.
+.
+self.attn.set_threshold(threshold=calculated_threshold)
+
+# Additionally, we provide the capability to reset the skip state if needed 
+self.attn.reset_skip_state()
+
+# or to toggle the skipping optimization; turning it off falls back to regular FA3
+self.attn.enable_skip_optimization(enable=False)
 ```
 
 ## License
