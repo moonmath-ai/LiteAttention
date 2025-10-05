@@ -11,8 +11,8 @@
 
 struct QKSkipMaskArgs
 {
-    int *read_skip_list;
-    int *write_skip_list;
+    int *attn_read_list;
+    int *attn_write_list;
     float thr;
 };
 

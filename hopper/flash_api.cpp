@@ -701,8 +701,8 @@ mha_fwd(at::Tensor q,   // (b, s_q, h, d) or (total_q, h, d) if there is cu_seql
         std::optional<bool> pack_gqa_,
         int64_t sm_margin,
         // std::optional<at::Tensor> qk_skip_mask_args_,
-        std::optional<at::Tensor> read_skip_list_,
-        std::optional<at::Tensor> write_skip_list_,
+        std::optional<at::Tensor> attn_read_list_,
+        std::optional<at::Tensor> attn_write_list_,
         double thr
         ) {
 
@@ -914,38 +914,38 @@ mha_fwd(at::Tensor q,   // (b, s_q, h, d) or (total_q, h, d) if there is cu_seql
     // Convert skip mask tensors to QKSkipMaskArgs struct
     // Expected shape: [batch, heads, limbs] where limbs = ceil_div(q_tiles * k_tiles, 64)
     // bool is_skipable = false;
-    // assert(read_skip_list_.has_value() && write_skip_list_.has_value());
-    if (read_skip_list_.has_value()) {
-        auto qk_skip_mask_tensor = read_skip_list_.value();
-        // TORCH_CHECK(qk_skip_mask_tensor.dtype() == torch::kUInt32, "read_skip_list must be uint32 tensor");
-        TORCH_CHECK(qk_skip_mask_tensor.dtype() == torch::kInt32, "read_skip_list must be int32 tensor");
-        TORCH_CHECK(qk_skip_mask_tensor.dim() == 4, "read_skip_list must be 4D tensor with shape [batch, heads, q_blocks, k_blocks]");
-        TORCH_CHECK(qk_skip_mask_tensor.is_contiguous(), "read_skip_list must be contiguous");
+    // assert(attn_read_list_.has_value() && attn_write_list_.has_value());
+    if (attn_read_list_.has_value()) {
+        auto qk_skip_mask_tensor = attn_read_list_.value();
+        // TORCH_CHECK(qk_skip_mask_tensor.dtype() == torch::kUInt32, "attn_read_list must be uint32 tensor");
+        TORCH_CHECK(qk_skip_mask_tensor.dtype() == torch::kInt32, "attn_read_list must be int32 tensor");
+        TORCH_CHECK(qk_skip_mask_tensor.dim() == 4, "attn_read_list must be 4D tensor with shape [batch, heads, q_blocks, k_blocks]");
+        TORCH_CHECK(qk_skip_mask_tensor.is_contiguous(), "attn_read_list must be contiguous");
         
         // uint32_t* data_ptr = static_cast<uint32_t*>(qk_skip_mask_tensor.data_ptr());
         int* data_ptr = static_cast<int*>(qk_skip_mask_tensor.data_ptr());
         
-        params.qk_skip_mask_args.read_skip_list = data_ptr;
+        params.qk_skip_mask_args.attn_read_list = data_ptr;
         params.qk_skip_mask_args.thr = (float) thr;
         params.is_skipable = true;
     } else {
-        params.qk_skip_mask_args.read_skip_list = nullptr;
+        params.qk_skip_mask_args.attn_read_list = nullptr;
         params.qk_skip_mask_args.thr = (float) thr;
         params.is_skipable = false;
     }
 
-    if (write_skip_list_.has_value()) {
-        auto qk_skip_mask_tensor = write_skip_list_.value();
-        // TORCH_CHECK(qk_skip_mask_tensor.dtype() == torch::kUInt32, "write_skip_list must be uint32 tensor");
-        TORCH_CHECK(qk_skip_mask_tensor.dtype() == torch::kInt32, "write_skip_list must be int32 tensor");
-        TORCH_CHECK(qk_skip_mask_tensor.dim() == 4, "write_skip_list must be 4D tensor with shape [batch, heads, q_blocks, k_blocks]");
-        TORCH_CHECK(qk_skip_mask_tensor.is_contiguous(), "write_skip_list must be contiguous");
+    if (attn_write_list_.has_value()) {
+        auto qk_skip_mask_tensor = attn_write_list_.value();
+        // TORCH_CHECK(qk_skip_mask_tensor.dtype() == torch::kUInt32, "attn_write_list must be uint32 tensor");
+        TORCH_CHECK(qk_skip_mask_tensor.dtype() == torch::kInt32, "attn_write_list must be int32 tensor");
+        TORCH_CHECK(qk_skip_mask_tensor.dim() == 4, "attn_write_list must be 4D tensor with shape [batch, heads, q_blocks, k_blocks]");
+        TORCH_CHECK(qk_skip_mask_tensor.is_contiguous(), "attn_write_list must be contiguous");
         
         // uint32_t* data_ptr = static_cast<uint32_t*>(qk_skip_mask_tensor.data_ptr());
         int* data_ptr = static_cast<int*>(qk_skip_mask_tensor.data_ptr());
-        params.qk_skip_mask_args.write_skip_list = data_ptr;
+        params.qk_skip_mask_args.attn_write_list = data_ptr;
     } else {
-        params.qk_skip_mask_args.write_skip_list = nullptr;
+        params.qk_skip_mask_args.attn_write_list = nullptr;
     }
 
     params.total_q = total_q;

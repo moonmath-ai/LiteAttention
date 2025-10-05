@@ -68,7 +68,7 @@ namespace flash
                                    (bidh * num_q_blocks * num_k_blocks) + 
                                    (q_i * num_k_blocks);
             
-            list_ptr = &params.qk_skip_mask_args.read_skip_list[mask_offset];
+            list_ptr = &params.qk_skip_mask_args.attn_read_list[mask_offset];
             skip_list_len = list_ptr[0];
             // read_idx = 1;
 
@@ -134,7 +134,7 @@ namespace flash
                                    (bidh * num_q_blocks * num_k_blocks) + 
                                    (q_i * num_k_blocks);
             
-            list_ptr = &params.qk_skip_mask_args.write_skip_list[mask_offset];
+            list_ptr = &params.qk_skip_mask_args.attn_write_list[mask_offset];
             // write_idx = 1;
             // is_skipping = true;
             is_saving_thread = saving_thread;
