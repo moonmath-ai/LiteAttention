@@ -678,7 +678,7 @@ setup(
         "torch",
         "einops",
         "packaging",
-        "ninja",
+        "ninja>=1.11.1,<1.13.0",
     ],
     options={"bdist_wheel": {"py_limited_api": "cp39"}},
 )
