@@ -56,15 +56,15 @@ echo "Environment variables set successfully!"
 # conda activate ltxfa3_comp
 
 # Uninstall existing flash_attn_3 installation
-echo "Uninstalling existing flash_attn_3..."
-pip uninstall -y flash_attn_3
+echo "Uninstalling existing lite_attention..."
+pip uninstall -y lite_attention
 
 # Change to hopper directory
 echo "Changing to hopper directory..."
 cd hopper
 
 # Install flash_attn_3
-echo "Starting flash_attn_3 installation..."
+echo "Starting lite_attention installation..."
 python setup.py install
 
 echo "Compilation complete!"
