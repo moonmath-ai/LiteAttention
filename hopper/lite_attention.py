@@ -18,7 +18,7 @@ class LiteAttention:
     
     Args:
         enable_skipping (bool, optional): Whether to enable skip list optimizations. Defaults to False.
-        threshold (float, optional): Threshold value for skip list optimization. Defaults to -3.0.
+        threshold (float, optional): Threshold value for skip list optimization. Defaults to -10.0. If positive, it will be converted to negative.
         
     Example:
         >>> # Basic usage without skip optimization
@@ -48,7 +48,7 @@ class LiteAttention:
         # Public configuration
         self.enable_skipping = enable_skipping
         self.calc_percentage = calc_percentage
-        self.threshold = threshold
+        self.threshold = threshold if threshold < 0 else -threshold
 
         # we print warrnings if reinitializing the skip lists during the forward pass
         self.verbose = verbose
@@ -239,8 +239,10 @@ class LiteAttention:
         self._last_num_heads = None
     
     def set_threshold(self, threshold: float):
-        """Update the threshold value for skip list optimization."""
-        self.threshold = threshold
+        """Update the threshold value for skip list optimization.
+        If threshold is positive, it will be converted to negative.
+        """
+        self.threshold = threshold if threshold < 0 else -threshold
     
     def enable_skip_optimization(self, enable: bool = True):
         """Enable or disable skip list optimization."""

@@ -42,6 +42,8 @@ from lite_attention import LiteAttention,
 
 
 # In your model, set the attention class to be LiteAttention with an optional threshold
+# NOTE: `threshold` should be a negative number where the lower it is the less skipping there is.
+# NOTE: If a positive number is given, it will be converted to negative (for example 10 ==> -10)
 self.attn = LiteAttention(threshold=-6.0)
 .
 .
