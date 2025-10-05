@@ -48,7 +48,7 @@ class LiteAttention:
         self.enable_skipping = enable_skipping
         self.calc_percentage = calc_percentage
         self.threshold = threshold
-    
+
         # we print warrnings if reinitializing the skip lists during the forward pass
         self.verbose = verbose
         self.verbose_reinitialization = False
@@ -57,7 +57,7 @@ class LiteAttention:
     def ceil_div(x, y):
         """Ceiling division utility function."""
         return (x + y - 1) // y
-    
+
     @staticmethod
     def calc_percentage(read_list: torch.Tensor) -> float:
         """Calculate the percentage of non-skipped attention computations."""
@@ -83,7 +83,7 @@ class LiteAttention:
         total_not_skipped = torch.gather(read_list_range_sized, dim=-1, index=skip_lengths.unsqueeze(-1)).squeeze(-1).sum()
         
         return total_not_skipped / total_possible if total_possible > 0 else 1.0
-    
+
     @staticmethod
     def get_MN(head_dim, element_size, v_colmajor=False):
         """Get the tile sizes of tiles for the key and value tensors."""
