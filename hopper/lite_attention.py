@@ -31,7 +31,7 @@ class LiteAttention:
         >>> print(f"Skipped {lite_attn.get_skip_percentage():.2%} computations")
     """
     
-    def __init__(self, enable_skipping: bool = True, threshold: float = -3.0, max_batch_size: int = 4, calc_percentage: bool = False, verbose: bool = False):
+    def __init__(self, enable_skipping: bool = True, threshold: float = -10.0, max_batch_size: int = 4, calc_percentage: bool = False, verbose: bool = False):
         # Internal skip list management
         self._skip_list = None
         self._phase = 0
