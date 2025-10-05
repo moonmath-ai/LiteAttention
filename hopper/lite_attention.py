@@ -31,11 +31,17 @@ class LiteAttention:
         >>> print(f"Skipped {lite_attn.get_skip_percentage():.2%} computations")
     """
     
-    def __init__(self, enable_skipping: bool = False, threshold: float = -3.0, calc_percentage: bool = False):
+    def __init__(self, enable_skipping: bool = True, threshold: float = -3.0, calc_percentage: bool = False, verbose: bool = False):
         # Internal skip list management
         self._skip_list = None
         self._phase = 0
+
         self._last_seq_len = None
+        self._last_head_dim = None
+        self._last_v_colmajor = None
+        self._last_dtype = None
+        self._last_device = None
+
         self._last_percentage = 0.0
         
         # Public configuration
@@ -136,16 +142,34 @@ class LiteAttention:
             return None, None
             
         current_seq_len = query.shape[1]
+        head_dim = query.shape[-1]
+        current_head_dim = head_dim
+        v_colmajor = value.shape[-3] == head_dim
+        dtype = query.dtype
+        device = query.device
         
         # Initialize or reinitialize skip list if needed
         if (self._skip_list is None or 
             self._last_seq_len != current_seq_len or 
-            self._skip_list.device != query.device
+            self._skip_list.device != query.device or
+            self._last_head_dim != current_head_dim or
+            self._last_v_colmajor != v_colmajor or
+            self._last_dtype != dtype or
+            self._last_device != device
             ):
 
             self._skip_list = self._init_skip_list(query, value)
             self._phase = 0
+
             self._last_seq_len = current_seq_len
+            self._last_head_dim = current_head_dim
+            self._last_v_colmajor = v_colmajor
+            self._last_dtype = dtype
+            self._last_device = device
+
+            if self.verbose and self.verbose_reinitialization:
+                print(f"warrning: reinitialized skip list during the forward pass")
+            self.verbose_reinitialization = True
         
         # Alternate between the two skip list buffers
         if self._phase == 0:
@@ -199,6 +223,11 @@ class LiteAttention:
         self._skip_list = None
         self._phase = 0
         self._last_seq_len = None
+        self._last_head_dim = None
+        self._last_v_colmajor = None
+        self._last_dtype = None
+        self._last_device = None
+        self.verbose_reinitialization = False
         self._last_percentage = 0.0
     
     def set_threshold(self, threshold: float):
