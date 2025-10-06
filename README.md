@@ -134,12 +134,12 @@ Lastly, update the forward function to call the lite_attention instance:
 
 ### Wan2.1 Times
 
-| Threshold           | Time    | Uploaded Video                |
+| Threshold           | Time    | Video                |
 |:-------------------:|:-------:|:-----------------------------:|
-| Baseline (no skip)  | 23m55s  | ![baseline](assets/wan_outputs/baseline.gif)|
-| -10                 | 15m58s  | ![thershold -10](assets/wan_outputs/minus10.gif)|
-| -3                  | 11m50s  | ![thershold -3](assets/wan_outputs/minus3.gif)|
-| 0                   | 8m8s    | ![thershold zero](assets/wan_outputs/zero.gif)|
+| Baseline (no skip)  | 23m51s  | ![baseline](assets/wan_outputs/baseline.gif)|
+| -10                 | 14m19s  | ![thershold -10](assets/wan_outputs/minus10.gif)|
+| -3                  | 11m46s  | ![thershold -3](assets/wan_outputs/minus3.gif)|
+| 0                   | 8m31s    | ![thershold zero](assets/wan_outputs/zero.gif)|
 
 
 ## Debugging
