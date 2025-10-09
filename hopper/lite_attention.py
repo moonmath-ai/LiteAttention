@@ -164,9 +164,6 @@ class LiteAttention:
             self._skip_list = self._init_skip_list(query, value)
             self._phase = 0
 
-            if head_dim < 128:
-                print(f"[Warning]: head_dim={head_dim} is less than 128 which may cause too many tiles to be skipped and a distorted output")
-
             self._last_seq_len = current_seq_len
             self._last_head_dim = current_head_dim
             self._last_v_colmajor = v_colmajor
