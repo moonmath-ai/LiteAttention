@@ -379,6 +379,9 @@ namespace flash
 
             TileScheduler scheduler(reinterpret_cast<typename TileScheduler::SharedStorage *>(&shared_storage.pipelines.smem_scheduler));
 
+            printf("im here\n");
+            *((volatile int*)0) = 0;
+
             if (warp_group_idx == 0)
             { // Producer
                 cutlass::arch::warpgroup_reg_dealloc<LoadRegisterRequirement>();

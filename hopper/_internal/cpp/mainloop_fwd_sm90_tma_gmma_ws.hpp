@@ -1352,6 +1352,7 @@ namespace flash
             SharedStorage &shared_storage)
         {
             static constexpr bool IsSkipWriter = warp_group_idx == (NumMmaWarpGroups - 1);
+            static constexpr bool is_softmax_and = warp_group_idx != 0;
 
             static_assert(is_rmem<FrgTensorO>::value, "O tensor must be rmem resident.");
             // DOR: height of the Q block
@@ -1480,8 +1481,8 @@ namespace flash
             if constexpr (Is_skipable){
                 skip_reader.init<TileShape_MNK>(params, bidb, bidh, m_block);
             }
-            bool const saving_thread = (thread_idx % 128) == 0;
             if constexpr (Is_skipable && IsSkipWriter){
+                bool const saving_thread = (thread_idx % 128) == 0;
                 skip_writer.init<TileShape_MNK>(params, bidb, bidh, m_block, saving_thread);
             }
 
@@ -1603,30 +1604,30 @@ namespace flash
                 scoremod_premask_fn(tSrS);
                 mask.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS, m_block, n_block);
 
-                // Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
-                Tensor scores_scale = [&]
-                {
-                    if constexpr (Is_skipable){
-                        return softmax.template max_get_scale_detect_qk_skip</*Is_first=*/true, true, warp_group_idx != 0 /*is_wg2*/>(tSrS, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests);
-                    }
-                    else{
-                        return softmax.template max_get_scale</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
-                    }
-                }();
+                Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
+                // Tensor scores_scale = [&]
+                // {
+                //     if constexpr (Is_skipable){
+                //         return softmax.template max_get_scale_detect_qk_skip</*Is_first=*/true, true, warp_group_idx != 0 /*is_wg2*/>(tSrS, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests);
+                //     }
+                //     else{
+                //         return softmax.template max_get_scale</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
+                //     }
+                // }();
                 // Don't need to store scales to send to WG1 (in the case of LargeHeadDimV) since it's 1.f
 
                 softmax.template online_softmax</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
-                bool skip = false;
-                if constexpr (Is_skipable && IsSkipWriter){
-                    if (saving_thread)
-                    {
-                        skip =
-                            shared_storage.pipelines.skip_tests[0] &
-                            shared_storage.pipelines.skip_tests[1] &
-                            shared_storage.pipelines.skip_tests[2] &
-                            shared_storage.pipelines.skip_tests[3];
-                    }
-                }
+                // bool skip = false;
+                // if constexpr (Is_skipable && IsSkipWriter){
+                //     if (saving_thread)
+                //     {
+                //         skip =
+                //             shared_storage.pipelines.skip_tests[0] &
+                //             shared_storage.pipelines.skip_tests[1] &
+                //             shared_storage.pipelines.skip_tests[2] &
+                //             shared_storage.pipelines.skip_tests[3];
+                //     }
+                // }
                 if constexpr (Is_FP8 && !V_colmajor)
                 {
                     flash::permute_Cregs_fp8(tSrS);
@@ -1691,7 +1692,7 @@ namespace flash
                     mask_fn(tSrS, n_block);
                     if constexpr (Is_skipable){
                     cute::copy(
-                        softmax.template max_get_scale_detect_qk_skip</*Is_first=*/false, Check_inf, warp_group_idx != 0 /*is_wg2*/>(
+                        softmax.template max_get_scale_detect_qk_skip</*Is_first=*/false, Check_inf, is_softmax_and /*is_wg2*/>(
                             tSrS, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests),
                         scores_scale);
                     }else{
@@ -1705,7 +1706,7 @@ namespace flash
                     softmax.template online_softmax</*Is_first=*/false, Check_inf>(tSrS);
                     bool skip = false;
                     if constexpr (Is_skipable && IsSkipWriter){
-                        if (saving_thread)
+                        if (skip_writer.is_saving_thread)
                         {
                             skip =
                                 shared_storage.pipelines.skip_tests[0] &
@@ -1790,6 +1791,7 @@ namespace flash
                     // }
                     // if constexpr (IsSkipWriter) skip_writer.finalize();
 
+                    bool skip = false;
                     if constexpr (IsSkipWriter) skip_writer.record_transition(skip, n_block);
                     ++n_block;
                     do
@@ -1915,8 +1917,8 @@ namespace flash
                     softmax.template online_softmax<Is_first_iter, Check_inf>(tSrS);
 
                     bool skip = false;
-                    if constexpr (Is_skipable && IsSkipWriter){
-                        if (saving_thread)
+                    if constexpr (Is_skipable && IsSkipWriter && !Is_first_iter){
+                        if (skip_writer.is_saving_thread)
                         {
                             skip =
                                 shared_storage.pipelines.skip_tests[0] &
