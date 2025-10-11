@@ -249,3 +249,28 @@ class LiteAttention:
         self.enable_skipping = enable
         if not enable:
             self.reset_skip_state()
+
+class SeqParallelLiteAttention:
+    def __init__(self, num_nodes: int, enable_skipping: bool = True, threshold: float = -10.0, max_batch_size: int = 4):
+
+        self.num_nodes = num_nodes
+        self.lite_attention = [LiteAttention(enable_skipping, threshold, max_batch_size) for _ in range(num_nodes)]
+        self.set_threshold(threshold)
+
+    def __call__(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, 
+                 scale: Optional[float] = None, split_idx: int = 0) -> torch.Tensor:
+        assert split_idx < self.num_nodes, "split_idx must be less than num_nodes"
+        lite_attention = self.lite_attention[split_idx]
+        return lite_attention(query, key, value, scale)
+
+    def reset_skip_state(self):
+        for lite_attention in self.lite_attention:
+            lite_attention.reset_skip_state()
+
+    def set_threshold(self, threshold: float):
+        for lite_attention in self.lite_attention:
+            lite_attention.set_threshold(threshold)
+    
+    def enable_skip_optimization(self, enable: bool = True):
+        for lite_attention in self.lite_attention:
+            lite_attention.enable_skip_optimization(enable)
