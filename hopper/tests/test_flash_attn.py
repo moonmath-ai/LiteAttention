@@ -20,8 +20,10 @@ from test_util import (
     generate_random_padding_mask,
 )
 
-from flash_attn_interface import flash_attn_func, flash_attn_varlen_func, flash_attn_combine
-from flash_attn_interface import flash_attn_with_kvcache, get_scheduler_metadata
+# from flash_attn_interface import flash_attn_func, flash_attn_varlen_func, flash_attn_combine
+from lite_attn_interface import flash_attn_func, flash_attn_varlen_func, flash_attn_combine
+# from flash_attn_interface import flash_attn_with_kvcache, get_scheduler_metadata
+from lite_attn_interface import flash_attn_with_kvcache, get_scheduler_metadata
 from lite_attention import LiteAttention
 
 

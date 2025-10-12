@@ -564,7 +564,8 @@ if not SKIP_CUDA_BUILD:
 
     ext_modules.append(
         CUDAExtension(
-            name=f"flash_attn_3._C",
+            # name=f"flash_attn_3._C",
+            name=f"lite_attn._C",
             sources=sources,
             extra_compile_args={
                 "cxx": ["-O3", "-std=c++17", "-DPy_LIMITED_API=0x03090000"] + feature_args,
