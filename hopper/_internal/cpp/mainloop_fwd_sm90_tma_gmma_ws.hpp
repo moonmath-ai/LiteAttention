@@ -1604,16 +1604,17 @@ namespace flash
                 scoremod_premask_fn(tSrS);
                 mask.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS, m_block, n_block);
 
-                Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
-                // Tensor scores_scale = [&]
-                // {
-                //     if constexpr (Is_skipable){
-                //         return softmax.template max_get_scale_detect_qk_skip</*Is_first=*/true, true, warp_group_idx != 0 /*is_wg2*/>(tSrS, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests);
-                //     }
-                //     else{
-                //         return softmax.template max_get_scale</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
-                //     }
-                // }();
+                // Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
+                Tensor scores_scale = [&]
+                {
+                    if constexpr (Is_skipable){
+                        // return softmax.template max_get_scale_detect_qk_skip</*Is_first=*/true, true, warp_group_idx != 0 /*is_wg2*/>(tSrS, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests);
+                        return softmax.template max_get_scale_detect_qk_skip</*Is_first=*/true, true, is_softmax_and /*is_wg2*/>(tSrS, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests);
+                    }
+                    else{
+                        return softmax.template max_get_scale</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
+                    }
+                }();
                 // Don't need to store scales to send to WG1 (in the case of LargeHeadDimV) since it's 1.f
 
                 softmax.template online_softmax</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
