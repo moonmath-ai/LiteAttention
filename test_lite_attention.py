@@ -5,7 +5,6 @@ torch.manual_seed(0)
 torch.cuda.manual_seed(0)
 
 for head_dim in [32, 64, 96, 128, 192, 256]:
-    print(f"head_dim: {head_dim}")
     q = torch.randn(2, 5000, 32, head_dim, device="cuda", dtype=torch.bfloat16)
     k = torch.randn(2, 5000, 32, head_dim, device="cuda", dtype=torch.bfloat16)
     v = torch.randn(2, 5000, 32, head_dim, device="cuda", dtype=torch.bfloat16)
