@@ -95,8 +95,8 @@ class LiteAttention:
                 return 192, 144
                 # return 64, 256
             elif head_dim <= 128:
-                # return 128, 176
-                return 64, 208
+                return 128, 176
+                # return 64, 208
             elif head_dim <= 192:
                 return 128, 112
                 # return 64, 256
