@@ -33,4 +33,9 @@ for head_dim in [32, 64, 96, 128, 192, 256]:
     passed = (attn._skip_list[1] == attn._skip_list[1]).all()
     print("skip nothing test:", passed)
 
+    attn = LiteAttention()
+    attn.threshold = 0
+    out, softmax_lse = attn(q, k, v, return_softmax_lse=True)
+    print("softmax_lse:", softmax_lse.shape)
+
     print(attn._skip_list.shape)

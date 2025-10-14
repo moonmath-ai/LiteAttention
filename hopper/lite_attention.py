@@ -192,7 +192,7 @@ class LiteAttention:
         return read_list, write_list
     
     def __call__(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, 
-                 scale: Optional[float] = None) -> torch.Tensor:
+                 scale: Optional[float] = None, return_softmax_lse: bool = False) -> torch.Tensor:
         """
         Perform flash attention 3 with optional skip list optimization.
         
@@ -216,8 +216,10 @@ class LiteAttention:
             softmax_scale=scale,
             attn_read_list=read_list,
             attn_write_list=write_list,
-            thr=self.threshold
+            thr=self.threshold,
+            return_softmax_lse=return_softmax_lse
         )
+
 
         # Calculate and store statistics if enabled
         if self.enable_skipping and os.getenv("LITE_ATTENTION_VERBOSE", "FALSE") != "FALSE":
