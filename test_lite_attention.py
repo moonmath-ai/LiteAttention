@@ -6,9 +6,9 @@ torch.cuda.manual_seed(0)
 
 for head_dim in [32, 64, 96, 128, 192, 256]:
     print(f"head_dim: {head_dim}")
-    q = torch.randn(2, 10000, 32, head_dim, device="cuda", dtype=torch.bfloat16)
-    k = torch.randn(2, 10000, 32, head_dim, device="cuda", dtype=torch.bfloat16)
-    v = torch.randn(2, 10000, 32, head_dim, device="cuda", dtype=torch.bfloat16)
+    q = torch.randn(2, 5000, 32, head_dim, device="cuda", dtype=torch.bfloat16)
+    k = torch.randn(2, 5000, 32, head_dim, device="cuda", dtype=torch.bfloat16)
+    v = torch.randn(2, 5000, 32, head_dim, device="cuda", dtype=torch.bfloat16)
     # skip all test
     attn = LiteAttention()
     attn.threshold = float('inf')
@@ -33,3 +33,5 @@ for head_dim in [32, 64, 96, 128, 192, 256]:
     torch.cuda.synchronize()
     passed = (attn._skip_list[1] == attn._skip_list[1]).all()
     print("skip nothing test:", passed)
+
+    print(attn._skip_list.shape)

@@ -1903,7 +1903,7 @@ namespace flash
                     Tensor scores_scale = [&]
                     {
                         if constexpr (Is_skipable){
-                            return softmax.template max_get_scale_detect_qk_skip<Is_first_iter, Check_inf, warp_group_idx != 0>(tSrS, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests);
+                            return softmax.template max_get_scale_detect_qk_skip<Is_first_iter, Check_inf, is_softmax_and>(tSrS, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests);
                         }
                         else{
                             return softmax.template max_get_scale<Is_first_iter, Check_inf>(tSrS);
