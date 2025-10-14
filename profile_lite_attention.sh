@@ -4,4 +4,4 @@ ncu \
   --set full \
   -o lite_attention%i \
   --kernel-name device_kernel \
-  python test_lite_attention.py
+  python profile_lite_attention.py
