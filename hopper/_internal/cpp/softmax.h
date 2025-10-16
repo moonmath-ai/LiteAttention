@@ -136,7 +136,7 @@ namespace flash
 
         CUTLASS_DEVICE Softmax(float const softmax_scale_log2_) : softmax_scale_log2(softmax_scale_log2_) {};
 
-        template <bool const Is_first, bool const Check_inf = false, bool const is_wg2 = false, typename Tensor0>
+        template <bool const Is_first, bool const Check_inf = false, bool const softmax_cond_assign = false, typename Tensor0>
         __forceinline__ __device__ TensorT max_get_scale_detect_qk_skip(
             Tensor0 &acc_s,
             const float thr,
@@ -150,6 +150,7 @@ namespace flash
             {
                 flash::template reduce_max</*zero_init=*/true>(scores, row_max);
                 cute::fill(scores_scale, 1.f);
+                if (is_warp_leader){ skip_tests[warp_idx_in_warpgroup] = false; }
             }
             else
             {
@@ -199,7 +200,7 @@ namespace flash
                 const bool skip = !__any_sync(0xffffffffu, do_qk);
                 if (is_warp_leader)
                 {
-                    if constexpr (is_wg2)
+                    if constexpr (softmax_cond_assign)
                     {
                         skip_tests[warp_idx_in_warpgroup] &= skip;
                     }

@@ -7,7 +7,7 @@ of read and write skip lists, hiding the complexity from users.
 
 import torch
 import os
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 
 from _internal.flash_attn_interface import flash_attn_func
 
@@ -164,9 +164,6 @@ class LiteAttention:
             self._skip_list = self._init_skip_list(query, value)
             self._phase = 0
 
-            if head_dim < 128:
-                print(f"[Warning]: head_dim={head_dim} is less than 128 which may cause too many tiles to be skipped and a distorted output")
-
             self._last_seq_len = current_seq_len
             self._last_head_dim = current_head_dim
             self._last_v_colmajor = v_colmajor
@@ -190,7 +187,7 @@ class LiteAttention:
         return read_list, write_list
     
     def __call__(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, 
-                 scale: Optional[float] = None) -> torch.Tensor:
+                 scale: Optional[float] = None, return_softmax_lse: bool = False) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """
         Perform flash attention 3 with optional skip list optimization.
         
@@ -214,7 +211,8 @@ class LiteAttention:
             softmax_scale=scale,
             attn_read_list=read_list,
             attn_write_list=write_list,
-            thr=self.threshold
+            thr=self.threshold,
+            return_softmax_lse=return_softmax_lse
         )
 
         # Calculate and store statistics if enabled
@@ -250,5 +248,31 @@ class LiteAttention:
     def enable_skip_optimization(self, enable: bool = True):
         """Enable or disable skip list optimization."""
         self.enable_skipping = enable
-        if not enable:
-            self.reset_skip_state()
+        # TODO @dor: commented out as a reminder to reconsider in the future if resetting the skip state is needed
+        # if not enable:
+        #     self.reset_skip_state()
+
+class SeqParallelLiteAttention:
+    def __init__(self, num_nodes: int, enable_skipping: bool = True, threshold: float = -10.0, max_batch_size: int = 4):
+
+        self.num_nodes = num_nodes
+        self.lite_attention = [LiteAttention(enable_skipping, threshold, max_batch_size) for _ in range(num_nodes)]
+        self.set_threshold(threshold)
+
+    def __call__(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, split_idx: int,
+                 scale: Optional[float] = None, return_softmax_lse: bool = False) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        assert split_idx < self.num_nodes, "split_idx must be less than num_nodes"
+        lite_attention = self.lite_attention[split_idx]
+        return lite_attention(query, key, value, scale, return_softmax_lse)
+
+    def reset_skip_state(self):
+        for lite_attention in self.lite_attention:
+            lite_attention.reset_skip_state()
+
+    def set_threshold(self, threshold: float):
+        for lite_attention in self.lite_attention:
+            lite_attention.set_threshold(threshold)
+    
+    def enable_skip_optimization(self, enable: bool = True):
+        for lite_attention in self.lite_attention:
+            lite_attention.enable_skip_optimization(enable)

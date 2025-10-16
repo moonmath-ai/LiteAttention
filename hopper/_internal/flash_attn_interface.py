@@ -290,6 +290,7 @@ class FlashAttnFunc(torch.autograd.Function):
         attn_read_list=None,
         attn_write_list=None,
         thr=-3.0,
+        return_softmax_lse=False,
     ):
         if softmax_scale is None:
             softmax_scale = (q.shape[-1] + (qv.shape[-1] if qv is not None else 0)) ** (-0.5)
@@ -329,7 +330,10 @@ class FlashAttnFunc(torch.autograd.Function):
         ctx.softcap = softcap
         ctx.deterministic = deterministic
         ctx.sm_margin = sm_margin
-        return out
+        if return_softmax_lse:
+            return out, softmax_lse
+        else:
+            return out
 
     @staticmethod
     def backward(ctx, dout, *args):
@@ -551,6 +555,7 @@ def flash_attn_func(
     attn_read_list=None,
     attn_write_list=None,
     thr=-3.0,
+    return_softmax_lse=False,
 ):
     """dropout_p should be set to 0.0 during evaluation
     Supports multi-query and grouped-query attention (MQA/GQA) by passing in KV with fewer heads
@@ -616,6 +621,7 @@ def flash_attn_func(
         attn_read_list,
         attn_write_list,
         thr,
+        return_softmax_lse,
     )
 
 
