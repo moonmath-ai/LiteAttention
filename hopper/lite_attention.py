@@ -248,7 +248,7 @@ class LiteAttention:
     def enable_skip_optimization(self, enable: bool = True):
         """Enable or disable skip list optimization."""
         self.enable_skipping = enable
-        # commented out as a reminder to reconsider in the future if resetting the skip state is needed
+        # TODO @dor: commented out as a reminder to reconsider in the future if resetting the skip state is needed
         # if not enable:
         #     self.reset_skip_state()
 
