@@ -37,12 +37,14 @@ MAX_JOBS=4 pip install flash-attn --no-build-isolation
 
 ## How to use LiteAttention
 
+### Basic Usage (Single GPU)
+
 ```python
 def LiteAttention(enable_skipping: bool = True, threshold: float = -10.0, max_batch_size: int = 4)
 ```
 
 ```python
-from lite_attention import LiteAttention, 
+from lite_attention import LiteAttention
 
 
 # In your model, set the attention class to be LiteAttention with an optional threshold
@@ -66,11 +68,68 @@ self.attn.reset_skip_state()
 self.attn.enable_skip_optimization(enable=False)
 ```
 
-> [!NOTE]
-> LiteAttention should only be used in DiT model
+### Multi-GPU Usage (Sequence Parallelism)
 
-> [!NOTE]
-> LiteAttention should only be used in Self Attention and should not be used in Cross Attention
+When using multi-GPU with sequence parallelism, use `SeqParallelLiteAttention`:
+
+```python
+def SeqParallelLiteAttention(num_nodes: int, enable_skipping: bool = True, threshold: float = -10.0, max_batch_size: int = 4)
+```
+
+```python
+from lite_attention import SeqParallelLiteAttention
+
+# In your model, set the attention class to be SeqParallelLiteAttention with the number of nodes
+self.attn = SeqParallelLiteAttention(num_nodes=8, threshold=-6.0)
+.
+.
+.
+# Pass split_idx to indicate which split (of K and V) we are processing
+hidden_states_a_raw = self.attn(query, key, value, scale, split_idx=split_idx)
+```
+
+### Returning Softmax LSE
+
+Both `LiteAttention` and `SeqParallelLiteAttention` support returning the softmax log-sum-exp (LSE) values for combining results from multiple partial attention computations.
+
+Example use case: When you have both text and video tokens, you can break down full self-attention into partial computations:
+- **t2t, t2v, v2t**: text-to-text, text-to-video, video-to-text - **no skip optimization**
+- **v2v**: video-to-video - **with skip optimization**
+
+```python
+# Example: Breaking down full self-attention with text and video tokens
+self.attn = LiteAttention(enable_skipping=True, threshold=-6.0)
+
+# Split queries, keys, values into text and video parts
+query_text, query_video = query[:, :text_len, :, :], query[:, text_len:, :, :]
+key_text, key_video = key[:, :text_len, :, :], key[:, text_len:, :, :]
+value_text, value_video = value[:, :text_len, :, :], value[:, text_len:, :, :]
+
+# Disable skip optimization when calculating t2t, t2v, v2t
+self.attn.enable_skip_optimization(enable=False)
+output_t2t, lse_t2t = self.attn(query_text, key_text, value_text, scale, return_softmax_lse=True)
+output_t2v, lse_t2v = self.attn(query_text, key_video, value_video, scale, return_softmax_lse=True)
+output_v2t, lse_v2t = self.attn(query_video, key_text, value_text, scale, return_softmax_lse=True)
+
+# Enable skip optimization only for video-to-video
+self.attn.enable_skip_optimization(enable=True)
+output_v2v, lse_v2v = self.attn(query_video, key_video, value_video, scale, return_softmax_lse=True)
+
+# Combine the partial results using their LSE values to get the final output
+```
+
+> [!IMPORTANT]
+> LiteAttention should only be used in DiT models
+
+> [!IMPORTANT]
+> The skip optimization should **only be enabled for video-to-video self-attention**. For other attention types (e.g., cross-attention or text-to-video attention), you should disable the skip optimization:
+> ```python
+> # For video-to-video self-attention - keep skipping enabled
+> self.attn_self = LiteAttention(enable_skipping=True, threshold=-6.0)
+> 
+> # For cross-attention or text-to-video attention - disable skipping
+> self.attn_cross = LiteAttention(enable_skipping=False)
+> ```
 
 ## Example of Wan2.1 14B
 
