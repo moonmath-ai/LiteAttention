@@ -90,19 +90,14 @@ class LiteAttention:
         if element_size == 2:
             if head_dim <= 64:
                 return 192, 192
-                # return 64, 256
             elif head_dim <= 96:
                 return 192, 144
-                # return 64, 256
             elif head_dim <= 128:
                 return 128, 176
-                # return 64, 208
             elif head_dim <= 192:
                 return 128, 112
-                # return 64, 256
             else:
                 return 128, 80
-                # return 64, 256
         else:
             if head_dim <= 64:
                 return 192, 160
@@ -265,10 +260,10 @@ class SeqParallelLiteAttention:
         self.set_threshold(threshold)
 
     def __call__(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, 
-                 scale: Optional[float] = None, split_idx: int = 0) -> torch.Tensor:
+                 scale: Optional[float] = None, return_softmax_lse: bool = False, split_idx: int = 0) -> torch.Tensor:
         assert split_idx < self.num_nodes, "split_idx must be less than num_nodes"
         lite_attention = self.lite_attention[split_idx]
-        return lite_attention(query, key, value, scale)
+        return lite_attention(query, key, value, scale, return_softmax_lse)
 
     def reset_skip_state(self):
         for lite_attention in self.lite_attention:
