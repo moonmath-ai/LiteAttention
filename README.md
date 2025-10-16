@@ -100,6 +100,9 @@ self.attn = SeqParallelLiteAttention(num_nodes=8, threshold=-6.0)
 hidden_states_a_raw = self.attn(query, key, value, split_idx, scale)
 ```
 
+> [!IMPORTANT]
+> When using `SeqParallelLiteAttention`, you **must** provide the `split_idx` parameter in the forward call. This parameter indicates which split of K and V you are currently processing (0 to num_nodes-1), **not** the current GPU index. Each node processes a different split of the K and V tensors in sequence parallel attention.
+
 ### Returning Softmax LSE
 
 Both `LiteAttention` and `SeqParallelLiteAttention` support returning the softmax log-sum-exp (LSE) values for combining results from multiple partial attention computations.
