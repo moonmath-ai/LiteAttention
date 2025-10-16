@@ -249,8 +249,8 @@ class LiteAttention:
     def enable_skip_optimization(self, enable: bool = True):
         """Enable or disable skip list optimization."""
         self.enable_skipping = enable
-        if not enable:
-            self.reset_skip_state()
+        # if not enable:
+        #     self.reset_skip_state()
 
 class SeqParallelLiteAttention:
     def __init__(self, num_nodes: int, enable_skipping: bool = True, threshold: float = -10.0, max_batch_size: int = 4):
