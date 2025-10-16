@@ -1608,7 +1608,6 @@ namespace flash
                 Tensor scores_scale = [&]
                 {
                     if constexpr (Is_skipable){
-                        // return softmax.template max_get_scale_detect_qk_skip</*Is_first=*/true, true, warp_group_idx != 0 /*is_wg2*/>(tSrS, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests);
                         return softmax.template max_get_scale_detect_qk_skip</*Is_first=*/true, true, is_softmax_and /*is_wg2*/>(tSrS, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests);
                     }
                     else{
@@ -1618,17 +1617,6 @@ namespace flash
                 // Don't need to store scales to send to WG1 (in the case of LargeHeadDimV) since it's 1.f
 
                 softmax.template online_softmax</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
-                // bool skip = false;
-                // if constexpr (Is_skipable && IsSkipWriter){
-                //     if (saving_thread)
-                //     {
-                //         skip =
-                //             shared_storage.pipelines.skip_tests[0] &
-                //             shared_storage.pipelines.skip_tests[1] &
-                //             shared_storage.pipelines.skip_tests[2] &
-                //             shared_storage.pipelines.skip_tests[3];
-                //     }
-                // }
                 if constexpr (Is_FP8 && !V_colmajor)
                 {
                     flash::permute_Cregs_fp8(tSrS);

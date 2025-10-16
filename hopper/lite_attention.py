@@ -7,7 +7,7 @@ of read and write skip lists, hiding the complexity from users.
 
 import torch
 import os
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 
 from _internal.flash_attn_interface import flash_attn_func
 
@@ -187,7 +187,7 @@ class LiteAttention:
         return read_list, write_list
     
     def __call__(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, 
-                 scale: Optional[float] = None, return_softmax_lse: bool = False) -> torch.Tensor:
+                 scale: Optional[float] = None, return_softmax_lse: bool = False) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """
         Perform flash attention 3 with optional skip list optimization.
         
@@ -214,7 +214,6 @@ class LiteAttention:
             thr=self.threshold,
             return_softmax_lse=return_softmax_lse
         )
-
 
         # Calculate and store statistics if enabled
         if self.enable_skipping and os.getenv("LITE_ATTENTION_VERBOSE", "FALSE") != "FALSE":
@@ -249,6 +248,7 @@ class LiteAttention:
     def enable_skip_optimization(self, enable: bool = True):
         """Enable or disable skip list optimization."""
         self.enable_skipping = enable
+        # commented out as a reminder to reconsider in the future if resetting the skip state is needed
         # if not enable:
         #     self.reset_skip_state()
 
@@ -259,8 +259,8 @@ class SeqParallelLiteAttention:
         self.lite_attention = [LiteAttention(enable_skipping, threshold, max_batch_size) for _ in range(num_nodes)]
         self.set_threshold(threshold)
 
-    def __call__(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, 
-                 scale: Optional[float] = None, return_softmax_lse: bool = False, split_idx: int = 0) -> torch.Tensor:
+    def __call__(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, split_idx: int,
+                 scale: Optional[float] = None, return_softmax_lse: bool = False) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         assert split_idx < self.num_nodes, "split_idx must be less than num_nodes"
         lite_attention = self.lite_attention[split_idx]
         return lite_attention(query, key, value, scale, return_softmax_lse)

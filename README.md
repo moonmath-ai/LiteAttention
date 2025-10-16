@@ -97,7 +97,7 @@ self.attn = SeqParallelLiteAttention(num_nodes=8, threshold=-6.0)
 .
 .
 # Pass split_idx to indicate which split (of K and V) we are processing
-hidden_states_a_raw = self.attn(query, key, value, scale, split_idx=split_idx)
+hidden_states_a_raw = self.attn(query, key, value, split_idx, scale)
 ```
 
 ### Returning Softmax LSE

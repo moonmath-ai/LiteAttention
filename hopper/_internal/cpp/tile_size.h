@@ -39,12 +39,6 @@ constexpr std::tuple<int, int, bool, bool> tile_size_fwd_sm90(
             // return {is_skipable ? 64 : 128, use_blockN_128 ? 128 : 176, true, true && maybe_intra_wg_overlap};
             return {128, use_blockN_128 ? 128 : 176, true, true && maybe_intra_wg_overlap};
 
-            // if (is_skipable) {
-            //     return {64, 208, true, false};
-            // }else{
-            //     return {128, use_blockN_128 ? 128 : 176, true, true && maybe_intra_wg_overlap};
-            // }
-
             // {128, 192, true, false} and {192, 128, false, true} are quite good too
             // 128 x 192 hits the limit of smem if MmaPV_is_RS, 128 x 144 hits the limit if !MmaPV_is_RS
         } else if (headdim <= 192) {
