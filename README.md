@@ -68,6 +68,18 @@ self.attn.reset_skip_state()
 self.attn.enable_skip_optimization(enable=False)
 ```
 
+> [!IMPORTANT]
+> Each `LiteAttention` instance maintains internal skip state that should not be shared across different attention layers in your model. Create a separate instance for each attention layer:
+> ```python
+> # Correct: Separate instances for different layers
+> self.attn_layer1 = LiteAttention(threshold=-6.0)
+> self.attn_layer2 = LiteAttention(threshold=-6.0)
+> 
+> # Incorrect: Don't reuse the same instance across different layers
+> self.shared_attn = LiteAttention(threshold=-6.0)  # Don't share!
+> ```
+> However, **do reuse** the same instance across multiple forward passes (different calls to your model over time).
+
 ### Multi-GPU Usage (Sequence Parallelism)
 
 When using multi-GPU with sequence parallelism, use `SeqParallelLiteAttention`:
