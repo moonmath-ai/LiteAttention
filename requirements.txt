@@ -1,0 +1,15 @@
+diffusers==0.34.0
+einops==0.8.1
+imageio==2.37.0
+imageio-ffmpeg==0.6.0
+numpy==2.2.6
+pandas==2.3.1
+pillow==11.3.0
+safetensors==0.5.3
+threadpoolctl==3.6.0
+tokenizers==0.21.4
+torch==2.7.1
+tqdm==4.67.1
+transformers==4.54.1
+triton==3.3.1
+typing_extensions==4.14.1
