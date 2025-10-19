@@ -564,7 +564,7 @@ if not SKIP_CUDA_BUILD:
 
     ext_modules.append(
         CUDAExtension(
-            name=f"flash_attn_3._C",
+            name=f"lite_attention._C",
             sources=sources,
             extra_compile_args={
                 "cxx": ["-O3", "-std=c++17", "-DPy_LIMITED_API=0x03090000"] + feature_args,
@@ -647,18 +647,8 @@ class CachedWheelsCommand(_bdist_wheel):
 setup(
     name=PACKAGE_NAME,
     version=get_package_version(),
-    packages=find_packages(
-        exclude=(
-            "build",
-            "csrc", 
-            "include",
-            "tests",
-            "dist",
-            "docs",
-            "benchmarks",
-        )
-    ),
-    py_modules=["lite_attention"],
+    packages=["lite_attention", "lite_attention._internal"],
+    package_dir={"lite_attention": "."},
     description="Lite Attention",
     long_description=long_description,
     long_description_content_type="text/markdown",

@@ -9,7 +9,7 @@ import torch
 import os
 from typing import Optional, Tuple
 
-from _internal.flash_attn_interface import flash_attn_func
+from ._internal.flash_attn_interface import flash_attn_func
 
 
 class LiteAttention:

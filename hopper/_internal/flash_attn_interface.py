@@ -7,11 +7,11 @@ import torch.nn as nn
 
 # isort: off
 # We need to import the CUDA kernels after importing torch
-import flash_attn_3._C # Registers operators with PyTorch
+import lite_attention._C # Registers operators with PyTorch
 
 # isort: on
 
-flash_attn_3_cuda = torch.ops.flash_attn_3
+flash_attn_3_cuda = torch.ops.lite_attention
 
 def maybe_contiguous(x):
     return x.contiguous() if x is not None and x.stride(-1) != 1 else x
