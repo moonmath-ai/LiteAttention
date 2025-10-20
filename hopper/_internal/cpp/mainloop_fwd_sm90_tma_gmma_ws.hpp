@@ -1156,10 +1156,11 @@ namespace flash
 
             if constexpr (Is_skipable){
                 // finish the first range
-                ++n_block;
+                // ++n_block;
+                --n_block;
 
                 #pragma unroll 1
-                for (; n_block < skip_reader.end_idx; n_block++)
+                for (; n_block >= skip_reader.end_idx; n_block--)
                 {
                     PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
                     ++smem_pipe_write;
@@ -1175,7 +1176,7 @@ namespace flash
                 {
                     skip_reader.load_range();
                     #pragma unroll 1
-                    for (n_block = skip_reader.start_idx; n_block < skip_reader.end_idx; n_block++)
+                    for (n_block = skip_reader.start_idx; n_block >= skip_reader.end_idx; n_block--)
                     {
                         // // this happens only in the first iteration of the loop
                         // if (n_block == n_block_prev) [[unlikely]]
@@ -1782,10 +1783,11 @@ namespace flash
 
                     bool skip = false;
                     if constexpr (IsSkipWriter) skip_writer.record_transition(skip, n_block);
-                    ++n_block;
+                    // ++n_block;
+                    --n_block;
                     do
                     {
-                        for (; n_block < skip_reader.end_idx; n_block++)
+                        for (; n_block >= skip_reader.end_idx; n_block--)
                         {
                             skip = fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/);
                             if constexpr (IsSkipWriter) skip_writer.record_transition(skip, n_block);
@@ -2020,10 +2022,10 @@ namespace flash
                     // if constexpr (IsSkipWriter) skip_writer.finalize();
 
                     if constexpr (IsSkipWriter) skip_writer.record_transition(skip, n_block);
-                    ++n_block;
+                    --n_block;
                     do
                     {
-                        for (; n_block < skip_reader.end_idx; n_block++)
+                        for (; n_block >= skip_reader.end_idx; n_block--)
                         {
                             skip = fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/, cute::false_type{} /*is_first_iter*/);
                             if constexpr (IsSkipWriter) skip_writer.record_transition(skip, n_block);
