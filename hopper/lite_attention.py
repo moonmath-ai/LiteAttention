@@ -126,7 +126,7 @@ class LiteAttention:
         # skip_list[:, :, :, :, 0] = 2  # First element is the length of skip list
 
         skip_list = torch.empty(2, batch, heads, qtiles, ktiles + 1, dtype=torch.int32, device=device)
-        skip_list[0, :, :, :, :2] = torch.tensor([2, ktiles - 1], dtype=torch.int32, device=device)
+        skip_list[0, :, :, :, :3] = torch.tensor([2, ktiles - 1, 0], dtype=torch.int32, device=device)
         
         return skip_list
 
