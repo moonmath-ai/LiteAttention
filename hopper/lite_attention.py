@@ -121,10 +121,12 @@ class LiteAttention:
         qtiles = LiteAttention.ceil_div(seq_len, kTileM)
         ktiles = LiteAttention.ceil_div(seq_len, kTileN)
         
-        skip_list = torch.zeros(2, batch, heads, qtiles, ktiles + 1, dtype=torch.int32, device=device)
-        # skip_list[:, :, :, :, 2] = ktiles
-        skip_list[:, :, :, :, 1] = ktiles - 1
-        skip_list[:, :, :, :, 0] = 2  # First element is the length of skip list
+        # skip_list = torch.zeros(2, batch, heads, qtiles, ktiles + 1, dtype=torch.int32, device=device)
+        # skip_list[:, :, :, :, 1] = ktiles - 1
+        # skip_list[:, :, :, :, 0] = 2  # First element is the length of skip list
+
+        skip_list = torch.empty(2, batch, heads, qtiles, ktiles + 1, dtype=torch.int32, device=device)
+        skip_list[0, :, :, :, :2] = torch.tensor([2, ktiles - 1], dtype=torch.int32, device=device)
         
         return skip_list
 
