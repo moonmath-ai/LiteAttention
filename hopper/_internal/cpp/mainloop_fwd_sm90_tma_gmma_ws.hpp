@@ -822,9 +822,14 @@ namespace flash
             }
 
             SkipListReader skip_reader;
+            SkipListWriter skip_writer;
             if constexpr (Is_skipable)
             {
                 skip_reader.init<TileShape_MNK>(params, bidb, bidh, m_block);
+                // TODO: check if we can remove the saving_thread logic since
+                // in the producer only one thread would try to load K
+                bool const saving_thread = (thread_idx % 128) == 0;
+                skip_writer.init<TileShape_MNK>(params, bidb, bidh, m_block, saving_thread);
             }
 
             Tensor sQ = make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_q.data()), SmemLayoutQ{});
@@ -977,9 +982,29 @@ namespace flash
                 }
             }
 
-            auto load_K = [&](int const n_block, auto const &smem_pipe_write, auto need_seqlenk_masking_type)
+            auto load_K = [&](int const n_block, auto const &smem_pipe_write, auto need_seqlenk_masking_type) -> bool
             {
                 pipeline_k.producer_acquire(smem_pipe_write);
+                const bool skip = false;
+                if constexpr(Is_skipable){
+
+                    const int index = smem_pipe_write.index();
+                    // send the current n_block to the consumers
+                    params.pipelines.curr_n_block[index] = n_block;
+
+                    const prev_index = (smem_pipe_write.index() - 3) % kStage;
+                    
+                    const bool skip =
+                        shared_storage.pipelines.skip_tests[prev_index][0] &
+                        shared_storage.pipelines.skip_tests[prev_index][1] &
+                        shared_storage.pipelines.skip_tests[prev_index][2] &
+                        shared_storage.pipelines.skip_tests[prev_index][3];
+
+                    // only one thread enters here
+                    // reset the skip_tests with a single 128-bit write
+                    *reinterpret_cast<uint4*>(&params.pipelines.skip_tests[index][0]) = make_uint4(0, 0, 0, 0);
+                }
+
                 if constexpr (!PagedKVNonTMA)
                 {
                     auto [n_block_idx, bidb_kv_idx] = paged_kv_manager.get_indices_for_K_TMA();
@@ -992,12 +1017,14 @@ namespace flash
                     paged_kv_manager.template load_K<Seqlenk_mask>(n_block, sK_pi(_, _, smem_pipe_write.index()));
                     pipeline_k.producer_commit(smem_pipe_write, cutlass::arch::cpasync_barrier_arrive);
                 }
+                return skip;
             };
 
             auto load_V = [&](int const n_block, auto const &smem_pipe_write, auto need_seqlenk_masking_type)
             {
                 auto pipeline_v_load = cute::conditional_return<!Transpose_V>(pipeline_v, pipeline_vt);
                 pipeline_v_load.producer_acquire(smem_pipe_write);
+                const bool skip = false;
                 if constexpr (!PagedKVNonTMA)
                 {
                     auto [n_block_idx, bidb_kv_idx] = paged_kv_manager.get_indices_for_V_TMA();
@@ -1477,25 +1504,29 @@ namespace flash
                 auto barrier_token = pipeline.consumer_try_wait(smem_pipe_read);
                 pipeline.consumer_wait(smem_pipe_read, barrier_token);
             };
-            SkipListReader skip_reader;
-            SkipListWriter skip_writer;
-            if constexpr (Is_skipable){
-                skip_reader.init<TileShape_MNK>(params, bidb, bidh, m_block);
-            }
-            if constexpr (Is_skipable && IsSkipWriter){
-                bool const saving_thread = (thread_idx % 128) == 0;
-                skip_writer.init<TileShape_MNK>(params, bidb, bidh, m_block, saving_thread);
-            }
+
+            // SkipListReader skip_reader;
+            // SkipListWriter skip_writer;
+            // if constexpr (Is_skipable){
+            //     skip_reader.init<TileShape_MNK>(params, bidb, bidh, m_block);
+            // }
+            // if constexpr (Is_skipable && IsSkipWriter){
+            //     bool const saving_thread = (thread_idx % 128) == 0;
+            //     skip_writer.init<TileShape_MNK>(params, bidb, bidh, m_block, saving_thread);
+            // }
 
             int const seqlen_q = seqlen_info.seqlen_q;
             int const seqlen_k = seqlen_info.seqlen_k;
             int n_block;
-            if constexpr (Is_skipable){
-                n_block = skip_reader.start_idx;
-            }
-            else{
+            if constexpr (!Is_skipable){
                 n_block = n_block_max - 1;
             }
+            // if constexpr (Is_skipable){
+            //     n_block = skip_reader.start_idx;
+            // }
+            // else{
+            //     n_block = n_block_max - 1;
+            // }
 
             flash::Mask<kBlockM, kBlockN, PackGQA, TiledMmaQK> mask(
                 thread_idx, seqlen_q, seqlen_k, params.window_size_left, params.window_size_right, 0 /*sink_token_length*/,
@@ -1594,6 +1625,9 @@ namespace flash
                 Tensor tSrS = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
                 consumer_wait(pipeline_k, smem_pipe_read);
                 flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS);
+                if constexpr(Is_skipable){
+                    n_block = shared_storage.pipelines.curr_n_block[smem_pipe_read.index()];
+                }
                 warpgroup_wait<0>();
                 pipeline_k.consumer_release(smem_pipe_read);
                 if constexpr (HasQv)
@@ -1609,7 +1643,8 @@ namespace flash
                 Tensor scores_scale = [&]
                 {
                     if constexpr (Is_skipable){
-                        return softmax.template max_get_scale_detect_qk_skip</*Is_first=*/true, true, softmax_cond_assign>(tSrS, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests);
+                        // return softmax.template max_get_scale_detect_qk_skip</*Is_first=*/true, true, softmax_cond_assign>(tSrS, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests);
+                        return softmax.template max_get_scale_detect_qk_skip</*Is_first=*/true, true, softmax_cond_assign>(tSrS, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests[smem_pipe_read.index()]);
                     }
                     else{
                         return softmax.template max_get_scale</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
@@ -1644,7 +1679,8 @@ namespace flash
                 // tiled_mma_pv.accumulate_ = GMMA::ScaleOut::Zero;
 
                 // Each step does gemm0 for iter n_block, gemm1 for iter n_block + 1, and softmax for iter n_block.
-                auto fwd_step = [&](int const n_block, auto mask_fn, auto check_inf_type) -> bool
+                // auto fwd_step = [&](int const n_block, auto mask_fn, auto check_inf_type) -> bool
+                auto fwd_step = [&](int const n_block, auto mask_fn, auto check_inf_type)
                 {
                     static constexpr bool Check_inf = decltype(check_inf_type)::value;
                     PipelineState smem_pipe_read_v(smem_pipe_read.index(), smem_pipe_read.phase(), smem_pipe_read.count());
@@ -1655,6 +1691,11 @@ namespace flash
                         consumer_wait(pipeline_k, smem_pipe_read);
                     }
                     warp_scheduler_barrier_sync();
+
+                    if constexpr(Is_skipable){
+                        n_block = shared_storage.pipelines.curr_n_block[smem_pipe_read.index()];
+                    }
+
                     flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS);
                     if constexpr (RescaleOBeforeGemm)
                     {
@@ -1683,7 +1724,7 @@ namespace flash
                     if constexpr (Is_skipable){
                     cute::copy(
                         softmax.template max_get_scale_detect_qk_skip</*Is_first=*/false, Check_inf, softmax_cond_assign>(
-                            tSrS, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests),
+                            tSrS, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests[smem_pipe_read.index()]),
                         scores_scale);
                     }else{
                         cute::copy(softmax.template max_get_scale</*Is_first=*/false, Check_inf>(tSrS), scores_scale);
@@ -1694,17 +1735,17 @@ namespace flash
                         store_scales(scores_scale, smem_pipe_read_v.index());
                     }
                     softmax.template online_softmax</*Is_first=*/false, Check_inf>(tSrS);
-                    bool skip = false;
-                    if constexpr (Is_skipable && IsSkipWriter){
-                        if (skip_writer.is_saving_thread)
-                        {
-                            skip =
-                                shared_storage.pipelines.skip_tests[0] &
-                                shared_storage.pipelines.skip_tests[1] &
-                                shared_storage.pipelines.skip_tests[2] &
-                                shared_storage.pipelines.skip_tests[3];
-                        }
-                    }
+                    // bool skip = false;
+                    // if constexpr (Is_skipable && IsSkipWriter){
+                    //     if (skip_writer.is_saving_thread)
+                    //     {
+                    //         skip =
+                    //             shared_storage.pipelines.skip_tests[0] &
+                    //             shared_storage.pipelines.skip_tests[1] &
+                    //             shared_storage.pipelines.skip_tests[2] &
+                    //             shared_storage.pipelines.skip_tests[3];
+                    //     }
+                    // }
                     if constexpr (!HasQv)
                     {
                         warpgroup_wait<0>();
@@ -1731,7 +1772,7 @@ namespace flash
                     {
                         arrive_on_P_write_barrier();
                     }
-                    return skip;
+                    // return skip;
                 };
 
                 if constexpr (Is_causal || Is_local)
@@ -1781,29 +1822,33 @@ namespace flash
                     // }
                     // if constexpr (IsSkipWriter) skip_writer.finalize();
 
-                    bool skip = false;
-                    if constexpr (IsSkipWriter) skip_writer.record_transition(skip, n_block);
-                    // ++n_block;
-                    --n_block;
-                    do
-                    {
-                        for (; n_block >= skip_reader.end_idx; n_block--)
-                        {
-                            skip = fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/);
-                            if constexpr (IsSkipWriter) skip_writer.record_transition(skip, n_block);
-                        }
+                    while(n_block > 0){
+                        fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/);
+                    }
 
-                        if constexpr (IsSkipWriter) skip_writer.record_range_end(skip, skip_reader.end_idx);
+                    // bool skip = false;
+                    // if constexpr (IsSkipWriter) skip_writer.record_transition(skip, n_block);
+                    // // ++n_block;
+                    // --n_block;
+                    // do
+                    // {
+                    //     for (; n_block >= skip_reader.end_idx; n_block--)
+                    //     {
+                    //         skip = fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/);
+                    //         if constexpr (IsSkipWriter) skip_writer.record_transition(skip, n_block);
+                    //     }
 
-                        skip_reader.advance();
-                        if (!skip_reader.has_more()) break;
+                    //     if constexpr (IsSkipWriter) skip_writer.record_range_end(skip, skip_reader.end_idx);
 
-                        skip_reader.load_range();
-                        n_block = skip_reader.start_idx;
+                    //     skip_reader.advance();
+                    //     if (!skip_reader.has_more()) break;
 
-                    } while (true);
+                    //     skip_reader.load_range();
+                    //     n_block = skip_reader.start_idx;
 
-                    if constexpr (IsSkipWriter) skip_writer.finalize();
+                    // } while (true);
+
+                    // if constexpr (IsSkipWriter) skip_writer.finalize();
                 }
 
                 // Separate masking iterations on the left for local attention
@@ -1852,7 +1897,8 @@ namespace flash
 
                 // clear(tOrO);
 
-                auto fwd_step = [&](int const n_block, auto mask_fn, auto is_first_iter_type, auto check_inf_type) -> bool
+                // auto fwd_step = [&](int const n_block, auto mask_fn, auto is_first_iter_type, auto check_inf_type) -> bool
+                auto fwd_step = [&](int const n_block, auto mask_fn, auto is_first_iter_type, auto check_inf_type)
                 {
                     static constexpr bool Is_first_iter = decltype(is_first_iter_type)::value;
                     static constexpr bool Check_inf = decltype(check_inf_type)::value;
@@ -1864,6 +1910,10 @@ namespace flash
 
                     Tensor tSrS = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
                     consumer_wait(pipeline_k, smem_pipe_read);
+
+                    if constexpr(Is_skipable){
+                        n_block = shared_storage.pipelines.curr_n_block[smem_pipe_read.index()];
+                    }
 
                     flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS);
 
@@ -1893,7 +1943,7 @@ namespace flash
                     Tensor scores_scale = [&]
                     {
                         if constexpr (Is_skipable){
-                            return softmax.template max_get_scale_detect_qk_skip<Is_first_iter, Check_inf, softmax_cond_assign>(tSrS, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests);
+                            return softmax.template max_get_scale_detect_qk_skip<Is_first_iter, Check_inf, softmax_cond_assign>(tSrS, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests[smem_pipe_read.index()]);
                         }
                         else{
                             return softmax.template max_get_scale<Is_first_iter, Check_inf>(tSrS);

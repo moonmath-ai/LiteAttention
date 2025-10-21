@@ -143,7 +143,10 @@ namespace flash
                 //                    cute::array<int, 0>> curr_n_block;
                 // int curr_n_block[NumMmaWarpGroups][CollectiveMainloop::kStages];
                 // int skip_tests[NumMmaWarpGroups][CollectiveMainloop::kStages][4];
-                int skip_tests[4];
+
+                // int skip_tests[4];
+                alignas(16) int skip_tests[CollectiveMainloop::kStages][4];
+                int curr_n_block[CollectiveMainloop::kStages];
                 // int skip_tests[CollectiveMainloop::kStages][NumMmaWarpGroups][4];
             } pipelines;
         };
