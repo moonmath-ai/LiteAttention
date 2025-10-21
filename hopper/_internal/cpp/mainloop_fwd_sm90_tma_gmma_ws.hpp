@@ -198,7 +198,7 @@ namespace flash
     // - V_colmajor_: Whether V matrix is stored in column-major layout
     template <int Stages, class ClusterShape_, class TileShape_MNK_, int kHeadDimV, class Element_, class ElementAccum_, class ArchTag_,
               bool Is_causal_, bool Is_local_, bool Has_softcap_, bool Varlen_, bool PagedKVNonTMA_, bool AppendKV_, bool HasQv_,
-              bool MmaPV_is_RS, bool IntraWGOverlap, bool PackGQA_, bool Split_, bool V_colmajor_, bool Is_skipable_>
+              bool MmaPV_is_RS, bool IntraWGOverlap, bool PackGQA_, bool Split_, bool V_colmajor_, bool Is_skipable_, bool ReverseIter_>
     struct CollectiveMainloopFwdSm90
     {
 
@@ -236,6 +236,8 @@ namespace flash
         static constexpr bool SameHeadDim = get<2>(TileShape_MNK{}) == kHeadDimV;
         static constexpr bool LargeHeadDimV = kHeadDimV > 256;
         static constexpr bool Is_skipable = Is_skipable_;
+        static constexpr bool ReverseIter = ReverseIter_;
+        static_assert(!ReverseIter && !Is_skipable, "ReverseIter and Is_skipable cannot be both false");
 
         static_assert(ArchTag::kMinComputeCapability >= 90);
 
@@ -1031,8 +1033,10 @@ namespace flash
             };
 
             int n_block;
+            int step;
             if constexpr (Is_skipable){
                 n_block = skip_reader.start_idx;
+                step = ReverseIter ? -1 : 1;
             }
             else{
                 n_block = n_block_max - 1;
@@ -1157,10 +1161,11 @@ namespace flash
             if constexpr (Is_skipable){
                 // finish the first range
                 // ++n_block;
-                --n_block;
+                // --n_block;
+                n_block += step;
 
                 #pragma unroll 1
-                for (; n_block >= skip_reader.end_idx; n_block--)
+                for (; n_block >= skip_reader.end_idx * step; n_block += step)
                 {
                     PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
                     ++smem_pipe_write;
