@@ -86,7 +86,12 @@ class LiteAttention:
 
     @staticmethod
     def get_MN(head_dim, element_size, v_colmajor=False):
-        """Get the tile sizes of tiles for the key and value tensors."""
+        """
+        !!!!!!!!!! this function replicate the result of tile_size_fwd_sm90 in tile_size.h !!!!!!!!!!
+        Get the tile sizes of tiles for the key and value tensors.
+        M - the number of rows in each tile of Q
+        N - the number of rows in each tile of K/V
+        """
         if element_size == 2:
             if head_dim <= 64:
                 return 192, 192
@@ -121,24 +126,29 @@ class LiteAttention:
         during self attention we read the read_skip_list (and skip according to it) and overwrite the write_skip_list.
 
         Inner Format:
-        skip_list[read, 0, 0, 0, :] = [length, start0, end0, start1, end1, ..., start_(length/2-1), end_(length/2-1)]
-        length - number of elements in the list for example: [length=4, start0, end0, start1, end1]
-        startx - start index of a range we DONT SKIP.
-        endx - end index of a range we DONT SKIP.
-        IMPORTANT: startx > endx because we iterate in reverse order inside of the kernel.
-        full example: [length=4, start0=30, end0=20, start1=4, end1=0]
+        skip_list[read, 0, 0, 0, :] = [length, start_0, end_0, start_1, end_1, ..., start_(length/2-1), end_(length/2-1)]
+        length - number of elements in the list for example: [length=4, start_0, end_0, start_1, end_1]
+        start_i - start index of a range we DONT SKIP. (inclusive)
+        end_i - end index of a range we DONT SKIP. (exclusive)
+        IMPORTANT: we init the last dimmension to be ktiles + 1 because it's the maximum number of ranges we could have.
+        IMPORTANT: start_i > end_i > start_(i+1) > end_(i+1) > ... because we iterate in reverse order inside of the kernel.
+        full example: [length=4, start_0=30, end_0=20, start_1=4, end_1=0]
         """
 
         # the number of bytes needed to represent dtype (size(dtype) if it where C code)
         element_size = dtype.itemsize
-        kTileM, kTileN = LiteAttention.get_MN(head_dim, element_size, v_colmajor)
+        kBlockM, kBlockN = LiteAttention.get_MN(head_dim, element_size, v_colmajor)
 
-        qtiles = LiteAttention.ceil_div(seq_len, kTileM)
-        ktiles = LiteAttention.ceil_div(seq_len, kTileN)
+        # Q_i shape: [kBlockM, head_dim]
+        # K_i shape: [kBlockN, head_dim]
+        # Q_i @ K_i^T shape: [kBlockM, kBlockN]
+
+        num_qtiles = LiteAttention.ceil_div(seq_len, kBlockM)
+        num_ktiles = LiteAttention.ceil_div(seq_len, kBlockN)
         
-        skip_list = torch.zeros(2, batch, heads, qtiles, ktiles + 1, dtype=torch.int32, device=device)
+        skip_list = torch.zeros(2, batch, heads, num_qtiles, num_ktiles + 1, dtype=torch.int32, device=device)
         # skip_list[:, :, :, :, 2] = ktiles
-        skip_list[:, :, :, :, 1] = ktiles - 1
+        skip_list[:, :, :, :, 1] = num_ktiles - 1 # start_0
         skip_list[:, :, :, :, 0] = 2  # First element is the length of skip list
         
         return skip_list
