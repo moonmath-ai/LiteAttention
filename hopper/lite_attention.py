@@ -112,7 +112,22 @@ class LiteAttention:
 
     @staticmethod
     def init_skip_list(batch, seq_len, heads, head_dim, v_colmajor, dtype, device) -> torch.Tensor:
-        """Initialize skip list tensors based on query shape."""
+        f"""
+        Initialize skip list tensors based on query shape.
+        Skip List Format:
+        Shape: [read/write, batch, heads, qtiles, ktiles + 1]
+
+        the read/write dimmension is used to alternate between the two skip list buffers during different timesteps.
+        during self attention we read the read_skip_list (and skip according to it) and overwrite the write_skip_list.
+
+        Inner Format:
+        skip_list[read, 0, 0, 0, :] = [length, start0, end0, start1, end1, ..., start_(length/2-1), end_(length/2-1)]
+        length - number of elements in the list for example: [length=4, start0, end0, start1, end1]
+        startx - start index of a range we DONT SKIP.
+        endx - end index of a range we DONT SKIP.
+        IMPORTANT: startx > endx because we iterate in reverse order inside of the kernel.
+        full example: [length=4, start0=30, end0=20, start1=4, end1=0]
+        """
 
         # the number of bytes needed to represent dtype (size(dtype) if it where C code)
         element_size = dtype.itemsize
