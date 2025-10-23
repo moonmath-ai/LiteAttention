@@ -982,27 +982,13 @@ namespace flash
                 }
             }
 
-            auto load_K = [&](int const n_block, auto const &smem_pipe_write, auto need_seqlenk_masking_type) -> bool
+            auto load_K = [&](int const n_block, auto const &smem_pipe_write, auto need_seqlenk_masking_type)
             {
                 pipeline_k.producer_acquire(smem_pipe_write);
-                const bool skip = false;
                 if constexpr(Is_skipable){
-
                     const int index = smem_pipe_write.index();
                     // send the current n_block to the consumers
                     params.pipelines.curr_n_block[index] = n_block;
-
-                    const prev_index = (smem_pipe_write.index() - 3) % kStage;
-                    
-                    const bool skip =
-                        shared_storage.pipelines.skip_tests[prev_index][0] &
-                        shared_storage.pipelines.skip_tests[prev_index][1] &
-                        shared_storage.pipelines.skip_tests[prev_index][2] &
-                        shared_storage.pipelines.skip_tests[prev_index][3];
-
-                    // only one thread enters here
-                    // reset the skip_tests with a single 128-bit write
-                    *reinterpret_cast<uint4*>(&params.pipelines.skip_tests[index][0]) = make_uint4(0, 0, 0, 0);
                 }
 
                 if constexpr (!PagedKVNonTMA)
@@ -1017,14 +1003,25 @@ namespace flash
                     paged_kv_manager.template load_K<Seqlenk_mask>(n_block, sK_pi(_, _, smem_pipe_write.index()));
                     pipeline_k.producer_commit(smem_pipe_write, cutlass::arch::cpasync_barrier_arrive);
                 }
-                return skip;
             };
 
-            auto load_V = [&](int const n_block, auto const &smem_pipe_write, auto need_seqlenk_masking_type)
+            auto load_V = [&](int const n_block, auto const &smem_pipe_write, auto need_seqlenk_masking_type) -> bool
             {
                 auto pipeline_v_load = cute::conditional_return<!Transpose_V>(pipeline_v, pipeline_vt);
                 pipeline_v_load.producer_acquire(smem_pipe_write);
                 const bool skip = false;
+                if constexpr(Is_skipable){
+                    const int index = smem_pipe_write.index();
+                    skip =
+                        shared_storage.pipelines.skip_tests[index][0] &
+                        shared_storage.pipelines.skip_tests[index][1] &
+                        shared_storage.pipelines.skip_tests[index][2] &
+                        shared_storage.pipelines.skip_tests[index][3];
+
+                    // only one thread enters here
+                    // reset the skip_tests with a single 128-bit write
+                    *reinterpret_cast<uint4*>(&params.pipelines.skip_tests[index][0]) = make_uint4(0, 0, 0, 0);
+                }
                 if constexpr (!PagedKVNonTMA)
                 {
                     auto [n_block_idx, bidb_kv_idx] = paged_kv_manager.get_indices_for_V_TMA();
@@ -1037,6 +1034,7 @@ namespace flash
                     paged_kv_manager.template load_V<Seqlenk_mask>(n_block, sVcpasync(_, _, smem_pipe_write.index()));
                     pipeline_v_load.producer_commit(smem_pipe_write, cutlass::arch::cpasync_barrier_arrive);
                 }
+                return skip;
             };
 
             auto copy_Vt_to_V = [&](auto const &smem_pipe_write)
@@ -1140,8 +1138,9 @@ namespace flash
             // if (thread_idx == 0) { printf("Producer: main load, after barrier_O\n");}
 
             // Lambda to load K and V for a given n_block
-            auto load_KV_for_block = [&](int n_block, int n_block_prev, PipelineState& smem_pipe_write, PipelineState& smem_pipe_write_v)
+            auto load_KV_for_block = [&](int n_block, int n_block_prev, PipelineState& smem_pipe_write, PipelineState& smem_pipe_write_v) -> bool
             {
+                bool skip = false;
                 if (should_load_KV)
                 {
                     if constexpr (PagedKVNonTMA)
@@ -1165,10 +1164,11 @@ namespace flash
                         }
                         else
                         {
-                            load_V(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/);
+                            skip = load_V(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/);
                         }
                     }
                 }
+                return skip;
             };
 
             if constexpr (!Transpose_V && !IntraWGOverlap)
@@ -1182,6 +1182,9 @@ namespace flash
             int n_block_prev = n_block;
 
             if constexpr (Is_skipable){
+                bool skipOuter = false;
+                skip_writer.record_transition(skipOuter, n_block);
+
                 // finish the first range
                 // ++n_block;
                 --n_block;
@@ -1191,11 +1194,12 @@ namespace flash
                 {
                     PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
                     ++smem_pipe_write;
-                    load_KV_for_block(n_block, n_block_prev, smem_pipe_write, smem_pipe_write_v);
+                    skipOuter = load_KV_for_block(n_block, n_block_prev, smem_pipe_write, smem_pipe_write_v);
+                    skip_writer.record_transition(skipOuter, n_block);
                     n_block_prev = n_block;
                     if constexpr (Transpose_V){ copy_Vt_to_V(smem_pipe_write_v); }
                 }
-                
+                skip_writer.record_range_end(skipOuter, skip_reader.end_idx);
                 skip_reader.advance();
 
                 #pragma unroll 1
@@ -1211,11 +1215,14 @@ namespace flash
 
                         PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
                         ++smem_pipe_write;
-                        load_KV_for_block(n_block, n_block_prev, smem_pipe_write, smem_pipe_write_v);
+                        skipOuter = load_KV_for_block(n_block, n_block_prev, smem_pipe_write, smem_pipe_write_v);
+                        skip_writer.record_transition(skipOuter, n_block);
                         n_block_prev = n_block;
                         if constexpr (Transpose_V){ copy_Vt_to_V(smem_pipe_write_v); }
                     }
+                    skip_writer.record_range_end(skipOuter, skip_reader.end_idx);
                 }
+                skip_writer.finalize();
             }else{
                 --n_block;
                 #pragma unroll (!Transpose_V && Use_TMA_KV ? 2 : 1)
