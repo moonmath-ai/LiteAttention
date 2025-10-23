@@ -379,8 +379,10 @@ namespace flash
 
             TileScheduler scheduler(reinterpret_cast<typename TileScheduler::SharedStorage *>(&shared_storage.pipelines.smem_scheduler));
 
+            // ASSUMING HEADDIM == 128
             if (warp_group_idx == 0)
             { // Producer
+                // first 128 threads
                 cutlass::arch::warpgroup_reg_dealloc<LoadRegisterRequirement>();
 
                 // The pipelines for AppendKV and main attention are different, since e.g. main attention

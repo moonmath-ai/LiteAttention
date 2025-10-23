@@ -157,6 +157,21 @@ namespace flash
                 Tensor scores_max_prev = make_fragment_like(row_max);
                 cute::copy(row_max, scores_max_prev);
 
+                // if(threadIdx.x == 128 && blockIdx.x == 0 && ){
+                //     printf("row_max[0]: %f\n", row_max(0));
+                //     printf("row_max[1]: %f\n", row_max(1));
+                //     cute::print_layout(row_max.layout());
+                // }
+
+                /*
+                max(1 2 3 4 ... 176)
+                max(1 2 3 4 ... 176)
+                max(1 2 3 4 ... 176)
+                max(1 2 3 4 ... 176)
+                max(1 2 3 4 ... 176)
+                max(1 2 3 4 ... 176)
+                */
+
                 // find the local max for each row
                 Tensor scores_max_local = make_fragment_like(row_max);
                 /*
@@ -187,11 +202,12 @@ namespace flash
                     }else{
                         cur = row_max(mi);
                     }
+                    // the previous max value of the row
                     float prev = scores_max_prev(mi);
-                    scores_scale(mi) = exp2f((prev - cur) * softmax_scale_log2);
+                    scores_scale(mi) = exp2f((prev - cur) * softmax_scale_log2); // e^x = 2^(x * log2(e))
                     row_sum(mi) *= scores_scale(mi);
                     // do_qk |= (((cur - prev) * softmax_scale_log2) > thr);
-                    do_qk |= (((scores_max_local(mi) - prev) * softmax_scale_log2) > thr);
+                    do_qk |= (((scores_max_local(mi) - prev) * softmax_scale_log2) > thr); // thr = -3 (for example)
 
                     // do_qk |= scores_max_local(mi) * thr > prev;
 
@@ -204,7 +220,7 @@ namespace flash
                     // prev * ((thr - 1.0f)/ thr) < scores_max_local(mi);
                 }
 
-                const bool skip = !__any_sync(0xffffffffu, do_qk);
+                const bool skip = !__any_sync(0xffffffffu, do_qk); // is all 32 threads are false
                 if (is_warp_leader)
                 {
                     if constexpr (softmax_cond_assign)

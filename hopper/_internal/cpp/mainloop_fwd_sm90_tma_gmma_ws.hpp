@@ -85,6 +85,7 @@ namespace flash
             load_range();
         }
 
+        // [length, start_idx0, end_idx0, start_idx1, end_idx1, ..., end_idx_{length/2-1}]
         __device__ __forceinline__ 
         void load_range()
         {
@@ -803,6 +804,7 @@ namespace flash
              int &work_idx)
         {
             // some of these are captured in lambda so can't use structured binding
+            // DATA ABOUT current HEAD, BATCH AND Q_I
             int const m_block = get<0>(block_coord);
             int const bidh = get<1>(block_coord);
             int const bidb = get<2>(block_coord);
@@ -977,6 +979,15 @@ namespace flash
                 }
             }
 
+            // x 1 0 0 0 0 0 0...
+            // 0 1
+            // K0 (K1 V0) (K2 V1) (K3 V2) ...
+
+            // (K0 V0) (K1 V1) (K2 V2) (K3 V3) ...
+
+
+            // switch gmma order
+            // (K0 V0) V1 K1 V2 K2 V3 K3 V4 ...
             auto load_K = [&](int const n_block, auto const &smem_pipe_write, auto need_seqlenk_masking_type)
             {
                 pipeline_k.producer_acquire(smem_pipe_write);
@@ -1030,7 +1041,7 @@ namespace flash
                 pipeline_vt.consumer_release(smem_pipe_read);
             };
 
-            int n_block;
+            int n_block; // specify the i in K_i or V_i
             if constexpr (Is_skipable){
                 n_block = skip_reader.start_idx;
             }
@@ -1154,6 +1165,7 @@ namespace flash
 
             int n_block_prev = n_block;
 
+            // K_0 K_1 | V_0 K_2 V_1 K_3 V_2 ...
             if constexpr (Is_skipable){
                 // finish the first range
                 // ++n_block;
