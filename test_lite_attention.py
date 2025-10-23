@@ -15,14 +15,19 @@ for head_dim in [32, 64, 96, 128, 192, 256]:
     torch.cuda.synchronize()
     output = attn(q, k, v)
     torch.cuda.synchronize()
+    # passed = (attn._skip_list[1, ..., 0] <= 2).all()
     passed = (attn._skip_list[1, ..., 0] <= 2).all()
+    diff = attn._skip_list[1, ..., 1] - attn._skip_list[1, ..., 2]
+    mpassed = (diff <= 2)
+    passed &= mpassed.all()
     print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
     print("head_dim: ", head_dim)
     print("skip all test:", passed)
     if not passed:
         print(output.shape)
         print(attn._skip_list.shape)
-        print(attn._skip_list[1, 0, 0, 0, :])
+        # print(attn._skip_list[1, 0, 0, 0, :])
+        print(diff[~mpassed])
 
     # skip nothing test
     attn = LiteAttention()
