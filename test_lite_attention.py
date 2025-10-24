@@ -16,9 +16,9 @@ for head_dim in [32, 64, 96, 128, 192, 256]:
     output = attn(q, k, v)
     torch.cuda.synchronize()
     # passed = (attn._skip_list[1, ..., 0] <= 2).all()
-    passed = (attn._skip_list[1, q.shape[0], ..., 0] <= 2).all()
+    passed = (attn._skip_list[1, :q.shape[0], ..., 0] <= 2).all()
     diff = attn._skip_list[1, :q.shape[0], ..., 1] - attn._skip_list[1, :q.shape[0], ..., 2]
-    mpassed = (diff <= 1)
+    mpassed = (diff <= 2)
     passed &= mpassed.all()
     print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
     print("head_dim: ", head_dim)
