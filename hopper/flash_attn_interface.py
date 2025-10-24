@@ -4,6 +4,8 @@ from typing import Optional, Union
 
 import torch
 import torch.nn as nn
+import triton
+import triton.language as tl
 
 # isort: off
 # We need to import the CUDA kernels after importing torch
@@ -12,6 +14,246 @@ import flash_attn_3._C # Registers operators with PyTorch
 # isort: on
 
 flash_attn_3_cuda = torch.ops.flash_attn_3
+
+# -----------------------------------------------
+
+@triton.jit
+def quant_query_per_thread_int8_kernel(Input, Output, Scale, L,
+                                        stride_iz, stride_ih, stride_in,
+                                        stride_oz, stride_oh, stride_on,
+                                        stride_sz, stride_sh,
+                                        C: tl.constexpr, BLK: tl.constexpr):
+    off_blk = tl.program_id(0) // 8
+    off_tld = tl.program_id(0) % 8
+    off_h = tl.program_id(1)
+    off_b = tl.program_id(2)
+
+    offs_n = off_blk * BLK + tl.arange(0, BLK // 8) * 8 + off_tld
+    offs_k = tl.arange(0, C)
+
+    input_ptrs = Input + off_b * stride_iz + off_h * stride_ih + offs_n[:, None] * stride_in + offs_k[None, :]
+    output_ptrs = Output + off_b * stride_oz + off_h * stride_oh + offs_n[:, None] * stride_on + offs_k[None, :]
+    scale_ptrs = Scale + off_b * stride_sz + off_h * stride_sh + off_blk * 8 + off_tld
+
+    x = tl.load(input_ptrs, mask=offs_n[:, None] < L)
+    x = x.to(tl.float32)
+    scale = tl.max(tl.abs(x)) / 127. + 0.0000001
+    x_int8 = x / scale
+    x_int8 += 0.5 * tl.where(x_int8 >= 0, 1, -1)
+    x_int8 = x_int8.to(tl.int8)
+    tl.store(output_ptrs, x_int8, mask=offs_n[:, None] < L)
+    tl.store(scale_ptrs, scale)
+
+@triton.jit
+def quant_key_per_thread_int8_kernel(Input, Output, Scale, L,
+                                        stride_iz, stride_ih, stride_in,
+                                        stride_oz, stride_oh, stride_on,
+                                        stride_sz, stride_sh,
+                                        C: tl.constexpr, BLK: tl.constexpr):      
+    off_blk = tl.program_id(0) // 4
+    off_tld = tl.program_id(0) % 4
+    off_h = tl.program_id(1)
+    off_b = tl.program_id(2)
+
+    # offs_n = off_blk * BLK + tl.cat(tl.arange(0, BLK // 8) * 8, tl.arange(0, BLK // 8) * 8 + 1, True) + off_tld * 2
+    # offs_k = tl.arange(0, C)
+
+    # input_ptrs = Input + off_b * stride_iz + off_h * stride_ih + offs_n[:, None] * stride_in + offs_k[None, :]
+    # output_ptrs = Output + off_b * stride_oz + off_h * stride_oh + offs_n[:, None] * stride_on + offs_k[None, :]
+    # scale_ptrs = Scale + off_b * stride_sz + off_h * stride_sh + off_blk * 4 + off_tld
+
+    # x = tl.load(input_ptrs, mask=offs_n[:, None] < L)
+    # x = x.to(tl.float32)
+    # scale = tl.max(tl.abs(x)) / 127. + 0.0000001
+    # x_int8 = x / scale
+    # x_int8 += 0.5 * tl.where(x_int8 >= 0, 1, -1)
+    # x_int8 = x_int8.to(tl.int8)
+    # tl.store(output_ptrs, x_int8, mask=offs_n[:, None] < L)
+    # tl.store(scale_ptrs, scale)
+
+    offs_n0 = off_blk * BLK + tl.arange(0, BLK // 8) * 8 + off_tld * 2
+    offs_n1 = off_blk * BLK + tl.arange(0, BLK // 8) * 8 + off_tld * 2 + 1
+    offs_k = tl.arange(0, C)
+
+    input_ptrs0 = Input + off_b * stride_iz + off_h * stride_ih + offs_n0[:, None] * stride_in + offs_k[None, :]
+    input_ptrs1 = Input + off_b * stride_iz + off_h * stride_ih + offs_n1[:, None] * stride_in + offs_k[None, :]
+    output_ptrs0 = Output + off_b * stride_oz + off_h * stride_oh + offs_n0[:, None] * stride_on + offs_k[None, :]
+    output_ptrs1 = Output + off_b * stride_oz + off_h * stride_oh + offs_n1[:, None] * stride_on + offs_k[None, :]
+    scale_ptrs = Scale + off_b * stride_sz + off_h * stride_sh + off_blk * 4 + off_tld
+
+    x0 = tl.load(input_ptrs0, mask=offs_n0[:, None] < L)
+    x1 = tl.load(input_ptrs1, mask=offs_n1[:, None] < L)
+    x0 = x0.to(tl.float32)
+    x1 = x1.to(tl.float32)
+    scale = max(tl.max(tl.abs(x0)), tl.max(tl.abs(x1))) / 127. + 0.0000001
+    x0_int8 = x0 / scale
+    x1_int8 = x1 / scale
+    x0_int8 += 0.5 * tl.where(x0_int8 >= 0, 1, -1)
+    x1_int8 += 0.5 * tl.where(x1_int8 >= 0, 1, -1)
+    x0_int8 = x0_int8.to(tl.int8)
+    x1_int8 = x1_int8.to(tl.int8)
+    tl.store(output_ptrs0, x0_int8, mask=offs_n0[:, None] < L)
+    tl.store(output_ptrs1, x1_int8, mask=offs_n1[:, None] < L)
+    tl.store(scale_ptrs, scale)
+
+@triton.jit
+def quant_query_per_thread_int4_kernel(Input, Output, Scale, L,
+                                        stride_iz, stride_ih, stride_in,
+                                        stride_oz, stride_oh, stride_on,
+                                        stride_sz, stride_sh,
+                                        C: tl.constexpr, BLK: tl.constexpr):
+    off_blk = tl.program_id(0) // 8
+    off_tld = tl.program_id(0) % 8
+    off_h = tl.program_id(1)
+    off_b = tl.program_id(2)
+
+    offs_n = off_blk * BLK + tl.arange(0, BLK // 8) * 8 + off_tld
+    offs_k = tl.arange(0, C)
+
+    input_ptrs = Input + off_b * stride_iz + off_h * stride_ih + offs_n[:, None] * stride_in + offs_k[None, :]
+    output_ptrs = Output + off_b * stride_oz + off_h * stride_oh + offs_n[:, None] * stride_on + offs_k[None, :]
+    scale_ptrs = Scale + off_b * stride_sz + off_h * stride_sh + off_blk * 8 + off_tld
+
+    x = tl.load(input_ptrs, mask=offs_n[:, None] < L)
+    x = x.to(tl.float32)
+    scale = tl.max(tl.abs(x)) / 7. + 0.0000001
+    x_int8 = x / scale
+    x_int8 += 0.5 * tl.where(x_int8 >= 0, 1, -1)
+    x_int8 = x_int8.to(tl.int8)
+    tl.store(output_ptrs, x_int8, mask=offs_n[:, None] < L)
+    tl.store(scale_ptrs, scale)
+
+@triton.jit
+def quant_key_per_thread_int4_kernel(Input, Output, Scale, L,
+                                        stride_iz, stride_ih, stride_in,
+                                        stride_oz, stride_oh, stride_on,
+                                        stride_sz, stride_sh,
+                                        C: tl.constexpr, BLK: tl.constexpr):      
+    off_blk = tl.program_id(0) // 4
+    off_tld = tl.program_id(0) % 4
+    off_h = tl.program_id(1)
+    off_b = tl.program_id(2)
+
+    offs_n = off_blk * BLK + tl.cat(tl.arange(0, BLK // 8) * 8, tl.arange(0, BLK // 8) * 8 + 1, True) + off_tld * 2
+    offs_k = tl.arange(0, C)
+
+    input_ptrs = Input + off_b * stride_iz + off_h * stride_ih + offs_n[:, None] * stride_in + offs_k[None, :]
+    output_ptrs = Output + off_b * stride_oz + off_h * stride_oh + offs_n[:, None] * stride_on + offs_k[None, :]
+    scale_ptrs = Scale + off_b * stride_sz + off_h * stride_sh + off_blk * 4 + off_tld
+
+    x = tl.load(input_ptrs, mask=offs_n[:, None] < L)
+    x = x.to(tl.float32)
+    scale = tl.max(tl.abs(x)) / 7. + 0.0000001
+    x_int8 = x / scale
+    x_int8 += 0.5 * tl.where(x_int8 >= 0, 1, -1)
+    x_int8 = x_int8.to(tl.int8)
+    tl.store(output_ptrs, x_int8, mask=offs_n[:, None] < L)
+    tl.store(scale_ptrs, scale)
+
+def per_thread_int8(q, k, km=None, BLKQ=128, WARPQ=32, BLKK=64, WARPK=64, sm_scale=None, tensor_layout="HND"):
+    q_int8 = torch.empty(q.shape, dtype=torch.int8, device=q.device)
+    k_int8 = torch.empty(k.shape, dtype=torch.int8, device=k.device)
+
+    if km is not None:
+        k = k - km
+
+    if tensor_layout == "HND":
+        b, h_qo, qo_len, head_dim = q.shape
+        _, h_kv, kv_len, _ = k.shape
+
+        stride_bz_q, stride_h_q, stride_seq_q = q.stride(0), q.stride(1), q.stride(2)
+        stride_bz_qo, stride_h_qo, stride_seq_qo = q_int8.stride(0), q_int8.stride(1), q_int8.stride(2)
+        stride_bz_k, stride_h_k, stride_seq_k = k.stride(0), k.stride(1), k.stride(2)
+        stride_bz_ko, stride_h_ko, stride_seq_ko = k_int8.stride(0), k_int8.stride(1), k_int8.stride(2)
+    elif tensor_layout == "NHD":
+        b, qo_len, h_qo, head_dim = q.shape
+        _, kv_len, h_kv, _ = k.shape
+
+        stride_bz_q, stride_h_q, stride_seq_q = q.stride(0), q.stride(2), q.stride(1)
+        stride_bz_qo, stride_h_qo, stride_seq_qo = q_int8.stride(0), q_int8.stride(2), q_int8.stride(1)
+        stride_bz_k, stride_h_k, stride_seq_k = k.stride(0), k.stride(2), k.stride(1)
+        stride_bz_ko, stride_h_ko, stride_seq_ko = k_int8.stride(0), k_int8.stride(2), k_int8.stride(1)
+    else:
+        raise ValueError(f"Unknown tensor layout: {tensor_layout}")
+
+    q_scale = torch.empty((b, h_qo, (qo_len + BLKQ - 1) // BLKQ * (BLKQ // WARPQ) * 8), device=q.device, dtype=torch.float32)
+    k_scale = torch.empty((b, h_kv, (kv_len + BLKK - 1) // BLKK * (BLKK // WARPK) * 4), device=q.device, dtype=torch.float32)
+
+    if sm_scale is None:
+        sm_scale = head_dim**-0.5
+
+    grid = ((qo_len + BLKQ - 1) // BLKQ * (BLKQ // WARPQ) * 8, h_qo, b)
+    quant_query_per_thread_int8_kernel[grid](
+        q, q_int8, q_scale, qo_len,
+        stride_bz_q, stride_h_q, stride_seq_q,
+        stride_bz_qo, stride_h_qo, stride_seq_qo,
+        q_scale.stride(0), q_scale.stride(1),
+        C=head_dim, BLK=WARPQ
+    )
+
+    grid = ((kv_len + BLKK - 1) // BLKK * (BLKK // WARPK) * 4, h_kv, b)
+    quant_key_per_thread_int8_kernel[grid](
+        k, k_int8, k_scale, kv_len,
+        stride_bz_k, stride_h_k, stride_seq_k,
+        stride_bz_ko, stride_h_ko, stride_seq_ko,
+        k_scale.stride(0), k_scale.stride(1),
+        C=head_dim, BLK=WARPK
+    )
+
+    return q_int8, q_scale, k_int8, k_scale
+# -----------------------------------------------
+
+
+def _flash_attn_varlen_int8_cuda(
+    q_int8,
+    k_int8,
+    v,
+    q_scales,
+    k_scales,
+    cu_seqlens_q,
+    cu_seqlens_k,
+    max_seqlen_q,
+    max_seqlen_k,
+    seqused_q,
+    seqused_k,
+    softmax_scale,
+    causal,
+    qv,
+    window_size,
+    attention_chunk,
+    softcap,
+    num_splits,
+    pack_gqa,
+    deterministic,
+    sm_margin,
+    return_attn_probs,
+):
+    print("FLASH ATTN INT8 VARLEN used")
+    return flash_attn_3_cuda.fwd_int8(
+        q_int8,
+        k_int8,
+        v,
+        q_scales,
+        k_scales,
+        cu_seqlens_q,
+        cu_seqlens_k,
+        seqused_q,
+        seqused_k,
+        max_seqlen_q,
+        max_seqlen_k,
+        softmax_scale,
+        causal,
+        qv,
+        window_size[0],
+        window_size[1],
+        attention_chunk,
+        softcap,
+        num_splits,
+        pack_gqa,
+        deterministic,
+        sm_margin,
+        return_attn_probs,
+    )
 
 def maybe_contiguous(x):
     return x.contiguous() if x is not None and x.stride(-1) != 1 else x
@@ -168,6 +410,7 @@ class FlashAttnQKVPackedFunc(torch.autograd.Function):
         deterministic=False,
         num_heads_q=None,
         sm_margin=0,
+        return_softmax=False,
     ):
         if softmax_scale is None:
             softmax_scale = qkv.shape[-1] ** (-0.5)
@@ -210,8 +453,7 @@ class FlashAttnQKVPackedFunc(torch.autograd.Function):
         ctx.deterministic = deterministic
         ctx.ndim = qkv.dim()
         ctx.sm_margin = sm_margin
-        # return out, softmax_lse
-        return out
+        return (out, softmax_lse) if return_softmax else out
 
     @staticmethod
     def backward(ctx, dout, *args):
@@ -248,7 +490,7 @@ class FlashAttnQKVPackedFunc(torch.autograd.Function):
             ctx.sm_margin,
         )
         dqkv = dqkv[..., : dout.shape[-1]]  # We could have padded the head dimension
-        return dqkv, None, None, None, None, None, None, None, None, None, None, None
+        return dqkv, None, None, None, None, None, None, None, None, None, None, None, None
 
 
 class FlashAttnFunc(torch.autograd.Function):
@@ -270,6 +512,7 @@ class FlashAttnFunc(torch.autograd.Function):
         pack_gqa=None,
         deterministic=False,
         sm_margin=0,
+        return_softmax=False,
     ):
         if softmax_scale is None:
             softmax_scale = (q.shape[-1] + (qv.shape[-1] if qv is not None else 0)) ** (-0.5)
@@ -305,7 +548,7 @@ class FlashAttnFunc(torch.autograd.Function):
         ctx.softcap = softcap
         ctx.deterministic = deterministic
         ctx.sm_margin = sm_margin
-        return out
+        return (out, softmax_lse) if return_softmax else out
 
     @staticmethod
     def backward(ctx, dout, *args):
@@ -363,6 +606,7 @@ class FlashAttnVarlenFunc(torch.autograd.Function):
         pack_gqa=None,
         deterministic=False,
         sm_margin=0,
+        return_softmax=False,
     ):
         if softmax_scale is None:
             softmax_scale = (q.shape[-1] + (qv.shape[-1] if qv is not None else 0)) ** (-0.5)
@@ -404,7 +648,7 @@ class FlashAttnVarlenFunc(torch.autograd.Function):
         ctx.softcap = softcap
         ctx.deterministic = deterministic
         ctx.sm_margin = sm_margin
-        return out
+        return (out, softmax_lse) if return_softmax else out
 
     @staticmethod
     def backward(ctx, dout, *args):
@@ -451,6 +695,7 @@ def flash_attn_qkvpacked_func(
     deterministic=False,
     num_heads_q=None,
     sm_margin=0,
+    return_attn_probs=False,
 ):
     """dropout_p should be set to 0.0 during evaluation
     If Q, K, V are already stacked into 1 tensor, this function will be faster than
@@ -497,6 +742,7 @@ def flash_attn_qkvpacked_func(
         deterministic,
         num_heads_q,
         sm_margin,
+        return_attn_probs,
     )
 
 
@@ -515,6 +761,7 @@ def flash_attn_func(
     pack_gqa=None,
     deterministic=False,
     sm_margin=0,
+    return_attn_probs=False,
 ):
     """dropout_p should be set to 0.0 during evaluation
     Supports multi-query and grouped-query attention (MQA/GQA) by passing in KV with fewer heads
@@ -576,6 +823,7 @@ def flash_attn_func(
         pack_gqa,
         deterministic,
         sm_margin,
+        return_attn_probs,
     )
 
 
@@ -600,6 +848,7 @@ def flash_attn_varlen_func(
     pack_gqa=None,
     deterministic=False,
     sm_margin=0,
+    return_attn_probs=False,
 ):
     return FlashAttnVarlenFunc.apply(
         q,
@@ -622,7 +871,259 @@ def flash_attn_varlen_func(
         pack_gqa,
         deterministic,
         sm_margin,
+        return_attn_probs,
     )
+
+
+@torch.no_grad()
+def flash_attn_varlen_int8(
+    q,
+    k,
+    v,
+    cu_seqlens_q,
+    cu_seqlens_k,
+    max_seqlen_q,
+    max_seqlen_k,
+    seqused_q=None,
+    seqused_k=None,
+    softmax_scale=None,
+    causal=False,
+    qv=None,
+    window_size=(-1, -1),
+    attention_chunk=0,
+    softcap=0.0,
+    num_splits=1,
+    pack_gqa=None,
+    deterministic=False,
+    sm_margin=0,
+    return_attn_probs=False,
+    smooth_k=True,
+):
+    """Forward-only FlashAttention with INT8 Q/K quantization (varlen only).
+
+    This helper quantizes Q and K to symmetric INT8 per (batch, head_k), forwards the
+    quantized tensors and per-token scales into the dedicated CUDA path, and returns the
+    attention output (and optional log-sum-exp). Only VARLEN inputs with head dimensions
+    in {64, 96, 128, 192, 256} are supported. When ``smooth_k`` is True, we subtract the
+    per-head mean key vector before quantization (SageAttention smoothing) and apply the
+    corresponding logsumexp correction when returning LSE.
+    """
+
+    tensor_layout = "NHD"
+    seq_dim, nh_dim = 1, 2
+    return_lse = return_attn_probs
+    lse_correction_chunks = [] if smooth_k and return_lse else None
+
+    if q.dtype != torch.bfloat16 or k.dtype != torch.bfloat16 or v.dtype != torch.bfloat16:
+        raise ValueError("INT8 mode currently supports BF16 Q/K/V inputs.")
+    if cu_seqlens_q is None or cu_seqlens_k is None:
+        raise ValueError("cu_seqlens_q and cu_seqlens_k are required for varlen INT8 mode.")
+
+    head_dim = q.shape[-1]
+    if head_dim not in {64, 96, 128, 192, 256}:
+        raise ValueError("INT8 mode currently supports head dimensions {64, 96, 128, 192, 256}.")
+
+    num_heads = q.shape[-2]
+    num_heads_k = k.shape[-2]
+    if num_heads % num_heads_k != 0:
+        raise ValueError("Number of query heads must be a multiple of key/value heads for INT8 mode.")
+
+    if softmax_scale is None:
+        softmax_scale = (q.shape[-1] + (qv.shape[-1] if qv is not None else 0)) ** (-0.5)
+
+    if window_size[0] is None or window_size[1] is None:
+        left = -1 if window_size[0] is None else window_size[0]
+        right = -1 if window_size[1] is None else window_size[1]
+        window_size = (left, right)
+
+    q_contig = q.contiguous()
+    k_contig = k.contiguous()
+    batch_size = cu_seqlens_q.numel() - 1
+
+    def decode_query_scales(scale_tensor: torch.Tensor, seq_len: int) -> torch.Tensor:
+        if seq_len == 0:
+            heads = scale_tensor.shape[1]
+            return scale_tensor.new_zeros((0, heads))
+        scales = scale_tensor.squeeze(0)
+        heads, total_cols = scales.shape
+        device = scales.device
+        block_size = 32
+        per_token = scales.new_full((seq_len, heads), 1.0 / 127.0)
+        positions_template = (
+            torch.arange(8, device=device)[:, None]
+            + torch.arange(0, block_size, 8, device=device)[None, :]
+        ).reshape(-1)
+        scale_idx_template = torch.arange(8, device=device).repeat_interleave(4)
+        n_blocks = (seq_len + block_size - 1) // block_size
+        for blk in range(n_blocks):
+            start = blk * 8
+            end = min(start + 8, total_cols)
+            if start >= end:
+                continue
+            scale_block = scales[:, start:end]
+            cols = scale_block.shape[1]
+            positions = positions_template[: cols * 4]
+            scale_indices = scale_idx_template[: cols * 4]
+            token_idx = blk * block_size + positions
+            valid = token_idx < seq_len
+            if not torch.any(valid):
+                continue
+            values = scale_block[:, scale_indices][:, valid]
+            per_token[token_idx[valid].long()] = values.transpose(0, 1)
+        return per_token
+
+    def decode_key_scales(scale_tensor: torch.Tensor, seq_len: int) -> torch.Tensor:
+        if seq_len == 0:
+            heads = scale_tensor.shape[1]
+            return scale_tensor.new_zeros((0, heads))
+        scales = scale_tensor.squeeze(0)
+        heads, total_cols = scales.shape
+        device = scales.device
+        block_size = 64
+        per_token = scales.new_full((seq_len, heads), 1.0 / 127.0)
+        step_offsets = torch.arange(0, block_size, 8, device=device)
+        off_tld_template = torch.arange(4, device=device)
+        even = step_offsets[None, :] + (off_tld_template[:, None] * 2)
+        odd = even + 1
+        positions_template = torch.cat([even, odd], dim=1).reshape(-1)
+        scale_idx_template = torch.arange(4, device=device).repeat_interleave(16)
+        n_blocks = (seq_len + block_size - 1) // block_size
+        for blk in range(n_blocks):
+            start = blk * 4
+            end = min(start + 4, total_cols)
+            if start >= end:
+                continue
+            scale_block = scales[:, start:end]
+            cols = scale_block.shape[1]
+            positions = positions_template[: cols * 16]
+            scale_indices = scale_idx_template[: cols * 16]
+            token_idx = blk * block_size + positions
+            valid = token_idx < seq_len
+            if not torch.any(valid):
+                continue
+            values = scale_block[:, scale_indices][:, valid]
+            per_token[token_idx[valid].long()] = values.transpose(0, 1)
+        return per_token
+
+    q_int8_chunks = []
+    k_int8_chunks = []
+    q_scale_chunks = []
+    k_scale_chunks = []
+    for batch_idx in range(batch_size):
+        q_start = int(cu_seqlens_q[batch_idx].item())
+        q_end = int(cu_seqlens_q[batch_idx + 1].item())
+        k_start = int(cu_seqlens_k[batch_idx].item())
+        k_end = int(cu_seqlens_k[batch_idx + 1].item())
+        q_len = q_end - q_start
+        k_len = k_end - k_start
+        q_slice = q_contig[q_start:q_end]
+        k_slice = k_contig[k_start:k_end]
+        if q_len == 0 or k_len == 0:
+            continue
+        q_input = q_slice.unsqueeze(0).contiguous()
+        k_input = k_slice.unsqueeze(0).contiguous()
+
+        km = None
+        km_broadcast = None
+        if smooth_k:
+            km = k_input.mean(dim=seq_dim, keepdim=True)
+            nqheads = q_input.size(nh_dim)
+            nkheads = k_input.size(nh_dim)
+            q_per_kv_heads = nqheads // nkheads
+            if q_per_kv_heads > 1:
+                km_broadcast = torch.repeat_interleave(km, q_per_kv_heads, dim=nh_dim)
+            else:
+                km_broadcast = km
+            if lse_correction_chunks is not None:
+                if tensor_layout == "NHD":
+                    lse_corr = torch.matmul(
+                        q_input.transpose(1, 2),
+                        km_broadcast.transpose(1, 2).transpose(2, 3),
+                    ).squeeze(-1).to(torch.float32)
+                else:
+                    lse_corr = torch.matmul(
+                        q_input,
+                        km_broadcast.transpose(2, 3),
+                    ).squeeze(-1).to(torch.float32)
+                if q_len > 0:
+                    lse_correction_chunks.append(lse_corr.squeeze(0).transpose(0, 1))
+
+        q_int8, q_scale_raw, k_int8, k_scale_raw = per_thread_int8(
+            q_input, k_input, km=km, tensor_layout=tensor_layout
+        )
+        q_token_scales = decode_query_scales(q_scale_raw, q_len)
+        k_token_scales = decode_key_scales(k_scale_raw, k_len)
+        if q_len > 0:
+            q_int8_chunks.append(q_int8.squeeze(0).to(torch.int8))
+            q_scale_chunks.append(q_token_scales)
+        if k_len > 0:
+            k_int8_chunks.append(k_int8.squeeze(0).to(torch.int8))
+            k_scale_chunks.append(k_token_scales)
+
+    if len(q_int8_chunks) > 0:
+        q_int8_all = torch.cat(q_int8_chunks, dim=0)
+        q_scale_all = torch.cat(q_scale_chunks, dim=0)
+    else:
+        q_int8_all = q.new_empty((0, q.shape[-2], q.shape[-1]), dtype=torch.int8)
+        q_scale_all = q.new_empty((0, q.shape[-2]), dtype=torch.float32)
+    if len(k_int8_chunks) > 0:
+        k_int8_all = torch.cat(k_int8_chunks, dim=0)
+        k_scale_all = torch.cat(k_scale_chunks, dim=0)
+    else:
+        k_int8_all = k.new_empty((0, k.shape[-2], k.shape[-1]), dtype=torch.int8)
+        k_scale_all = k.new_empty((0, k.shape[-2]), dtype=torch.float32)
+
+    q_int8_all = q_int8_all.contiguous()
+    k_int8_all = k_int8_all.contiguous()
+    q_scale_all = q_scale_all.contiguous()
+    k_scale_all = k_scale_all.contiguous()
+
+    result = _flash_attn_varlen_int8_cuda(
+        q_int8_all,
+        k_int8_all,
+        v,
+        q_scale_all,
+        k_scale_all,
+        cu_seqlens_q,
+        cu_seqlens_k,
+        max_seqlen_q,
+        max_seqlen_k,
+        seqused_q,
+        seqused_k,
+        softmax_scale,
+        causal,
+        qv,
+        window_size,
+        attention_chunk,
+        softcap,
+        num_splits,
+        pack_gqa,
+        deterministic,
+        sm_margin,
+        return_attn_probs,
+    )
+
+    # Apply log-sum-exp correction when key smoothing shifts logits.
+    if smooth_k and return_lse:
+        if not isinstance(result, tuple) or len(result) < 2:
+            raise RuntimeError("return_attn_probs=True should return (out, softmax_lse).")
+        out, softmax_lse = result
+        total_q = q_int8_all.shape[0]
+        num_heads_q = q.shape[-2]
+        if lse_correction_chunks and len(lse_correction_chunks) > 0:
+            lse_correction_total = torch.cat(lse_correction_chunks, dim=0)
+        else:
+            lse_correction_total = q.new_zeros((total_q, num_heads_q), dtype=torch.float32)
+        lse_correction_total = lse_correction_total.to(softmax_lse.device)
+        if softmax_lse.shape == lse_correction_total.shape:
+            softmax_lse = softmax_lse + lse_correction_total.to(softmax_lse.dtype)
+        elif softmax_lse.shape == (lse_correction_total.shape[1], lse_correction_total.shape[0]):
+            softmax_lse = softmax_lse + lse_correction_total.transpose(0, 1).to(softmax_lse.dtype)
+        else:
+            raise RuntimeError("Unexpected softmax_lse shape for smoothing correction.")
+        return out, softmax_lse
+
+    return result
 
 
 def flash_attn_combine(out_partial, lse_partial, out=None, out_dtype=None):
