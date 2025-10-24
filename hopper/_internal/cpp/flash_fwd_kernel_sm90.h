@@ -509,9 +509,19 @@ namespace flash
                         float const q_descale = params.mainloop.ptr_q_descale == nullptr ? 1.0f : params.mainloop.ptr_q_descale[bidb * get<0>(params.mainloop.stride_q_descale) + bidh_kv * get<1>(params.mainloop.stride_q_descale)];
                         float const k_descale = params.mainloop.ptr_k_descale == nullptr ? 1.0f : params.mainloop.ptr_k_descale[bidb * get<0>(params.mainloop.stride_k_descale) + bidh_kv * get<1>(params.mainloop.stride_k_descale)];
                         softmax_scale_log2 *= q_descale * k_descale;
-                    }
+                    }                    
+                    const int thread_idx = threadIdx.x - MmaThreadOffset;
+
+                    const int m_block = get<0>(block_coord);
+                    const int local_row_idx = thread_idx / 4;
+                    // const bool not_last_m_block = params.scheduler.num_blocks > m_block + 1;
+                    // const bool not_masked_by_seqlen = not_last_m_block | ();
+                    const int row_mask = get<0>(params.mainloop.shape_Q) - (m_block * kBlockM) + kBlockM;
+
                     // DOR: kNRows = 2 * (2 * 128 / 256) = 2
-                    flash::Softmax<!LargeHeadDimV ? 2 * (2 * kBlockM / NumMmaThreads) : 2, /*Max_offset=*/!Is_FP8 ? 0 : 8> softmax(softmax_scale_log2);
+                    flash::Softmax<!LargeHeadDimV ? 2 * (2 * kBlockM / NumMmaThreads) : 2, /*Max_offset=*/!Is_FP8 ? 0 : 8> softmax(softmax_scale_log2, row_mask, local_row_idx);
+                    // // DOR: kNRows = 2 * (2 * 128 / 256) = 2
+                    // flash::Softmax<!LargeHeadDimV ? 2 * (2 * kBlockM / NumMmaThreads) : 2, /*Max_offset=*/!Is_FP8 ? 0 : 8> softmax(softmax_scale_log2);
 
                     /*
                     taken from the answer here: https://youtu.be/JwUcZwPOCpA?t=3152
@@ -523,7 +533,7 @@ namespace flash
                     // Attention output (GEMM-II) accumulator.
                     Tensor tOrO = partition_fragment_C(tiled_mma_pv, select<0, 1>(TileShape_MNK_PV{}));
                     bool tile_valid;
-                    const int thread_idx = threadIdx.x - MmaThreadOffset;
+                    // const int thread_idx = threadIdx.x - MmaThreadOffset;
                     if constexpr (!LargeHeadDimV)
                     {
                         tile_valid = mainloop.mma_dispatch(
