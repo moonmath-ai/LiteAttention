@@ -133,11 +133,11 @@ namespace flash
         int const warp_idx_in_warpgroup = __shfl_sync(0xffffffff, (threadIdx.x / 32) % 4, 0);
         // bool const is_warp_leader = (threadIdx.x % 32) == 0;
         bool const is_warp_leader = cute::elect_one_sync();
-        int const row_mask;
-        int const local_row_idx;
+        // int const row_mask;
+        // int const local_row_idx;
 
-        CUTLASS_DEVICE Softmax(float const softmax_scale_log2_, int const row_mask_, int const local_row_idx_) : softmax_scale_log2(softmax_scale_log2_), row_mask(row_mask_), local_row_idx(local_row_idx_) {};
-        // CUTLASS_DEVICE Softmax(float const softmax_scale_log2_) : softmax_scale_log2(softmax_scale_log2_) {};
+        // CUTLASS_DEVICE Softmax(float const softmax_scale_log2_, int const row_mask_, int const local_row_idx_) : softmax_scale_log2(softmax_scale_log2_), row_mask(row_mask_), local_row_idx(local_row_idx_) {};
+        CUTLASS_DEVICE Softmax(float const softmax_scale_log2_) : softmax_scale_log2(softmax_scale_log2_) {};
 
         template <bool const Is_first, bool const Check_inf = false, bool const softmax_cond_assign = false, typename Tensor0>
         __forceinline__ __device__ TensorT max_get_scale_detect_qk_skip(
@@ -196,7 +196,8 @@ namespace flash
                     // do_qk |= (((cur - prev) * softmax_scale_log2) > thr);
 
                     // do_qk |= (((scores_max_local(mi) - prev) * softmax_scale_log2) > thr);
-                    do_qk |= (((scores_max_local(mi) - prev) * softmax_scale_log2) > thr) & (row_mask >= (local_row_idx + mi * 8));
+                    // do_qk |= (((scores_max_local(mi) - prev) * softmax_scale_log2) > thr) & (row_mask >= (local_row_idx + mi * 8));
+                    do_qk |= (((scores_max_local(mi) - prev) * softmax_scale_log2) > thr);
 
                     // do_qk |= scores_max_local(mi) * thr > prev;
 

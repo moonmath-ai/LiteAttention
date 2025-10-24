@@ -41,13 +41,13 @@ struct Mask {
     {
     };
 
-    template <bool Seqlenk_mask=false, bool Causal_mask=false, bool Local_mask=false,
+    template <bool Seqlenk_mask=false, bool Seqlenq_mask=false, bool Causal_mask=false, bool Local_mask=false,
         typename Engine, typename Layout>
     CUTLASS_DEVICE
     void apply(Tensor<Engine, Layout> &tSrS, const int m_block, const int n_block) const {
         static_assert(!(Causal_mask && Local_mask), "Cannot be both causal and local");
         static_assert(Layout::rank == 3, "Only support 3D Tensor");
-        if (!Seqlenk_mask && !Causal_mask && !Local_mask) { return; }
+        if (!Seqlenk_mask && !Seqlenq_mask && !Causal_mask && !Local_mask) { return; }
 
         auto thread_mma = TiledMma{}.get_thread_slice(thread_idx);
         auto thread0_mma = TiledMma{}.get_thread_slice(_0{});
@@ -64,13 +64,20 @@ struct Mask {
         // So we subtract the limit by the first col index of this thread (get<Col>(tScS_rowcol(_0{}, _0{})))
         int const thread_col_offset = get<Col>(tScS_rowcol(_0{}, _0{}));
         int const seqlenk_col_limit = seqlen_k - n_block * kBlockN - thread_col_offset;
+        // Similarly for row indices, subtract the limit by the first row index of this thread
+        int const thread_row_offset = get<Row>(tScS_rowcol(_0{}, _0{}));
+        int const seqlenq_row_limit = seqlen_q - m_block * kBlockM - thread_row_offset;
         if constexpr (!Causal_mask && !Local_mask) {
-            if constexpr (Seqlenk_mask) {  // Just masking based on col
+            if constexpr (Seqlenk_mask || Seqlenq_mask) {  // Masking based on col and/or row
                 #pragma unroll
-                for (int n = 0; n < size<1>(tSrS_rowcol); ++n) {
-                    if (int(get<Col>(t0ScS_rowcol(_0{}, n))) >= seqlenk_col_limit) {
-                        #pragma unroll
-                        for (int m = 0; m < size<0>(tSrS_rowcol); ++m) { tSrS_rowcol(m, n) = -INFINITY; }
+                for (int m = 0; m < size<0>(tSrS_rowcol); ++m) {
+                    bool const row_out_of_bounds = Seqlenq_mask && (int(get<Row>(t0ScS_rowcol(m, _0{}))) >= seqlenq_row_limit);
+                    #pragma unroll
+                    for (int n = 0; n < size<1>(tSrS_rowcol); ++n) {
+                        bool const col_out_of_bounds = Seqlenk_mask && (int(get<Col>(t0ScS_rowcol(_0{}, n))) >= seqlenk_col_limit);
+                        if (row_out_of_bounds || col_out_of_bounds) {
+                            tSrS_rowcol(m, n) = -INFINITY;
+                        }
                     }
                 }
             }
@@ -92,12 +99,13 @@ struct Mask {
                         int const row_idx = !PackGQA
                             ? get<Row>(tScS_rowcol(m, _0{})) + m_block * kBlockM
                             :  __shfl_sync(0xffffffff, mma_m_idx, m % kMmaThreadsPerRow, kMmaThreadsPerRow);
+                        bool const row_out_of_bounds = Seqlenq_mask && (int(get<Row>(t0ScS_rowcol(m, _0{}))) >= seqlenq_row_limit);
                         int const col_limit_right = !Seqlenk_mask
                             ? row_idx + causal_row_offset
                             : __viaddmin_s32(row_idx, causal_row_offset, seqlenk_col_limit);
                         #pragma unroll
                         for (int n = 0; n < size<1>(tSrS_rowcol); ++n) {
-                            if (int(get<Col>(t0ScS_rowcol(_0{}, n))) >= col_limit_right) { tSrS_rowcol(m, n) = -INFINITY; }
+                            if (row_out_of_bounds || int(get<Col>(t0ScS_rowcol(_0{}, n))) >= col_limit_right) { tSrS_rowcol(m, n) = -INFINITY; }
                         }
                     }
                 } else {
@@ -109,6 +117,7 @@ struct Mask {
                         int const row_idx = !PackGQA
                             ? get<Row>(tScS_rowcol(m, _0{})) + m_block * kBlockM
                             :  __shfl_sync(0xffffffff, mma_m_idx, m % kMmaThreadsPerRow, kMmaThreadsPerRow);
+                        bool const row_out_of_bounds = Seqlenq_mask && (int(get<Row>(t0ScS_rowcol(m, _0{}))) >= seqlenq_row_limit);
                         int col_limit_right = !Seqlenk_mask
                             ? row_idx + local_row_offset_right
                             : __viaddmin_s32(row_idx, local_row_offset_right, seqlenk_col_limit);
@@ -121,24 +130,27 @@ struct Mask {
                         #pragma unroll
                         for (int n = 0; n < size<1>(tSrS_rowcol); ++n) {
                             int const col_idx = int(get<Col>(t0ScS_rowcol(m, n)));
-                            if (col_idx >= col_limit_right || (col_idx < col_limit_left && col_idx >= col_limit_sink)) { tSrS_rowcol(m, n) = -INFINITY; }
+                            if (row_out_of_bounds || col_idx >= col_limit_right || (col_idx < col_limit_left && col_idx >= col_limit_sink)) { tSrS_rowcol(m, n) = -INFINITY; }
                         }
                     }
                 }
             } else {
                 // TODO: backward does not support attention_chunk yet
-                int const thread_row_offset = get<Row>(tScS_rowcol(_0{}, _0{}));
+                // Note: thread_row_offset is already computed above (line 68-69)
                 int const causal_row_offset = seqlenk_col_limit - seqlen_q + m_block * kBlockM + thread_row_offset;
                 if constexpr (Causal_mask) {
                     #pragma unroll
                     for (int n = 0; n < size<1>(tSrS_rowcol); ++n) {
                         int const col0 = int(get<Col>(t0ScS_rowcol(_0{}, n)));
+                        bool const col_out_of_bounds = Seqlenk_mask && (col0 >= seqlenk_col_limit);
                         // If col0 is beyond the column limit, we want to mask out the entire column, by setting
                         // row limit to be kBlockM.
                         int const row_limit_top = col0 >= seqlenk_col_limit ? kBlockM : col0 - causal_row_offset;
                         #pragma unroll
                         for (int m = 0; m < size<0>(tSrS_rowcol); ++m) {
-                            if (int(get<Row>(t0ScS_rowcol(m, _0{}))) < row_limit_top) { tSrS_rowcol(m, n) = -INFINITY; }
+                            int const row_idx = int(get<Row>(t0ScS_rowcol(m, _0{})));
+                            bool const row_out_of_bounds = Seqlenq_mask && (row_idx >= seqlenq_row_limit);
+                            if (row_out_of_bounds || col_out_of_bounds || row_idx < row_limit_top) { tSrS_rowcol(m, n) = -INFINITY; }
                         }
                     }
                 } else {
@@ -146,6 +158,7 @@ struct Mask {
                     #pragma unroll
                     for (int n = 0; n < size<1>(tSrS_rowcol); ++n) {
                         int const col0 = int(get<Col>(t0ScS_rowcol(_0{}, n)));
+                        bool const col_out_of_bounds = Seqlenk_mask && (col0 >= seqlenk_col_limit);
                         // If col0 is beyond the column limit, we want to mask out the entire column, by setting
                         // row limit to be kBlockM.
                         int const row_limit_top = col0 >= seqlenk_col_limit ? kBlockM : col0 - causal_row_offset - window_size_right;
@@ -153,7 +166,8 @@ struct Mask {
                         #pragma unroll
                         for (int m = 0; m < size<0>(tSrS_rowcol); ++m) {
                             int const row_idx = int(get<Row>(t0ScS_rowcol(m, _0{})));
-                            if (row_idx < row_limit_top || row_idx > row_limit_bot) { tSrS_rowcol(m, n) = -INFINITY; }
+                            bool const row_out_of_bounds = Seqlenq_mask && (row_idx >= seqlenq_row_limit);
+                            if (row_out_of_bounds || col_out_of_bounds || row_idx < row_limit_top || row_idx > row_limit_bot) { tSrS_rowcol(m, n) = -INFINITY; }
                         }
                     }
                 }

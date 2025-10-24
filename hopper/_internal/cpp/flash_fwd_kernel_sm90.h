@@ -512,16 +512,18 @@ namespace flash
                     }                    
                     const int thread_idx = threadIdx.x - MmaThreadOffset;
 
-                    const int m_block = get<0>(block_coord);
-                    const int local_row_idx = thread_idx / 4;
-                    // const bool not_last_m_block = params.scheduler.num_blocks > m_block + 1;
-                    // const bool not_masked_by_seqlen = not_last_m_block | ();
-                    const int row_mask = get<0>(params.mainloop.shape_Q) - (m_block * kBlockM) + kBlockM;
+                    // const int m_block = get<0>(block_coord);
+                    // // const int local_row_idx = thread_idx / 4;
+                    // const int local_row_idx = (thread_idx / 32) * 16 + (thread_idx % 32) / 4;
+                    // // const bool not_last_m_block = params.scheduler.num_blocks > m_block + 1;
+                    // // const bool not_masked_by_seqlen = not_last_m_block | ();
+                    // // how many rows are active in the current m_block? (it's not always kBlockM in the last Q tile)
+                    // const int row_mask = get<0>(params.mainloop.shape_Q) - (m_block * kBlockM) + kBlockM;
 
-                    // DOR: kNRows = 2 * (2 * 128 / 256) = 2
-                    flash::Softmax<!LargeHeadDimV ? 2 * (2 * kBlockM / NumMmaThreads) : 2, /*Max_offset=*/!Is_FP8 ? 0 : 8> softmax(softmax_scale_log2, row_mask, local_row_idx);
                     // // DOR: kNRows = 2 * (2 * 128 / 256) = 2
-                    // flash::Softmax<!LargeHeadDimV ? 2 * (2 * kBlockM / NumMmaThreads) : 2, /*Max_offset=*/!Is_FP8 ? 0 : 8> softmax(softmax_scale_log2);
+                    // flash::Softmax<!LargeHeadDimV ? 2 * (2 * kBlockM / NumMmaThreads) : 2, /*Max_offset=*/!Is_FP8 ? 0 : 8> softmax(softmax_scale_log2, row_mask, local_row_idx);
+                    // DOR: kNRows = 2 * (2 * 128 / 256) = 2
+                    flash::Softmax<!LargeHeadDimV ? 2 * (2 * kBlockM / NumMmaThreads) : 2, /*Max_offset=*/!Is_FP8 ? 0 : 8> softmax(softmax_scale_log2);
 
                     /*
                     taken from the answer here: https://youtu.be/JwUcZwPOCpA?t=3152
