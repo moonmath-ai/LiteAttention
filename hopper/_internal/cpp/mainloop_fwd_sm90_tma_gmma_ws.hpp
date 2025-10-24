@@ -1682,6 +1682,9 @@ namespace flash
                     scoremod_premask_fn(tSrS);
                     mask_fn(tSrS, n_block);
                     if constexpr (Is_skipable){
+                        mask.template apply<false /*Seqlenk_mask*/, true /*Seqlenq_mask*/, Is_causal, Is_local>(tSrS, m_block, n_block);
+                    }
+                    if constexpr (Is_skipable){
                     cute::copy(
                         softmax.template max_get_scale_detect_qk_skip</*Is_first=*/false, Check_inf, softmax_cond_assign>(
                             tSrS, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests),
