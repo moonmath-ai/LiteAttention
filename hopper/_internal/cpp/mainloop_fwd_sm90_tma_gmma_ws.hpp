@@ -822,9 +822,12 @@ namespace flash
             }
 
             SkipListReader skip_reader;
+            SkipListWriter skip_writer;
             if constexpr (Is_skipable)
             {
                 skip_reader.init<TileShape_MNK>(params, bidb, bidh, m_block);
+                bool const saving_thread = (thread_idx % 128) == 0;
+                skip_writer.init<TileShape_MNK>(params, bidb, bidh, m_block, saving_thread);
             }
 
             Tensor sQ = make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_q.data()), SmemLayoutQ{});

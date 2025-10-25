@@ -143,8 +143,13 @@ namespace flash
                 //                    cute::array<int, 0>> curr_n_block;
                 // int curr_n_block[NumMmaWarpGroups][CollectiveMainloop::kStages];
                 // int skip_tests[NumMmaWarpGroups][CollectiveMainloop::kStages][4];
-                int skip_tests[4];
+                // int skip_tests[4];
                 // int skip_tests[CollectiveMainloop::kStages][NumMmaWarpGroups][4];
+                // K0 K1 V0 K2 V1 K3 V2 ... only when the producer accuired V2 we know the result of QK0 is ready
+                // because of this we need to store the skip tests for the previous 3 stages.
+                // the delay between the producer and consumer could be at most 2 * kStages.
+                int skip_tests[2 * CollectiveMainloop::kStages][4];
+                int current_n_block[kStages];
             } pipelines;
         };
 
