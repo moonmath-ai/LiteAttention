@@ -70,15 +70,6 @@ namespace flash
             
             list_ptr = &params.qk_skip_mask_args.attn_read_list[mask_offset];
             skip_list_len = list_ptr[0];
-            // read_idx = 1;
-
-            // // TODO: find a better way to handle the edge case in which we skip everything
-            // if (skip_list_len != 0){
-            //     load_range();
-            // }else{
-            //     start_idx = 0;
-            //     end_idx = 0;
-            // }
 
             // we ignore the edge case which skip_list_len == 0 because even in this case
             // we will be better off loading the first range because it's like to use the first range 2 timesteps ago
@@ -104,6 +95,13 @@ namespace flash
         bool has_more() const
         {
             return read_idx <= skip_list_len;
+        }
+
+        // Check if we have more ranges to process
+        __device__ __forceinline__ 
+        bool has_more_n_block(int const n_block) const
+        {
+            return has_more() & (n_block - 1 >= end_idx);
         }
     };
 
@@ -172,6 +170,127 @@ namespace flash
             {
                 list_ptr[0] = write_idx - 1;
             }
+        }
+    };
+
+    // ============================================================================
+    // Delayed wrapper for SkipListWriter using circular buffer
+    // Buffers operations and replays them after a specified delay
+    // This allows the writer to lag behind the reader by DelayAmount iterations
+    // ============================================================================
+    template <int DelayAmount>
+    struct DelayedSkipListWriter
+    {
+        //should reside in thread registers.
+        SkipListWriter writer;
+        // should reside in shared memory.
+        constexpr int BufferSize = DelayAmount * 2;
+        // Circular buffer state
+        int n_blocks_buffer[BufferSize];
+        int end_range_buffer[BufferSize];
+        int4 skip_tests[BufferSize];
+
+        bool replayed_skip;
+        int record_idx = 0;
+        int replay_idx = DelayAmount;
+        // int replay_idx = 2;
+
+        /*
+        DelayAmount = 4, example:
+        K0 - record_n_block -> record_idx = 0 -> record_idx = 1
+        K1 - record_n_block -> record_idx = 1 -> record_idx = 2
+        V0 - replay -> replay_idx = 2 -> replay_idx = 3
+        K2 - record_n_block -> record_idx = 2 -> record_idx = 3
+        V1 - replay -> replay_idx = 3 -> replay_idx = 0
+        K3 - record_n_block -> record_idx = 3 -> record_idx = 0
+        V2 - replay -> replay_idx = 0 -> replay_idx = 1
+        */
+        
+        // Initialize the underlying writer
+        template <typename TileShape_MNK, typename ParamsType>
+        __device__ __forceinline__ 
+        void init(const ParamsType &params, int bidb, int bidh, int m_block, bool saving_thread)
+        {
+            writer.init<TileShape_MNK>(params, bidb, bidh, m_block, saving_thread);
+            for (int i = 0; i < BufferSize; ++i) {
+                // init everything to true because we would write something only when we
+                // encounter a false skip result. and now it could happen only after the buffers are full.
+                skip_tests[i] = make_int4(1, 1, 1, 1);
+                // n_blocks_buffer[i] = 0;
+                end_range_buffer[i] = -1;
+            }
+        }
+
+        // consider: calling this when acquiring K for loading.
+        __device__ __forceinline__ 
+        void record_n_block(int n_block)
+        {
+            // record the current n_block for replay in DelayAmount iterations from now.
+            n_blocks_buffer[record_idx] = n_block;
+            record_idx = (record_idx + 1) % DelayAmount;
+        }
+
+        __device__ __forceinline__ 
+        void record_end_range(int end_idx)
+        {
+            end_range_buffer[(record_idx - 1) % DelayAmount] = end_idx;
+        }
+
+        // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        // consider: making these functions private and making replay() public.
+
+        __device__ __forceinline__ 
+        void replay_transition()
+        {
+            // calculate the replayed skip result from DelayAmount ago.
+            replayed_skip = 
+                skip_tests[replay_idx].x &
+                skip_tests[replay_idx].y &
+                skip_tests[replay_idx].z &
+                skip_tests[replay_idx].w;
+            
+            // replay the n_block from DelayAmount ago.
+            int replayed_n_block = n_blocks_buffer[replay_idx];
+
+            // replay record_transition with the values from DelayAmount ago.
+            writer.record_transition(replayed_skip, replayed_n_block);
+
+            // reset the skip tests for reuse by the consumers.
+            skip_tests[replay_idx] = make_int4(1, 1, 1, 1);
+        }
+
+        __device__ __forceinline__ 
+        void replay_end_range()
+        {
+            int replayed_end_idx = end_range_buffer[replay_idx];
+            if (replayed_end_idx != -1) {
+                writer.record_range_end(replayed_skip, replayed_end_idx);
+            }
+            end_range_buffer[replay_idx] = -1;
+        }
+
+        __device__ __forceinline__ 
+        void replay()
+        {
+            replay_transition();
+            replay_end_range();
+            replay_idx = (replay_idx + 1) % DelayAmount;
+        }
+
+        // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        
+        // Finalize by flushing all remaining queue entries
+        __device__ __forceinline__ 
+        void finalize()
+        {
+            // replay all of the buffer.
+            // we don't need to warry about the buffer not being full becuase we init skip_tests
+            // in such a way that it woudn't effect the resulting write skip list.
+            for (int i = 0; i < DelayAmount; ++i) {
+                replay();
+            }
+
+            writer.finalize();
         }
     };
 
@@ -1085,7 +1204,7 @@ namespace flash
                     load_V(n_block, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/, 0);
                 }
                 // if (thread_idx == 0) { printf("Producer: main load, before load_K, index = %d\n", smem_pipe_write.index());}
-                load_K(n_block, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/, (n_block - 1 >= skip_reader.end_idx) | skip_reader.has_more());
+                load_K(n_block, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/, skip_reader.has_more_n_block(n_block));
                 // if (thread_idx == 0) { printf("Producer: main load, after load K, index = %d\n", smem_pipe_write.index());}
             }
 
@@ -1140,7 +1259,7 @@ namespace flash
             // if (thread_idx == 0) { printf("Producer: main load, after barrier_O\n");}
 
             // Lambda to load K and V for a given n_block
-            auto load_KV_for_block = [&](int n_block, int n_block_prev, PipelineState& smem_pipe_write, PipelineState& smem_pipe_write_v, bool not_last_load, int skip_tests_index) ->
+            auto load_KV_for_block = [&](int n_block, int n_block_prev, PipelineState& smem_pipe_write, PipelineState& smem_pipe_write_v, bool not_last_load, int skip_tests_index) -> bool
             {
                 bool skip = false;
                 if (should_load_KV)
@@ -1177,13 +1296,14 @@ namespace flash
             {
                 if (should_load_KV)
                 {
-                    load_V(n_block, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/);
+                    load_V(n_block, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/, 0);
                 }
             }
 
             int n_block_prev = n_block;
 
             if constexpr (Is_skipable){
+                PipelineState<CollectiveMainloop::kStages + 1> pipe_write_skip;
                 // finish the first range
                 // ++n_block;
                 --n_block;
@@ -1193,7 +1313,8 @@ namespace flash
                 {
                     PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
                     ++smem_pipe_write;
-                    load_KV_for_block(n_block, n_block_prev, smem_pipe_write, smem_pipe_write_v);
+                    ++pipe_write_skip;
+                    const bool skip = load_KV_for_block(n_block, n_block_prev, smem_pipe_write, smem_pipe_write_v, skip_reader.has_more_n_block(n_block), pipe_write_skip.index());
                     n_block_prev = n_block;
                     if constexpr (Transpose_V){ copy_Vt_to_V(smem_pipe_write_v); }
                 }
@@ -1271,6 +1392,7 @@ namespace flash
                     pipeline_vt.producer_tail(smem_pipe_write);
                 }
             }
+            //TODO: do the final replay here.
         }
 
         CUTLASS_DEVICE void
