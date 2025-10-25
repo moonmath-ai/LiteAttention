@@ -181,19 +181,17 @@ namespace flash
     template <int DelayAmount>
     struct DelayedSkipListWriter
     {
-        //should reside in thread registers.
-        SkipListWriter writer;
-        // should reside in shared memory.
         constexpr int BufferSize = DelayAmount * 2;
-        // Circular buffer state
+        // these arrays should reside in shared memory.
         int n_blocks_buffer[BufferSize];
         int end_range_buffer[BufferSize];
         int4 skip_tests[BufferSize];
 
+        //should reside in thread registers.
+        SkipListWriter writer;
         bool replayed_skip;
         int record_idx = 0;
         int replay_idx = DelayAmount;
-        // int replay_idx = 2;
 
         /*
         DelayAmount = 4, example:
