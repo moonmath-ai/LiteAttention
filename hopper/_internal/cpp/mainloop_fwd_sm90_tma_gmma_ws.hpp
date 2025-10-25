@@ -980,9 +980,13 @@ namespace flash
                 }
             }
 
-            auto load_K = [&](int const n_block, auto const &smem_pipe_write, auto need_seqlenk_masking_type)
+            auto load_K = [&](int const n_block, auto const &smem_pipe_write, auto need_seqlenk_masking_type, bool const not_last_load)
             {
                 pipeline_k.producer_acquire(smem_pipe_write);
+                if constexpr (Is_skipable){
+                    params.pipelines.current_n_block[smem_pipe_write.index()][0] = n_block;
+                    params.pipelines.current_n_block[smem_pipe_write.index()][1] = not_last_load;
+                }
                 if constexpr (!PagedKVNonTMA)
                 {
                     auto [n_block_idx, bidb_kv_idx] = paged_kv_manager.get_indices_for_K_TMA();
@@ -997,10 +1001,22 @@ namespace flash
                 }
             };
 
-            auto load_V = [&](int const n_block, auto const &smem_pipe_write, auto need_seqlenk_masking_type)
+            auto load_V = [&](int const n_block, auto const &smem_pipe_write, auto need_seqlenk_masking_type, int const skip_tests_index) -> bool
             {
                 auto pipeline_v_load = cute::conditional_return<!Transpose_V>(pipeline_v, pipeline_vt);
                 pipeline_v_load.producer_acquire(smem_pipe_write);
+                bool skip = false;
+                if constexpr (Is_skipable){
+                    // calculate the skip condition from kStages + 1 ago.
+                    skip = 
+                        params.pipelines.skip_tests[skip_tests_index][0] &
+                        params.pipelines.skip_tests[skip_tests_index][1] &
+                        params.pipelines.skip_tests[skip_tests_index][2] &
+                        params.pipelines.skip_tests[skip_tests_index][3];
+
+                    // Vectorized assignment: set all 4 ints to 0 using a single 128-bit store
+                    *reinterpret_cast<int4*>(&params.pipelines.skip_tests[skip_tests_index][0]) = make_int4(0, 0, 0, 0);
+                }
                 if constexpr (!PagedKVNonTMA)
                 {
                     auto [n_block_idx, bidb_kv_idx] = paged_kv_manager.get_indices_for_V_TMA();
@@ -1013,6 +1029,7 @@ namespace flash
                     paged_kv_manager.template load_V<Seqlenk_mask>(n_block, sVcpasync(_, _, smem_pipe_write.index()));
                     pipeline_v_load.producer_commit(smem_pipe_write, cutlass::arch::cpasync_barrier_arrive);
                 }
+                return skip;
             };
 
             auto copy_Vt_to_V = [&](auto const &smem_pipe_write)
@@ -1048,6 +1065,13 @@ namespace flash
 
             if (should_load_KV)
             {
+                if constexpr (Is_skipable){
+                    // reset the skip tests before starting to load anything
+                    for (int i = 0; i < CollectiveMainloop::kStages + 1; ++i){
+                        *reinterpret_cast<int4*>(&params.pipelines.skip_tests[0][0]) = make_int4(0, 0, 0, 0);
+                    }
+                }
+
                 if constexpr (PagedKVNonTMA)
                 {
                     paged_kv_manager.template load_page_table<true /*Seqlenk_mask*/, true /*First_iter*/>(n_block);
@@ -1061,7 +1085,7 @@ namespace flash
                     load_V(n_block, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/);
                 }
                 // if (thread_idx == 0) { printf("Producer: main load, before load_K, index = %d\n", smem_pipe_write.index());}
-                load_K(n_block, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/);
+                load_K(n_block, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/, n_block - 1 >= skip_reader.end_idx);
                 // if (thread_idx == 0) { printf("Producer: main load, after load K, index = %d\n", smem_pipe_write.index());}
             }
 
