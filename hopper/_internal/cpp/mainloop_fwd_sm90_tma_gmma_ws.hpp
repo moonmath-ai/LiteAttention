@@ -1082,10 +1082,10 @@ namespace flash
                 }
                 if constexpr (Transpose_V)
                 {
-                    load_V(n_block, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/);
+                    load_V(n_block, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/, 0);
                 }
                 // if (thread_idx == 0) { printf("Producer: main load, before load_K, index = %d\n", smem_pipe_write.index());}
-                load_K(n_block, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/, n_block - 1 >= skip_reader.end_idx);
+                load_K(n_block, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/, (n_block - 1 >= skip_reader.end_idx) | skip_reader.has_more());
                 // if (thread_idx == 0) { printf("Producer: main load, after load K, index = %d\n", smem_pipe_write.index());}
             }
 
@@ -1140,8 +1140,9 @@ namespace flash
             // if (thread_idx == 0) { printf("Producer: main load, after barrier_O\n");}
 
             // Lambda to load K and V for a given n_block
-            auto load_KV_for_block = [&](int n_block, int n_block_prev, PipelineState& smem_pipe_write, PipelineState& smem_pipe_write_v)
+            auto load_KV_for_block = [&](int n_block, int n_block_prev, PipelineState& smem_pipe_write, PipelineState& smem_pipe_write_v, bool not_last_load, int skip_tests_index) ->
             {
+                bool skip = false;
                 if (should_load_KV)
                 {
                     if constexpr (PagedKVNonTMA)
@@ -1154,21 +1155,22 @@ namespace flash
                     }
                     if constexpr (Transpose_V)
                     {
-                        load_V(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/);
+                        skip = load_V(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/, skip_tests_index);
                     }
-                    load_K(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/);
+                    load_K(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/, not_last_load);
                     if constexpr (!Transpose_V)
                     {
                         if constexpr (IntraWGOverlap)
                         {
-                            load_V(n_block_prev, smem_pipe_write_v, cute::true_type{} /*Seqlenk_mask*/);
+                            skip = load_V(n_block_prev, smem_pipe_write_v, cute::true_type{} /*Seqlenk_mask*/, skip_tests_index);
                         }
                         else
                         {
-                            load_V(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/);
+                            skip = load_V(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/, skip_tests_index);
                         }
                     }
                 }
+                return skip;
             };
 
             if constexpr (!Transpose_V && !IntraWGOverlap)
