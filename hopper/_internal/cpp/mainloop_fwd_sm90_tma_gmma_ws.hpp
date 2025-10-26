@@ -51,6 +51,7 @@ namespace flash
         int read_idx = 1;
         int start_idx;
         int end_idx;
+        int step;
 
         // Initialize the reader with calculated offset
         template <typename TileShape_MNK, typename ParamsType>
@@ -70,40 +71,35 @@ namespace flash
             
             list_ptr = &params.qk_skip_mask_args.attn_read_list[mask_offset];
             skip_list_len = list_ptr[0];
-            // read_idx = 1;
-
-            // // TODO: find a better way to handle the edge case in which we skip everything
-            // if (skip_list_len != 0){
-            //     load_range();
-            // }else{
-            //     start_idx = 0;
-            //     end_idx = 0;
-            // }
+            read_idx = skip_list_len;
 
             // we ignore the edge case which skip_list_len == 0 because even in this case
             // we will be better off loading the first range because it's like to use the first range 2 timesteps ago
             load_range();
+            step = 1 - 2 * (start_idx > end_idx);
         }
 
         __device__ __forceinline__ 
         void load_range()
         {
             start_idx = list_ptr[read_idx];
-            end_idx = list_ptr[read_idx + 1];
+            end_idx = list_ptr[read_idx - 1];
         }
 
         // Advance to the next skip list range
         __device__ __forceinline__ 
         void advance()
         {
-            read_idx += 2;
+            // read_idx += 2;
+            read_idx -= 2;
         }
 
         // Check if we have more ranges to process
         __device__ __forceinline__ 
         bool has_more() const
         {
-            return read_idx <= skip_list_len;
+            // return read_idx <= skip_list_len;
+            return read_idx > 0;
         }
     };
 
@@ -1157,10 +1153,13 @@ namespace flash
             if constexpr (Is_skipable){
                 // finish the first range
                 // ++n_block;
-                --n_block;
+
+                // --n_block;
+                n_block += skip_reader.step;
 
                 #pragma unroll 1
-                for (; n_block >= skip_reader.end_idx; n_block--)
+                // for (; n_block >= skip_reader.end_idx; n_block--)
+                for (; (skip_reader.end_idx - n_block) * skip_reader.step >= 0; n_block+=skip_reader.step)
                 {
                     PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
                     ++smem_pipe_write;
@@ -1176,7 +1175,8 @@ namespace flash
                 {
                     skip_reader.load_range();
                     #pragma unroll 1
-                    for (n_block = skip_reader.start_idx; n_block >= skip_reader.end_idx; n_block--)
+                    // for (n_block = skip_reader.start_idx; n_block >= skip_reader.end_idx; n_block--)
+                    for (; (skip_reader.end_idx - n_block) * skip_reader.step >= 0; n_block+=skip_reader.step)
                     {
                         // // this happens only in the first iteration of the loop
                         // if (n_block == n_block_prev) [[unlikely]]
@@ -1787,10 +1787,12 @@ namespace flash
                     bool skip = false;
                     if constexpr (IsSkipWriter) skip_writer.record_transition(skip, n_block);
                     // ++n_block;
-                    --n_block;
+                    // --n_block;
+                    n_block += skip_reader.step;
                     do
                     {
-                        for (; n_block >= skip_reader.end_idx; n_block--)
+                        // for (; n_block >= skip_reader.end_idx; n_block--)
+                        for (; (skip_reader.end_idx - n_block) * skip_reader.step >= 0; n_block+=skip_reader.step)
                         {
                             skip = fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/);
                             if constexpr (IsSkipWriter) skip_writer.record_transition(skip, n_block);
