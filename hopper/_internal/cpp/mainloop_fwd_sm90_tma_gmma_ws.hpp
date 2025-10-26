@@ -75,15 +75,18 @@ namespace flash
 
             // we ignore the edge case which skip_list_len == 0 because even in this case
             // we will be better off loading the first range because it's like to use the first range 2 timesteps ago
-            load_range();
-            step = 1 - 2 * (start_idx > end_idx);
+            start_idx = list_ptr[read_idx];
+            end_idx = list_ptr[read_idx - 1];
+            step = (start_idx < end_idx) ? 1 : -1;
+            start_idx += step;
+            end_idx += step;
         }
 
         __device__ __forceinline__ 
         void load_range()
         {
-            start_idx = list_ptr[read_idx];
-            end_idx = list_ptr[read_idx - 1];
+            start_idx = list_ptr[read_idx] + step;
+            end_idx = list_ptr[read_idx - 1] + step;
         }
 
         // Advance to the next skip list range
@@ -1159,7 +1162,8 @@ namespace flash
 
                 #pragma unroll 1
                 // for (; n_block >= skip_reader.end_idx; n_block--)
-                for (; (skip_reader.end_idx - n_block) * skip_reader.step >= 0; n_block+=skip_reader.step)
+                // for (; n_block < skip_reader.end_idx; n_block++)
+                for (; (skip_reader.end_idx - n_block) * skip_reader.step > 0; n_block+=skip_reader.step)
                 {
                     PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
                     ++smem_pipe_write;
@@ -1176,7 +1180,9 @@ namespace flash
                     skip_reader.load_range();
                     #pragma unroll 1
                     // for (n_block = skip_reader.start_idx; n_block >= skip_reader.end_idx; n_block--)
-                    for (; (skip_reader.end_idx - n_block) * skip_reader.step >= 0; n_block+=skip_reader.step)
+                    // for (; (skip_reader.end_idx - n_block) * skip_reader.step >= 0; n_block+=skip_reader.step)
+                    // for (; (skip_reader.end_idx - n_block) * skip_reader.step >= 0; n_block+=skip_reader.step)
+                    for (; (skip_reader.end_idx - n_block) * skip_reader.step > 0; n_block+=skip_reader.step)
                     {
                         // // this happens only in the first iteration of the loop
                         // if (n_block == n_block_prev) [[unlikely]]
@@ -1791,8 +1797,7 @@ namespace flash
                     n_block += skip_reader.step;
                     do
                     {
-                        // for (; n_block >= skip_reader.end_idx; n_block--)
-                        for (; (skip_reader.end_idx - n_block) * skip_reader.step >= 0; n_block+=skip_reader.step)
+                        for (; (skip_reader.end_idx - n_block) * skip_reader.step > 0; n_block+=skip_reader.step)
                         {
                             skip = fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/);
                             if constexpr (IsSkipWriter) skip_writer.record_transition(skip, n_block);
