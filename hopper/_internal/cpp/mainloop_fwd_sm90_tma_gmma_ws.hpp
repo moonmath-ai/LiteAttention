@@ -171,13 +171,31 @@ namespace flash
     template <int DelayAmount>
     struct DelayedSkipListReader
     {
-        constexpr int BufferSize = DelayAmount * 2;
-        // these arrays should reside in shared memory.
-        int n_blocks_buffer[BufferSize];
-        int skip_tests[BufferSize][4];
+        static constexpr int BufferSize = DelayAmount * 2;
+        // // these arrays should reside in shared memory.
+        // int n_blocks_buffer[BufferSize];
+        // int end_range_buffer[BufferSize];
+        // int skip_tests[BufferSize][4];
+        // int stop_condition_buffer[BufferSize];
+
+        // Pointers to shared memory buffers
+        int* n_blocks_buffer;
+        int* end_range_buffer;
+        int (*skip_tests)[4];
+        int* stop_condition_buffer;
 
         // we start with -1 because the first call to next_n_block will increment it to 0.
         int index = -1;
+
+        // Constructor to initialize with shared memory pointers
+        __device__ __forceinline__
+        DelayedSkipListReader(int* n_blocks, int* end_range, int (*skip)[4], int* stop_cond)
+            : n_blocks_buffer(n_blocks), end_range_buffer(end_range), 
+              skip_tests(skip), stop_condition_buffer(stop_cond) {}
+
+        // Default constructor
+        __device__ __forceinline__
+        DelayedSkipListReader() = default;
 
         __device__ __forceinline__ int next_n_block()
         {
@@ -190,7 +208,12 @@ namespace flash
             skip_tests[index][warp_idx_in_warpgroup] &= skip;
         }
 
-    }
+        __device__ __forceinline__ bool has_next()
+        {
+            return stop_condition_buffer[index];
+        }
+
+    };
 
     // ============================================================================
     // Delayed wrapper for SkipListWriter using circular buffer
@@ -200,17 +223,34 @@ namespace flash
     template <int DelayAmount>
     struct DelayedSkipListWriter
     {
-        constexpr int BufferSize = DelayAmount * 2;
-        // these arrays should reside in shared memory.
-        int n_blocks_buffer[BufferSize];
-        int end_range_buffer[BufferSize];
-        int4 skip_tests[BufferSize];
+        static constexpr int BufferSize = DelayAmount * 2;
+        // // these arrays should reside in shared memory.
+        // int n_blocks_buffer[BufferSize];
+        // int end_range_buffer[BufferSize];
+        // int skip_tests[BufferSize][4];
+        // int stop_condition_buffer[BufferSize];
+
+        // Pointers to shared memory buffers
+        int* n_blocks_buffer;
+        int* end_range_buffer;
+        int (*skip_tests)[4];
+        int* stop_condition_buffer;
 
         //should reside in thread registers.
         SkipListWriter writer;
         bool replayed_skip;
         int record_idx = 0;
         int replay_idx = DelayAmount;
+
+        // Constructor to initialize with shared memory pointers
+        __device__ __forceinline__
+        DelayedSkipListWriter(int* n_blocks, int* end_range, int (*skip)[4], int* stop_cond)
+            : n_blocks_buffer(n_blocks), end_range_buffer(end_range), 
+              skip_tests(skip), stop_condition_buffer(stop_cond) {}
+
+        // Default constructor
+        __device__ __forceinline__
+        DelayedSkipListWriter() = default;
 
         /*
         DelayAmount = 4, example:
@@ -232,9 +272,12 @@ namespace flash
             for (int i = 0; i < BufferSize; ++i) {
                 // init everything to true because we would write something only when we
                 // encounter a false skip result. and now it could happen only after the buffers are full.
-                skip_tests[i] = make_int4(1, 1, 1, 1);
-                // n_blocks_buffer[i] = 0;
-                end_range_buffer[i] = -1;
+                skip_tests[i][0] = 1;
+                skip_tests[i][1] = 1;
+                skip_tests[i][2] = 1;
+                skip_tests[i][3] = 1;
+                end_range_buffer[i] = -2;
+                stop_condition_buffer[i] = true;
             }
         }
 
@@ -248,10 +291,16 @@ namespace flash
         }
 
         __device__ __forceinline__ 
-        void record_end_range(int end_idx)
+        void record_range_end(int end_idx)
         {
             // we save into previous index!
             end_range_buffer[(record_idx - 1) % DelayAmount] = end_idx;
+        }
+
+        __device__ __forceinline__ 
+        void record_final_iter()
+        {
+            stop_condition_buffer[(record_idx - 1) % DelayAmount] = false;
         }
 
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -262,10 +311,10 @@ namespace flash
         {
             // calculate the replayed skip result from DelayAmount ago.
             replayed_skip = 
-                skip_tests[replay_idx].x &
-                skip_tests[replay_idx].y &
-                skip_tests[replay_idx].z &
-                skip_tests[replay_idx].w;
+                skip_tests[replay_idx][0] &
+                skip_tests[replay_idx][1] &
+                skip_tests[replay_idx][2] &
+                skip_tests[replay_idx][3];
             
             // replay the n_block from DelayAmount ago.
             int replayed_n_block = n_blocks_buffer[replay_idx];
@@ -274,17 +323,20 @@ namespace flash
             writer.record_transition(replayed_skip, replayed_n_block);
 
             // reset the skip tests for reuse by the consumers.
-            skip_tests[replay_idx] = make_int4(1, 1, 1, 1);
+            skip_tests[replay_idx][0] = 1;
+            skip_tests[replay_idx][1] = 1;
+            skip_tests[replay_idx][2] = 1;
+            skip_tests[replay_idx][3] = 1;
         }
 
         __device__ __forceinline__ 
         void replay_end_range()
         {
             int replayed_end_idx = end_range_buffer[replay_idx];
-            if (replayed_end_idx != -1) {
+            if (replayed_end_idx != -2) {
                 writer.record_range_end(replayed_skip, replayed_end_idx);
             }
-            end_range_buffer[replay_idx] = -1;
+            end_range_buffer[replay_idx] = -2;
         }
 
         __device__ __forceinline__ 
@@ -1134,11 +1186,15 @@ namespace flash
                 }
             };
 
-            auto load_V = [&](int const n_block, auto const &smem_pipe_write, auto need_seqlenk_masking_type, DelayedSkipListWriter &skip_writer)
+            auto load_V = [&](int const n_block, auto const &smem_pipe_write, auto need_seqlenk_masking_type, DelayedSkipListWriter &skip_writer, const bool last_iter = false)
             {
                 auto pipeline_v_load = cute::conditional_return<!Transpose_V>(pipeline_v, pipeline_vt);
                 pipeline_v_load.producer_acquire(smem_pipe_write);
-                if constexpr (Is_skipable){ skip_writer.replay(); }
+                if constexpr (Is_skipable){ 
+                    // skip_writer.
+                    if (last_iter){ skip_writer.final_iter(); }
+                    skip_writer.replay(); 
+                }
                 if constexpr (!PagedKVNonTMA)
                 {
                     auto [n_block_idx, bidb_kv_idx] = paged_kv_manager.get_indices_for_V_TMA();
@@ -1310,7 +1366,7 @@ namespace flash
                     if constexpr (Transpose_V){ copy_Vt_to_V(smem_pipe_write_v); }
                 }
 
-                if (should_load_KV){skip_writer.record_range_end(skip_reader.end_idx);}
+                if (should_load_KV){ skip_writer.record_range_end(skip_reader.end_idx); }
                 skip_reader.advance();
 
                 #pragma unroll 1
@@ -1350,7 +1406,7 @@ namespace flash
             {
                 if (should_load_KV)
                 {
-                    load_V(n_block_prev, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/, skip_writer);
+                    load_V(n_block_prev, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/, skip_writer, true);
                 }
             }
             if constexpr (Transpose_V)
@@ -1454,8 +1510,7 @@ namespace flash
             int &work_idx,
             SeqlenInfo_t const &seqlen_info,
             cute::tuple<int32_t, int32_t, int32_t, int32_t> block_coord,
-            SharedStorage &shared_storage,
-            DelayedSkipListReader &skip_reader)
+            SharedStorage &shared_storage)
         {
             int const warp_group_idx = __shfl_sync(0xFFFFFFFF, thread_idx / cutlass::NumThreadsPerWarpGroup, 0);
 
@@ -1683,6 +1738,18 @@ namespace flash
                 Tensor tSsQ_copy_view = smem_thr_copy_Q.partition_S(cute::as_position_independent_swizzle_tensor(sQ));
                 cute::copy(smem_tiled_copy_Q, tSsQ_copy_view, tSrQ_copy_view);
             }
+
+            // DelayedSkipListReader &skip_reader
+            // if constexpr (Is_skipable){
+            //     // init shared memory of skip_reader
+            // }
+            // Initialize skip_reader with shared memory buffers
+            DelayedSkipListReader<kStages> skip_reader(
+                shared_storage.pipelines.n_blocks_buffer,
+                shared_storage.pipelines.end_range_buffer,
+                shared_storage.pipelines.skip_tests,
+                shared_storage.pipelines.stop_condition_buffer
+            );
 
             if constexpr (IntraWGOverlap)
             {

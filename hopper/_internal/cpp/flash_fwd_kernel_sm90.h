@@ -151,10 +151,17 @@ namespace flash
                 // QK0 -> skip0 -> save0 shared -> PV0 -> release V0
                 // QK2 -> skip2 -> save2 shared -> PV2 -> release V2
                 //
-                // meaning we need at most kStages + 1 of skip tests arrays
-                int skip_tests[CollectiveMainloop::kStages*2][4];
-                // the first index is the n_block and the second is the stop condition
-                int current_n_block[CollectiveMainloop::kStages*2][2];
+                // // meaning we need at most kStages + 1 of skip tests arrays
+                // int skip_tests[CollectiveMainloop::kStages*2][4];
+                // // the first index is the n_block and the second is the stop condition
+                // int current_n_block[CollectiveMainloop::kStages*2][2];
+
+                static constexpr int BufferSize = CollectiveMainloop::kStages * 2;
+                // these arrays should reside in shared memory.
+                int n_blocks_buffer[BufferSize];
+                int end_range_buffer[BufferSize];
+                int skip_tests[BufferSize][4];
+                int stop_condition_buffer[BufferSize];
             } pipelines;
         };
 
@@ -418,7 +425,14 @@ namespace flash
                 cutlass::arch::wait_on_dependent_grids();
 
                 SkipListReader skip_reader;
-                DelayedSkipListWriter<CollectiveMainloop::kStages> skip_writer;
+                // DelayedSkipListWriter<CollectiveMainloop::kStages> skip_writer;
+                // Initialize skip_writer with shared memory buffers
+                DelayedSkipListWriter<CollectiveMainloop::kStages> skip_writer(
+                    shared_storage.pipelines.n_blocks_buffer,
+                    shared_storage.pipelines.end_range_buffer,
+                    shared_storage.pipelines.skip_tests,
+                    shared_storage.pipelines.stop_condition_buffer
+                );
                 // Load Q, K, V
                 for (auto work_tile_info = SingleProducerWarp || warp_idx_in_warpgroup == 0
                                                ? scheduler.template get_initial_work</*IsProducerWarp=*/true>(params.scheduler)
