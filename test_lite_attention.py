@@ -12,24 +12,37 @@ for head_dim in [32, 64, 96, 128, 192, 256]:
     attn = LiteAttention()
     attn.threshold = float('inf')
     # attn.threshold = float(0.0)
-    torch.cuda.synchronize()
-    output = attn(q, k, v)
-    torch.cuda.synchronize()
-    # passed = (attn._skip_list[1, ..., 0] <= 2).all()
-    passed = (attn._skip_list[1, :q.shape[0], ..., 0] <= 2).all()
-    diff = attn._skip_list[1, :q.shape[0], ..., 1] - attn._skip_list[1, :q.shape[0], ..., 2]
-    mpassed = (diff <= 2)
+    for i in range(3):
+        torch.cuda.synchronize()
+        output = attn(q, k, v)
+        torch.cuda.synchronize()
+
+    skip_list = attn._skip_list[attn._phase, :q.shape[0]] # [batch, heads, qtiles, ktiles]
+
+    # percentage = attn.calc_percentage_per_head(skip_list)
+    # print(percentage.shape, percentage.mean())
+
+    # percentage = attn.calc_percentage(skip_list)
+    # passed = percentage == 1.0
+    # print(f"skip all test: {'PASSED' if passed else 'FAILED'}")
+    # if not passed:
+    #     print(f"percentage: {percentage:.2%}")
+
+    passed = (skip_list[..., 0] == 2).all()
+    if not passed:
+        print("length of skip list is not 2")
+    diff = (skip_list[..., 1] - skip_list[..., 2]).abs()
+    mpassed = (diff == 1)
     passed &= mpassed.all()
     print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
     print("head_dim: ", head_dim)
-    print("skip all test:", passed)
+    print(f"skip all test: {'✅ PASSED' if passed else '❌ FAILED'}")
     if not passed:
-        print(output.shape)
-        print(attn._skip_list.shape)
-        # print(attn._skip_list[1, 0, 0, 0, :])
+        # print(output.shape)
+        print(skip_list.shape)
         mdiff = diff[~mpassed]
         print(mdiff, mdiff.shape)
-        print(attn._skip_list[1, 0, 0, -1, :])
+        print(skip_list[0, 1, :, 1:3])
 
     # skip nothing test
     attn = LiteAttention()
@@ -38,7 +51,7 @@ for head_dim in [32, 64, 96, 128, 192, 256]:
     output = attn(q, k, v)
     torch.cuda.synchronize()
     passed = (attn._skip_list[1] == attn._skip_list[1]).all()
-    print("skip nothing test:", passed)
+    print(f"skip nothing test: {'✅ PASSED' if passed else '❌ FAILED'}")
     
     # Test softmax_lse correctness (with skip optimization disabled)
     attn = LiteAttention()
@@ -49,6 +62,9 @@ for head_dim in [32, 64, 96, 128, 192, 256]:
         torch.cuda.synchronize()
         output_lite, lse_lite = attn(q, k, v, return_softmax_lse=True)
         torch.cuda.synchronize()
+        # print("print before stuck in the kernel")
+        # skip_list = attn._skip_list[attn._phase, :q.shape[0]]
+        # print(skip_list.shape, skip_list[0, :, 10, :3])
     
     # Compute reference softmax_lse using PyTorch
     # Shape: q, k, v are [batch, seq_len, num_heads, head_dim]
@@ -75,6 +91,6 @@ for head_dim in [32, 64, 96, 128, 192, 256]:
     lse_diff = torch.abs(lse_ref - lse_lite_transposed.float())
     max_diff = lse_diff.max().item()
     mean_diff = lse_diff.mean().item()
-    lse_passed = max_diff < 0.1  # Allow small numerical differences
-    print(f"softmax_lse correctness test: {'PASSED' if lse_passed else 'FAILED'}")
+    lse_passed = max_diff < 0.001  # Allow small numerical differences
+    print(f"softmax_lse correctness test: {'✅ PASSED' if lse_passed else '❌ FAILED'}")
     print(f"  max diff: {max_diff:.6f}, mean diff: {mean_diff:.6f}")
