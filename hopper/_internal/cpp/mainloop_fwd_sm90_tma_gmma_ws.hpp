@@ -1160,9 +1160,11 @@ namespace flash
                 // --n_block;
                 n_block += skip_reader.step;
 
+                /*
+                end_index * step > n_block * step
+                1 > (ktiles - 1) * (-1) = 1 - ktiles -> ktiles > 0
+                */
                 #pragma unroll 1
-                // for (; n_block >= skip_reader.end_idx; n_block--)
-                // for (; n_block < skip_reader.end_idx; n_block++)
                 for (; (skip_reader.end_idx - n_block) * skip_reader.step > 0; n_block+=skip_reader.step)
                 {
                     PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
@@ -1719,6 +1721,7 @@ namespace flash
                         warpgroup_wait<0>();
                         pipeline_v.consumer_release(smem_pipe_read_v); // release V
                     }
+
                     if constexpr (Is_FP8 && !V_colmajor)
                     {
                         flash::permute_Cregs_fp8(tSrS);
