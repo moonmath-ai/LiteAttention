@@ -157,7 +157,10 @@ namespace flash
             {
                 flash::template reduce_max</*zero_init=*/true>(scores, row_max);
                 cute::fill(scores_scale, 1.f);
-                if (is_warp_leader){ skip_tests[warp_idx_in_warpgroup] = false; }
+
+                if constexpr (!softmax_cond_assign){
+                    if (is_warp_leader){ skip_tests[warp_idx_in_warpgroup] = false; }
+                }
             }
             else
             {
