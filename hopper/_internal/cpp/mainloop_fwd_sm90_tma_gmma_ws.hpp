@@ -114,7 +114,6 @@ namespace flash
         int *list_ptr;
         int write_idx = 1;
         bool is_skipping = true;
-        bool is_saving_thread;
 
         // Initialize the writer with calculated offset
         template <typename TileShape_MNK, typename ParamsType>
@@ -133,16 +132,13 @@ namespace flash
                                    (q_i * num_k_blocks);
             
             list_ptr = &params.qk_skip_mask_args.attn_write_list[mask_offset];
-            // write_idx = 1;
-            // is_skipping = true;
-            is_saving_thread = saving_thread;
         }
 
         // Record a transition in skip state
         __device__ __forceinline__ 
         void record_transition(bool skip, int n_block)
         {
-            if (is_saving_thread && (skip != is_skipping))
+            if (skip != is_skipping)
             {
                 list_ptr[write_idx] = n_block;
                 write_idx++;
@@ -155,7 +151,7 @@ namespace flash
         void record_range_end(bool skip, int end_idx)
         {
             is_skipping = true;
-            if (is_saving_thread && (skip != is_skipping))
+            if (skip != is_skipping)
             {
                 list_ptr[write_idx] = end_idx;
                 write_idx++;
@@ -166,10 +162,7 @@ namespace flash
         __device__ __forceinline__ 
         void finalize()
         {
-            if (is_saving_thread)
-            {
-                list_ptr[0] = write_idx - 1;
-            }
+            list_ptr[0] = write_idx - 1;
         }
     };
 
@@ -207,9 +200,9 @@ namespace flash
         // Initialize the underlying writer
         template <typename TileShape_MNK, typename ParamsType>
         __device__ __forceinline__ 
-        void init(const ParamsType &params, int bidb, int bidh, int m_block, bool saving_thread)
+        void init(const ParamsType &params, int bidb, int bidh, int m_block)
         {
-            writer.init<TileShape_MNK>(params, bidb, bidh, m_block, saving_thread);
+            writer.init<TileShape_MNK>(params, bidb, bidh, m_block);
             for (int i = 0; i < BufferSize; ++i) {
                 // init everything to true because we would write something only when we
                 // encounter a false skip result. and now it could happen only after the buffers are full.
@@ -231,6 +224,7 @@ namespace flash
         __device__ __forceinline__ 
         void record_end_range(int end_idx)
         {
+            // we save into previous index!
             end_range_buffer[(record_idx - 1) % DelayAmount] = end_idx;
         }
 
@@ -284,6 +278,7 @@ namespace flash
             // replay all of the buffer.
             // we don't need to warry about the buffer not being full becuase we init skip_tests
             // in such a way that it woudn't effect the resulting write skip list.
+            // TODO: correct the case where the buffer is not full!
             for (int i = 0; i < DelayAmount; ++i) {
                 replay();
             }
@@ -917,7 +912,9 @@ namespace flash
              SchedulerPrefetch const &scheduler_prefetch,
              SeqlenInfo_t const &seqlen_info,
              cute::tuple<int32_t, int32_t, int32_t, int32_t> block_coord,
-             int &work_idx)
+             int &work_idx,
+             SkipListReader &skip_reader,
+             DelayedSkipListWriter &skip_writer)
         {
             // some of these are captured in lambda so can't use structured binding
             int const m_block = get<0>(block_coord);
@@ -938,13 +935,10 @@ namespace flash
                 }
             }
 
-            SkipListReader skip_reader;
-            SkipListWriter skip_writer;
             if constexpr (Is_skipable)
             {
                 skip_reader.init<TileShape_MNK>(params, bidb, bidh, m_block);
-                bool const saving_thread = (thread_idx % 128) == 0;
-                skip_writer.init<TileShape_MNK>(params, bidb, bidh, m_block, saving_thread);
+                skip_writer.init<TileShape_MNK>(params, bidb, bidh, m_block);
             }
 
             Tensor sQ = make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_q.data()), SmemLayoutQ{});
@@ -1097,13 +1091,10 @@ namespace flash
                 }
             }
 
-            auto load_K = [&](int const n_block, auto const &smem_pipe_write, auto need_seqlenk_masking_type, bool const not_last_load)
+            auto load_K = [&](int const n_block, auto const &smem_pipe_write, auto need_seqlenk_masking_type, DelayedSkipListWriter &skip_writer)
             {
                 pipeline_k.producer_acquire(smem_pipe_write);
-                if constexpr (Is_skipable){
-                    params.pipelines.current_n_block[smem_pipe_write.index()][0] = n_block;
-                    params.pipelines.current_n_block[smem_pipe_write.index()][1] = not_last_load;
-                }
+                if constexpr (Is_skipable){ skip_writer.record_n_block(n_block); }
                 if constexpr (!PagedKVNonTMA)
                 {
                     auto [n_block_idx, bidb_kv_idx] = paged_kv_manager.get_indices_for_K_TMA();
@@ -1118,22 +1109,11 @@ namespace flash
                 }
             };
 
-            auto load_V = [&](int const n_block, auto const &smem_pipe_write, auto need_seqlenk_masking_type, int const skip_tests_index) -> bool
+            auto load_V = [&](int const n_block, auto const &smem_pipe_write, auto need_seqlenk_masking_type, DelayedSkipListWriter &skip_writer)
             {
                 auto pipeline_v_load = cute::conditional_return<!Transpose_V>(pipeline_v, pipeline_vt);
                 pipeline_v_load.producer_acquire(smem_pipe_write);
-                bool skip = false;
-                if constexpr (Is_skipable){
-                    // calculate the skip condition from kStages + 1 ago.
-                    skip = 
-                        params.pipelines.skip_tests[skip_tests_index][0] &
-                        params.pipelines.skip_tests[skip_tests_index][1] &
-                        params.pipelines.skip_tests[skip_tests_index][2] &
-                        params.pipelines.skip_tests[skip_tests_index][3];
-
-                    // Vectorized assignment: set all 4 ints to 0 using a single 128-bit store
-                    *reinterpret_cast<int4*>(&params.pipelines.skip_tests[skip_tests_index][0]) = make_int4(0, 0, 0, 0);
-                }
+                if constexpr (Is_skipable){ skip_writer.replay(); }
                 if constexpr (!PagedKVNonTMA)
                 {
                     auto [n_block_idx, bidb_kv_idx] = paged_kv_manager.get_indices_for_V_TMA();
@@ -1146,7 +1126,6 @@ namespace flash
                     paged_kv_manager.template load_V<Seqlenk_mask>(n_block, sVcpasync(_, _, smem_pipe_write.index()));
                     pipeline_v_load.producer_commit(smem_pipe_write, cutlass::arch::cpasync_barrier_arrive);
                 }
-                return skip;
             };
 
             auto copy_Vt_to_V = [&](auto const &smem_pipe_write)
@@ -1182,13 +1161,6 @@ namespace flash
 
             if (should_load_KV)
             {
-                if constexpr (Is_skipable){
-                    // reset the skip tests before starting to load anything
-                    for (int i = 0; i < CollectiveMainloop::kStages + 1; ++i){
-                        *reinterpret_cast<int4*>(&params.pipelines.skip_tests[0][0]) = make_int4(0, 0, 0, 0);
-                    }
-                }
-
                 if constexpr (PagedKVNonTMA)
                 {
                     paged_kv_manager.template load_page_table<true /*Seqlenk_mask*/, true /*First_iter*/>(n_block);
@@ -1199,10 +1171,10 @@ namespace flash
                 }
                 if constexpr (Transpose_V)
                 {
-                    load_V(n_block, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/, 0);
+                    load_V(n_block, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/, skip_writer);
                 }
                 // if (thread_idx == 0) { printf("Producer: main load, before load_K, index = %d\n", smem_pipe_write.index());}
-                load_K(n_block, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/, skip_reader.has_more_n_block(n_block));
+                load_K(n_block, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/, skip_writer);
                 // if (thread_idx == 0) { printf("Producer: main load, after load K, index = %d\n", smem_pipe_write.index());}
             }
 
@@ -1257,7 +1229,7 @@ namespace flash
             // if (thread_idx == 0) { printf("Producer: main load, after barrier_O\n");}
 
             // Lambda to load K and V for a given n_block
-            auto load_KV_for_block = [&](int n_block, int n_block_prev, PipelineState& smem_pipe_write, PipelineState& smem_pipe_write_v, bool not_last_load, int skip_tests_index) -> bool
+            auto load_KV_for_block = [&](int n_block, int n_block_prev, PipelineState& smem_pipe_write, PipelineState& smem_pipe_write_v, DelayedSkipListWriter &skip_writer)
             {
                 bool skip = false;
                 if (should_load_KV)
@@ -1272,36 +1244,34 @@ namespace flash
                     }
                     if constexpr (Transpose_V)
                     {
-                        skip = load_V(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/, skip_tests_index);
+                        skip = load_V(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/, skip_writer);
                     }
-                    load_K(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/, not_last_load);
+                    load_K(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/, skip_writer);
                     if constexpr (!Transpose_V)
                     {
                         if constexpr (IntraWGOverlap)
                         {
-                            skip = load_V(n_block_prev, smem_pipe_write_v, cute::true_type{} /*Seqlenk_mask*/, skip_tests_index);
+                            skip = load_V(n_block_prev, smem_pipe_write_v, cute::true_type{} /*Seqlenk_mask*/, skip_writer);
                         }
                         else
                         {
-                            skip = load_V(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/, skip_tests_index);
+                            skip = load_V(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/, skip_writer);
                         }
                     }
                 }
-                return skip;
             };
 
             if constexpr (!Transpose_V && !IntraWGOverlap)
             {
                 if (should_load_KV)
                 {
-                    load_V(n_block, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/, 0);
+                    load_V(n_block, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/, skip_writer);
                 }
             }
 
             int n_block_prev = n_block;
 
             if constexpr (Is_skipable){
-                PipelineState<CollectiveMainloop::kStages + 1> pipe_write_skip;
                 // finish the first range
                 // ++n_block;
                 --n_block;
@@ -1311,12 +1281,12 @@ namespace flash
                 {
                     PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
                     ++smem_pipe_write;
-                    ++pipe_write_skip;
-                    const bool skip = load_KV_for_block(n_block, n_block_prev, smem_pipe_write, smem_pipe_write_v, skip_reader.has_more_n_block(n_block), pipe_write_skip.index());
+                    load_KV_for_block(n_block, n_block_prev, smem_pipe_write, smem_pipe_write_v, skip_writer);
                     n_block_prev = n_block;
                     if constexpr (Transpose_V){ copy_Vt_to_V(smem_pipe_write_v); }
                 }
-                
+
+                if (should_load_KV){skip_writer.record_range_end(skip_reader.end_idx);}
                 skip_reader.advance();
 
                 #pragma unroll 1
@@ -1332,10 +1302,12 @@ namespace flash
 
                         PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
                         ++smem_pipe_write;
-                        load_KV_for_block(n_block, n_block_prev, smem_pipe_write, smem_pipe_write_v);
+                        load_KV_for_block(n_block, n_block_prev, smem_pipe_write, smem_pipe_write_v, skip_writer);
                         n_block_prev = n_block;
                         if constexpr (Transpose_V){ copy_Vt_to_V(smem_pipe_write_v); }
                     }
+
+                    if (should_load_KV){skip_writer.record_range_end(skip_reader.end_idx);}
                 }
             }else{
                 --n_block;
@@ -1343,7 +1315,7 @@ namespace flash
                 for (; n_block >= n_block_min; --n_block) {
                     PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
                     ++smem_pipe_write;
-                    load_KV_for_block(n_block, n_block_prev, smem_pipe_write, smem_pipe_write_v);
+                    load_KV_for_block(n_block, n_block_prev, smem_pipe_write, smem_pipe_write_v, skip_writer);
                     n_block_prev = n_block;
                     if constexpr (Transpose_V) { copy_Vt_to_V(smem_pipe_write_v); }
                 }
@@ -1354,7 +1326,7 @@ namespace flash
             {
                 if (should_load_KV)
                 {
-                    load_V(n_block_prev, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/);
+                    load_V(n_block_prev, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/, skip_writer);
                 }
             }
             if constexpr (Transpose_V)
@@ -1369,7 +1341,7 @@ namespace flash
         template <typename SharedStorage>
         CUTLASS_DEVICE void
         load_tail(MainloopPipelineK pipeline_k, MainloopPipelineV pipeline_v, MainloopPipelineVt pipeline_vt,
-                  PipelineState &smem_pipe_write, SharedStorage &shared_storage, int const work_idx)
+                  PipelineState &smem_pipe_write, SharedStorage &shared_storage, int const work_idx, DelayedSkipListWriter &skip_writer)
         {
             // If we don't wait for barrier_O here, when using Cluster, CTA0 might exit early and CTA1 will
             // try to arrive on barrier_O of CTA0, causing "unspecified launch failure".
@@ -1389,8 +1361,10 @@ namespace flash
                 {
                     pipeline_vt.producer_tail(smem_pipe_write);
                 }
+                if constexpr (Is_skipable){
+                    skip_writer.finalize();
+                }
             }
-            //TODO: do the final replay here.
         }
 
         CUTLASS_DEVICE void
@@ -1444,50 +1418,7 @@ namespace flash
             }
         }
 
-        // Utility function to dispatch to the correct templated mma function based on runtime warp_group_idx
-        // Guaranteed warp_group_idx values are 0, 1, or 2
         template <typename SharedStorage, typename FrgTensorO, typename Softmax>
-        CUTLASS_DEVICE bool
-        mma_dispatch(Params const &params,
-                    MainloopPipelineK pipeline_k,
-                    MainloopPipelineV pipeline_v,
-                    PipelineState &smem_pipe_read,
-                    FrgTensorO &tOrO,
-                    Softmax &softmax,
-                    int const thread_idx,
-                    int &work_idx,
-                    SeqlenInfo_t const &seqlen_info,
-                    cute::tuple<int32_t, int32_t, int32_t, int32_t> block_coord,
-                    SharedStorage &shared_storage)
-        {
-            // Calculate warp_group_idx at runtime
-            // int warp_group_idx = flash::canonical_warp_group_idx_nosync();
-            int warp_group_idx = __shfl_sync(0xFFFFFFFF, thread_idx / cutlass::NumThreadsPerWarpGroup, 0);
-            
-            // Dispatch to the correct template instantiation based on warp_group_idx
-            // Using if constexpr won't work here since warp_group_idx is a runtime value
-            // So we use a switch statement to dispatch to the correct template
-            switch (warp_group_idx)
-            {
-                case 0:
-                    return mma<0>(params, pipeline_k, pipeline_v, smem_pipe_read, 
-                                 tOrO, softmax, thread_idx, work_idx, 
-                                 seqlen_info, block_coord, shared_storage);
-                case 1:
-                    return mma<1>(params, pipeline_k, pipeline_v, smem_pipe_read, 
-                                 tOrO, softmax, thread_idx, work_idx, 
-                                 seqlen_info, block_coord, shared_storage);
-                case 2:
-                    return mma<2>(params, pipeline_k, pipeline_v, smem_pipe_read, 
-                                 tOrO, softmax, thread_idx, work_idx, 
-                                 seqlen_info, block_coord, shared_storage);
-                default:
-                    // This should never happen given the guarantee that warp_group_idx is 0, 1, or 2
-                    return false;
-            }
-        }
-
-        template <int const warp_group_idx, typename SharedStorage, typename FrgTensorO, typename Softmax>
         CUTLASS_DEVICE bool
         mma(Params const &params,
             MainloopPipelineK pipeline_k,
@@ -1501,8 +1432,7 @@ namespace flash
             cute::tuple<int32_t, int32_t, int32_t, int32_t> block_coord,
             SharedStorage &shared_storage)
         {
-            static constexpr bool IsSkipWriter = warp_group_idx == (NumMmaWarpGroups - 1);
-            static constexpr bool softmax_cond_assign = warp_group_idx != 0;
+            int const warp_group_idx = __shfl_sync(0xFFFFFFFF, thread_idx / cutlass::NumThreadsPerWarpGroup, 0);
 
             static_assert(is_rmem<FrgTensorO>::value, "O tensor must be rmem resident.");
             // DOR: height of the Q block
@@ -1626,25 +1556,16 @@ namespace flash
                 auto barrier_token = pipeline.consumer_try_wait(smem_pipe_read);
                 pipeline.consumer_wait(smem_pipe_read, barrier_token);
             };
-            SkipListReader skip_reader;
-            SkipListWriter skip_writer;
-            if constexpr (Is_skipable){
-                skip_reader.init<TileShape_MNK>(params, bidb, bidh, m_block);
-            }
-            if constexpr (Is_skipable && IsSkipWriter){
-                bool const saving_thread = (thread_idx % 128) == 0;
-                skip_writer.init<TileShape_MNK>(params, bidb, bidh, m_block, saving_thread);
-            }
 
             int const seqlen_q = seqlen_info.seqlen_q;
             int const seqlen_k = seqlen_info.seqlen_k;
-            int n_block;
-            if constexpr (Is_skipable){
-                n_block = skip_reader.start_idx;
-            }
-            else{
-                n_block = n_block_max - 1;
-            }
+            int n_block = n_block_max - 1;
+            // if constexpr (Is_skipable){
+            //     n_block = skip_reader.start_idx;
+            // }
+            // else{
+            //     n_block = n_block_max - 1;
+            // }
 
             flash::Mask<kBlockM, kBlockN, PackGQA, TiledMmaQK> mask(
                 thread_idx, seqlen_q, seqlen_k, params.window_size_left, params.window_size_right, 0 /*sink_token_length*/,
@@ -1742,6 +1663,10 @@ namespace flash
             {
                 Tensor tSrS = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
                 consumer_wait(pipeline_k, smem_pipe_read);
+                // PipelineState<kStages*2> smem_pipe_read_k = smem_pipe_read;
+                if constexpr (Is_skipable){
+                    n_block = shared_storage.pipelines.current_n_block
+                }
                 flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS);
                 warpgroup_wait<0>();
                 pipeline_k.consumer_release(smem_pipe_read);

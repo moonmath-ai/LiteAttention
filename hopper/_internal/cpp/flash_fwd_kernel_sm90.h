@@ -417,6 +417,8 @@ namespace flash
 
                 cutlass::arch::wait_on_dependent_grids();
 
+                SkipListReader skip_reader;
+                DelayedSkipListWriter<CollectiveMainloop::kStages> skip_writer;
                 // Load Q, K, V
                 for (auto work_tile_info = SingleProducerWarp || warp_idx_in_warpgroup == 0
                                                ? scheduler.template get_initial_work</*IsProducerWarp=*/true>(params.scheduler)
@@ -455,10 +457,10 @@ namespace flash
                     };
 
                     mainloop.load(params.mainloop, pipeline_k, pipeline_v, pipeline_vt, smem_pipe_write,
-                                    shared_storage, scheduler_prefetch, seqlen_info, block_coord, work_idx);
+                                shared_storage, scheduler_prefetch, seqlen_info, block_coord, work_idx, skip_reader, skip_writer);
 
                 }
-                mainloop.load_tail(pipeline_k, pipeline_v, pipeline_vt, smem_pipe_write, shared_storage, work_idx);
+                mainloop.load_tail(pipeline_k, pipeline_v, pipeline_vt, smem_pipe_write, shared_storage, work_idx, skip_writer);
             }
             else
             { // Consumer
@@ -548,7 +550,7 @@ namespace flash
                     // const int thread_idx = threadIdx.x - MmaThreadOffset;
                     if constexpr (!LargeHeadDimV)
                     {
-                        tile_valid = mainloop.mma_dispatch(
+                        tile_valid = mainloop.mma(
                             params.mainloop, pipeline_k, pipeline_v, smem_pipe_read,
                             tOrO, softmax, thread_idx, work_idx, seqlen_info, block_coord, shared_storage);
                     }
@@ -556,7 +558,7 @@ namespace flash
                     { // mma_pv might not compile if !LargeHeadDimV
                         if (warp_group_idx == 1)
                         {
-                            tile_valid = mainloop.mma_dispatch(
+                            tile_valid = mainloop.mma(
                                 params.mainloop, pipeline_k, pipeline_v, smem_pipe_read,
                                 tOrO, softmax, thread_idx, work_idx, seqlen_info, block_coord, shared_storage);
                         }
