@@ -145,11 +145,16 @@ namespace flash
                 // int skip_tests[NumMmaWarpGroups][CollectiveMainloop::kStages][4];
                 // int skip_tests[4];
                 // int skip_tests[CollectiveMainloop::kStages][NumMmaWarpGroups][4];
+                // producer
                 // K0 K1 V0 K2 V1 K3 V2 ... only when the producer accuired V2 we are guaranteed that the skip result of QK0 is ready.
+                // consumer
+                // QK0 -> skip0 -> save0 shared -> PV0 -> release V0
+                // QK2 -> skip2 -> save2 shared -> PV2 -> release V2
+                //
                 // meaning we need at most kStages + 1 of skip tests arrays
-                int skip_tests[CollectiveMainloop::kStages + 1][4];
+                int skip_tests[CollectiveMainloop::kStages*2][4];
                 // the first index is the n_block and the second is the stop condition
-                int current_n_block[CollectiveMainloop::kStages][2];
+                int current_n_block[CollectiveMainloop::kStages*2][2];
             } pipelines;
         };
 
