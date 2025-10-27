@@ -278,7 +278,6 @@ namespace flash
             // replay all of the buffer.
             // we don't need to warry about the buffer not being full becuase we init skip_tests
             // in such a way that it woudn't effect the resulting write skip list.
-            // TODO: correct the case where the buffer is not full!
             for (int i = 0; i < DelayAmount; ++i) {
                 replay();
             }
