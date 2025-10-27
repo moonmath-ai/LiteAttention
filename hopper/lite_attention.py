@@ -59,13 +59,13 @@ class LiteAttention:
         return (x + y - 1) // y
 
     @staticmethod
-    def calc_percentage(read_list: torch.Tensor) -> float:
-        """Calculate the percentage of non-skipped attention computations."""
+    def calc_percentage_per_head(read_list: torch.Tensor) -> float:
+        """Calculate the percentage of non-skipped attention computations per head."""
         read_list = read_list.to(torch.int64)
         skip_lengths = read_list[:, :, :, 0] // 2
         
-        # Calculate range sizes
-        read_list_range_sized = read_list[:, :, :, 2:] - read_list[:, :, :, 1:-1]
+        # absolute value because it could be reversed and add 1 because start and end indexs are inclusive
+        read_list_range_sized = (read_list[:, :, :, 2:] - read_list[:, :, :, 1:-1]).abs() + 1
         if read_list_range_sized.shape[-1] % 2 != 0:
             # Pad with 0 if uneven
             padding_shape = list(read_list_range_sized.shape)
@@ -78,11 +78,36 @@ class LiteAttention:
             read_list_range_sized.shape[2], -1, 2
         )
         read_list_range_sized = read_list_range_sized[..., 0].cumsum(dim=-1)
+        not_skipped_per_head = torch.gather(read_list_range_sized, dim=-1, index=skip_lengths.unsqueeze(-1)).squeeze(-1)
+        num_of_k_tiles = read_list.shape[-1] - 1
+        return not_skipped_per_head / num_of_k_tiles
+
+    @staticmethod
+    def calc_percentage(read_list: torch.Tensor) -> float:
+        """Calculate the percentage of non-skipped attention computations."""
+        return LiteAttention.calc_percentage_per_head(read_list).mean()
+        # read_list = read_list.to(torch.int64)
+        # skip_lengths = read_list[:, :, :, 0] // 2
         
-        total_possible = read_list.shape[0] * read_list.shape[1] * read_list.shape[2] * (read_list.shape[3] - 1)
-        total_not_skipped = torch.gather(read_list_range_sized, dim=-1, index=skip_lengths.unsqueeze(-1)).squeeze(-1).sum()
+        # # Calculate range sizes
+        # read_list_range_sized = read_list[:, :, :, 2:] - read_list[:, :, :, 1:-1]
+        # if read_list_range_sized.shape[-1] % 2 != 0:
+        #     # Pad with 0 if uneven
+        #     padding_shape = list(read_list_range_sized.shape)
+        #     padding_shape[-1] = 1
+        #     padding = torch.zeros(padding_shape, dtype=read_list_range_sized.dtype, device=read_list_range_sized.device)
+        #     read_list_range_sized = torch.cat([read_list_range_sized, padding], dim=-1)
         
-        return total_not_skipped / total_possible if total_possible > 0 else 1.0
+        # read_list_range_sized = read_list_range_sized.view(
+        #     read_list_range_sized.shape[0], read_list_range_sized.shape[1], 
+        #     read_list_range_sized.shape[2], -1, 2
+        # )
+        # read_list_range_sized = read_list_range_sized[..., 0].cumsum(dim=-1)
+        
+        # total_possible = read_list.shape[0] * read_list.shape[1] * read_list.shape[2] * (read_list.shape[3] - 1)
+        # total_not_skipped = torch.gather(read_list_range_sized, dim=-1, index=skip_lengths.unsqueeze(-1)).squeeze(-1).sum()
+        
+        # return total_not_skipped / total_possible if total_possible > 0 else 1.0
 
     @staticmethod
     def get_MN(head_dim, element_size, v_colmajor=False):
