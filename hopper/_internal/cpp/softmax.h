@@ -146,7 +146,7 @@ namespace flash
         __forceinline__ __device__ TensorT max_get_scale_detect_qk_skip(
             Tensor0 &acc_s,
             const float thr,
-            int skip_tests[4],
+            DelayedSkipListReader &skip_reader,
             const int m_block)
         {
             // Reshape acc_s from ((2, 2, V), MMA_M, MMA_N) to (nrow=(2, MMA_M), ncol=(2, V, MMA_N))
@@ -159,7 +159,7 @@ namespace flash
                 cute::fill(scores_scale, 1.f);
                 if (is_warp_leader)
                 {
-                    skip_tests[warp_idx_in_warpgroup] = false;
+                    skip_reader.update_skip(false, warp_idx_in_warpgroup);
                 }
             }
             else
@@ -239,7 +239,7 @@ namespace flash
                 const bool skip = !__any_sync(0xffffffffu, do_qk);
                 if (is_warp_leader)
                 {
-                    skip_tests[warp_idx_in_warpgroup] &= skip;
+                    skip_reader.update_skip(skip, warp_idx_in_warpgroup);
                 }
             }
 

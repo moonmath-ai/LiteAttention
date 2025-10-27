@@ -1454,7 +1454,8 @@ namespace flash
             int &work_idx,
             SeqlenInfo_t const &seqlen_info,
             cute::tuple<int32_t, int32_t, int32_t, int32_t> block_coord,
-            SharedStorage &shared_storage)
+            SharedStorage &shared_storage,
+            DelayedSkipListReader &skip_reader)
         {
             int const warp_group_idx = __shfl_sync(0xFFFFFFFF, thread_idx / cutlass::NumThreadsPerWarpGroup, 0);
 
@@ -1689,7 +1690,7 @@ namespace flash
                 consumer_wait(pipeline_k, smem_pipe_read);
                 // PipelineState<kStages*2> smem_pipe_read_k = smem_pipe_read;
                 if constexpr (Is_skipable){
-                    n_block = shared_storage.pipelines.current_n_block
+                    n_block = skip_reader.next_n_block();
                 }
                 flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS);
                 warpgroup_wait<0>();
@@ -1707,7 +1708,9 @@ namespace flash
                 Tensor scores_scale = [&]
                 {
                     if constexpr (Is_skipable){
-                        return softmax.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, /*Is_first=*/true, true, softmax_cond_assign>(tSrS, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests, m_block);
+                        return softmax.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, /*Is_first=*/true, true>(
+                            tSrS, params.qk_skip_mask_args.thr, skip_reader, m_block
+                        );
                     }
                     else{
                         return softmax.template max_get_scale</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
@@ -1742,7 +1745,7 @@ namespace flash
                 // tiled_mma_pv.accumulate_ = GMMA::ScaleOut::Zero;
 
                 // Each step does gemm0 for iter n_block, gemm1 for iter n_block + 1, and softmax for iter n_block.
-                auto fwd_step = [&](int const n_block, auto mask_fn, auto check_inf_type) -> bool
+                auto fwd_step = [&](int const n_block, auto mask_fn, auto check_inf_type, DelayedSkipListReader &skip_reader)
                 {
                     static constexpr bool Check_inf = decltype(check_inf_type)::value;
                     PipelineState smem_pipe_read_v(smem_pipe_read.index(), smem_pipe_read.phase(), smem_pipe_read.count());
@@ -1753,6 +1756,9 @@ namespace flash
                         consumer_wait(pipeline_k, smem_pipe_read);
                     }
                     warp_scheduler_barrier_sync();
+                    if constexpr (Is_skipable){
+                        n_block = skip_reader.next_n_block();
+                    }
                     flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS);
                     if constexpr (RescaleOBeforeGemm)
                     {
@@ -1783,8 +1789,8 @@ namespace flash
                     // }
                     if constexpr (Is_skipable){
                     cute::copy(
-                        softmax.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, /*Is_first=*/false, Check_inf, softmax_cond_assign>(
-                            tSrS, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests, m_block),
+                        softmax.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, /*Is_first=*/false, Check_inf>(
+                            tSrS, params.qk_skip_mask_args.thr, skip_reader, m_block),
                         scores_scale);
                     }else{
                         cute::copy(softmax.template max_get_scale</*Is_first=*/false, Check_inf>(tSrS), scores_scale);
@@ -1795,17 +1801,6 @@ namespace flash
                         store_scales(scores_scale, smem_pipe_read_v.index());
                     }
                     softmax.template online_softmax</*Is_first=*/false, Check_inf>(tSrS);
-                    bool skip = false;
-                    if constexpr (Is_skipable && IsSkipWriter){
-                        if (skip_writer.is_saving_thread)
-                        {
-                            skip =
-                                shared_storage.pipelines.skip_tests[0] &
-                                shared_storage.pipelines.skip_tests[1] &
-                                shared_storage.pipelines.skip_tests[2] &
-                                shared_storage.pipelines.skip_tests[3];
-                        }
-                    }
                     if constexpr (!HasQv)
                     {
                         warpgroup_wait<0>();
@@ -1832,10 +1827,9 @@ namespace flash
                     {
                         arrive_on_P_write_barrier();
                     }
-                    return skip;
                 };
 
-                if constexpr (Is_causal || Is_local)
+                if constexpr ((Is_causal || Is_local) && !Is_skipable)
                 { // Separate iterations with causal or local masking
                     auto mask_fn = [&](auto &tSrS, int n_block)
                     { mask.template apply<false /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS, m_block, n_block); };
@@ -1845,7 +1839,7 @@ namespace flash
                     #pragma unroll 1
                     for (; n_block >= n_block_min_causal_local_mask; --n_block)
                     {
-                        fwd_step(n_block, mask_fn, cute::true_type{} /*check_inf*/);
+                        fwd_step(n_block, mask_fn, cute::true_type{} /*check_inf*/, skip_reader);
                     }
                 }
 
@@ -1857,65 +1851,23 @@ namespace flash
                     #pragma unroll 1
                     for (; n_block >= n_block_min_before_local_mask; --n_block)
                     {
-                        fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/);
+                        fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/, skip_reader);
                     }
                 }else{
-                    // bool is_first_iter_skips = true;
-                    // for (; (skip_reader.has_more() || is_first_iter_skips); skip_reader.advance())
-                    // {
-                    //     skip_reader.load_range();
-                    //     for (n_block = skip_reader.start_idx; n_block < skip_reader.end_idx; n_block++)
-                    //     {
-                    //         // this happens only in the first iteration of the loop
-                    //         if (is_first_iter_skips) [[unlikely]]
-                    //         {
-                    //             is_first_iter_skips = false;
-                    //             // continue;
-                    //         }
-                    //         else
-                    //         {
-                    //             skip = fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/);
-                    //         }
-                    //         if constexpr (IsSkipWriter) skip_writer.record_transition(skip, n_block);
-                    //     }
-                    //     if constexpr (IsSkipWriter) skip_writer.record_range_end(skip, skip_reader.end_idx);
-                    // }
-                    // if constexpr (IsSkipWriter) skip_writer.finalize();
-
-                    bool skip = false;
-                    if constexpr (IsSkipWriter) skip_writer.record_transition(skip, n_block);
-                    // ++n_block;
-                    --n_block;
-                    do
-                    {
-                        for (; n_block >= skip_reader.end_idx; n_block--)
-                        {
-                            skip = fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/);
-                            if constexpr (IsSkipWriter) skip_writer.record_transition(skip, n_block);
-                        }
-
-                        if constexpr (IsSkipWriter) skip_writer.record_range_end(skip, skip_reader.end_idx);
-
-                        skip_reader.advance();
-                        if (!skip_reader.has_more()) break;
-
-                        skip_reader.load_range();
-                        n_block = skip_reader.start_idx;
-
-                    } while (true);
-
-                    if constexpr (IsSkipWriter) skip_writer.finalize();
+                    while(skip_reader.has_next()){
+                        fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/, skip_reader);
+                    }
                 }
 
                 // Separate masking iterations on the left for local attention
-                if constexpr (Is_local)
+                if constexpr ((Is_local) && !Is_skipable)
                 {
                     auto local_mask_fn = [&](auto &tSrS, int n_block)
                     { mask.template apply<false /*Seqlenk_mask*/, false /*Causal_mask*/, Is_local>(tSrS, m_block, n_block); };
                     #pragma unroll 1
                     for (; n_block >= n_block_min; --n_block)
                     {
-                        fwd_step(n_block, local_mask_fn, cute::bool_constant<Is_local>{} /*check_inf*/);
+                        fwd_step(n_block, local_mask_fn, cute::bool_constant<Is_local>{} /*check_inf*/, skip_reader);
                     }
                 }
                 // Tell producers that smem_q is ready
