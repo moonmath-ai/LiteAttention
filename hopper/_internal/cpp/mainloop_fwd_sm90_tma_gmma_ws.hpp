@@ -167,6 +167,32 @@ namespace flash
     };
 
     // ============================================================================
+    // ============================================================================
+    template <int DelayAmount>
+    struct DelayedSkipListReader
+    {
+        constexpr int BufferSize = DelayAmount * 2;
+        // these arrays should reside in shared memory.
+        int n_blocks_buffer[BufferSize];
+        int skip_tests[BufferSize][4];
+
+        // we start with -1 because the first call to next_n_block will increment it to 0.
+        int index = -1;
+
+        __device__ __forceinline__ int next_n_block()
+        {
+            index = (index + 1) % BufferSize;
+            return n_blocks_buffer[index];
+        }
+
+        __device__ __forceinline__ void update_skip(bool skip, int warp_idx_in_warpgroup){
+            // consider: using atomic here
+            skip_tests[index][warp_idx_in_warpgroup] &= skip;
+        }
+
+    }
+
+    // ============================================================================
     // Delayed wrapper for SkipListWriter using circular buffer
     // Buffers operations and replays them after a specified delay
     // This allows the writer to lag behind the reader by DelayAmount iterations
@@ -1230,7 +1256,6 @@ namespace flash
             // Lambda to load K and V for a given n_block
             auto load_KV_for_block = [&](int n_block, int n_block_prev, PipelineState& smem_pipe_write, PipelineState& smem_pipe_write_v, DelayedSkipListWriter &skip_writer)
             {
-                bool skip = false;
                 if (should_load_KV)
                 {
                     if constexpr (PagedKVNonTMA)
@@ -1243,18 +1268,18 @@ namespace flash
                     }
                     if constexpr (Transpose_V)
                     {
-                        skip = load_V(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/, skip_writer);
+                        load_V(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/, skip_writer);
                     }
                     load_K(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/, skip_writer);
                     if constexpr (!Transpose_V)
                     {
                         if constexpr (IntraWGOverlap)
                         {
-                            skip = load_V(n_block_prev, smem_pipe_write_v, cute::true_type{} /*Seqlenk_mask*/, skip_writer);
+                            load_V(n_block_prev, smem_pipe_write_v, cute::true_type{} /*Seqlenk_mask*/, skip_writer);
                         }
                         else
                         {
-                            skip = load_V(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/, skip_writer);
+                            load_V(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/, skip_writer);
                         }
                     }
                 }
