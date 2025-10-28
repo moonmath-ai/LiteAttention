@@ -6,8 +6,10 @@ of read and write skip lists, hiding the complexity from users.
 """
 
 import torch
+import torch.nn.functional as F
 import os
 from typing import Optional, Tuple, Union
+import matplotlib.pyplot as plt
 
 from ._internal.flash_attn_interface import flash_attn_func
 
@@ -104,10 +106,6 @@ class LiteAttention:
         read_list: [batch, heads, qtiles, ktiles + 1]
         """
         return LiteAttention.calc_percentage_per_head(read_list).mean()
-    
-    @staticmethod
-    def visualize_skips(query: torch.Tensor, key: torch.Tensor, skip_list: torch.Tensor):
-        pass
 
     @staticmethod
     def get_MN(head_dim, element_size, v_colmajor=False):
@@ -279,6 +277,79 @@ class LiteAttention:
         # TODO @dor: commented out as a reminder to reconsider in the future if resetting the skip state is needed
         # if not enable:
         #     self.reset_skip_state()
+    
+    def visualize_skips(self, query: torch.Tensor, key: torch.Tensor, heads_list: torch.Tensor, scale: float, save_path: str, max_res: int = 520):
+        '''
+        heads_list: [N], heads_list[i] == head_idx
+        query: (batch, seq_len, heads, head_dim)
+        key: (batch, seq_len, heads, head_dim)
+        '''
+        # Reshape for multi-head attention: (batch, seq_len, heads, head_dim) -> (example_heads, seq_len, head_dim)
+        q_reshaped = query[:, :, heads_list].transpose(1, 2)  # (example_heads, seq_len_q, head_dim)
+        k_reshaped = key[:, :, heads_list].transpose(1, 2)    # (example_heads, seq_len_k, head_dim)
+        batch = query.shape[0]
+        seq_len_q = query.shape[1]
+        seq_len_k = key.shape[1]
+        skip_list = self._skip_list[self._phase, :batch, heads_list]
+        for i in range(batch):
+            q = q_reshaped[i]
+            k = k_reshaped[i]
+            QK = (q @ k.transpose(-2, -1)) * scale
+            attn_softmaxed = torch.softmax(QK, dim=-1)
+            attn_down = F.adaptive_max_pool2d(
+                attn_softmaxed.unsqueeze(1),  # (heads, 1, H, W)
+                output_size=(max_res, max_res)
+            ).squeeze(1)  # -> (heads, max_res, max_res)
+
+            kBlockM, kBlockN = LiteAttention.get_MN(k.shape[-1], k.dtype.itemsize)
+            # Add grid overlay
+            height, width = max_res, max_res
+            ratio_height = height / seq_len_q
+            ratio_width = width / seq_len_k
+
+            grid_height = kBlockM * ratio_height
+            grid_width = kBlockN * ratio_width
+
+            # Calculate grid line positions
+            y_positions = [i * grid_height for i in range(int(height / grid_height) + 1) if i * grid_height <= height]
+            x_positions = [i * grid_width for i in range(int(width / grid_width) + 1) if i * grid_width <= width]
+
+            for h, attn_map in zip(heads_list, attn_down):
+                current_skip_list = skip_list[[i], [h]]
+                perecentage = self.calc_percentage(current_skip_list)
+
+                plt.figure(figsize=(6, 6))
+                attn_cpu = attn_map.detach().float().cpu()
+                plt.imshow(attn_cpu, cmap='viridis', interpolation='nearest')
+                plt.title(f"Batch {i} | Head {h} | Percentage {perecentage * 100:.2f}%")
+                
+                # Add horizontal grid lines
+                for y in y_positions:
+                    plt.axhline(y=y-0.5, color='black', linewidth=0.2, alpha=0.7)
+                
+                # Add vertical grid lines  
+                for x in x_positions:
+                    plt.axvline(x=x-0.5, color='black', linewidth=0.2, alpha=0.7)
+
+                for i, row_skip_list in enumerate(skip_list[0, 0]):
+                    # print(row_skip_list.shape)
+                    l_row = row_skip_list[0]
+                    # end0, start1, end1, start2, ...
+                    width_ranges = row_skip_list[1 : l_row + 1] * grid_width
+                    # height
+                    row_height = i * grid_height
+
+                    width_ranges = width_ranges.view(-1, 2).cpu()
+                    for end, start in width_ranges:
+                        rect = plt.Rectangle((start, row_height), end + grid_width - start, grid_height, facecolor='white', edgecolor='none', linewidth=0.4, alpha=0.3)
+                        plt.gca().add_patch(rect)
+                
+                plt.axis("off")
+                plt.tight_layout()
+
+                file_path = os.path.join(save_path, f"batch_{i}_head_{h}.png")
+                plt.savefig(file_path, dpi=150)
+                plt.close()
 
 class SeqParallelLiteAttention:
     def __init__(self, num_nodes: int, enable_skipping: bool = True, threshold: float = -10.0, max_batch_size: int = 4):
