@@ -864,13 +864,13 @@ namespace flash
                 }
             };
 
-            auto load_V = [&](int const n_block, auto const &smem_pipe_write, auto need_seqlenk_masking_type, auto &skip_writer, const bool last_iter = false)
+            auto load_V = [&](int const n_block, auto const &smem_pipe_write, auto need_seqlenk_masking_type, auto &skip_writer)
             {
                 auto pipeline_v_load = cute::conditional_return<!Transpose_V>(pipeline_v, pipeline_vt);
                 pipeline_v_load.producer_acquire(smem_pipe_write);
                 if constexpr (Is_skipable){ 
                     // skip_writer.
-                    if (last_iter){ skip_writer.record_final_iter(); }
+                    // if (last_iter){ skip_writer.record_final_iter(); }
                     skip_writer.replay(); 
                 }
                 if constexpr (!PagedKVNonTMA)
@@ -1034,7 +1034,7 @@ namespace flash
                 // ++n_block;
                 --n_block;
 
-                #pragma unroll 1
+                do{
                 for (; n_block >= skip_reader.end_idx; n_block--)
                 {
                     PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
@@ -1044,29 +1044,47 @@ namespace flash
                     if constexpr (Transpose_V){ copy_Vt_to_V(smem_pipe_write_v); }
                 }
 
-                if (should_load_KV){ skip_writer.record_range_end(skip_reader.end_idx); }
+                    if (should_load_KV){skip_writer.record_range_end(skip_reader.end_idx);}
+                    if(!skip_reader.has_more()){ break; }
                 skip_reader.advance();
 
-                #pragma unroll 1
-                for (; skip_reader.has_more(); skip_reader.advance())
-                {
-                    skip_reader.load_range();
-                    #pragma unroll 1
-                    for (n_block = skip_reader.start_idx; n_block >= skip_reader.end_idx; n_block--)
-                    {
-                        // // this happens only in the first iteration of the loop
-                        // if (n_block == n_block_prev) [[unlikely]]
-                        //     continue;
+                }while(true);
 
-                        PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
-                        ++smem_pipe_write;
-                        load_KV_for_block(n_block, n_block_prev, smem_pipe_write, smem_pipe_write_v, skip_writer);
-                        n_block_prev = n_block;
-                        if constexpr (Transpose_V){ copy_Vt_to_V(smem_pipe_write_v); }
-                    }
+                if (should_load_KV){ skip_writer.record_final_iter(); }
 
-                    if (should_load_KV){skip_writer.record_range_end(skip_reader.end_idx);}
-                }
+                // #pragma unroll 1
+                // for (; n_block >= skip_reader.end_idx; n_block--)
+                // {
+                //     PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
+                //     ++smem_pipe_write;
+                //     load_KV_for_block(n_block, n_block_prev, smem_pipe_write, smem_pipe_write_v, skip_writer);
+                //     n_block_prev = n_block;
+                //     if constexpr (Transpose_V){ copy_Vt_to_V(smem_pipe_write_v); }
+                // }
+
+                // if (should_load_KV){ skip_writer.record_range_end(skip_reader.end_idx); }
+                // skip_reader.advance();
+
+                // #pragma unroll 1
+                // for (; skip_reader.has_more(); skip_reader.advance())
+                // {
+                //     skip_reader.load_range();
+                //     #pragma unroll 1
+                //     for (n_block = skip_reader.start_idx; n_block >= skip_reader.end_idx; n_block--)
+                //     {
+                //         // // this happens only in the first iteration of the loop
+                //         // if (n_block == n_block_prev) [[unlikely]]
+                //         //     continue;
+
+                //         PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
+                //         ++smem_pipe_write;
+                //         load_KV_for_block(n_block, n_block_prev, smem_pipe_write, smem_pipe_write_v, skip_writer);
+                //         n_block_prev = n_block;
+                //         if constexpr (Transpose_V){ copy_Vt_to_V(smem_pipe_write_v); }
+                //     }
+
+                //     if (should_load_KV){skip_writer.record_range_end(skip_reader.end_idx);}
+                // }
             }else{
                 --n_block;
                 #pragma unroll (!Transpose_V && Use_TMA_KV ? 2 : 1)
@@ -1084,7 +1102,7 @@ namespace flash
             {
                 if (should_load_KV)
                 {
-                    load_V(n_block_prev, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/, skip_writer, true);
+                    load_V(n_block_prev, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/, skip_writer);
                 }
             }
             if constexpr (Transpose_V)
