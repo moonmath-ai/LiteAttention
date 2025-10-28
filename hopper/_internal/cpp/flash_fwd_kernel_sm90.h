@@ -19,6 +19,7 @@
 #include "seqlen.h"
 #include "utils.h"
 #include "softmax.h"
+#include "skip_list.h"
 
 namespace flash
 {

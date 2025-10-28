@@ -11,6 +11,7 @@
 #include <cutlass/numeric_types.h>
 
 #include "utils.h"
+#include "skip_list.h"
 
 namespace flash
 {
@@ -146,7 +147,7 @@ namespace flash
         __forceinline__ __device__ TensorT max_get_scale_detect_qk_skip(
             Tensor0 &acc_s,
             const float thr,
-            DelayedSkipListReader &skip_reader,
+            auto &skip_reader,
             const int m_block)
         {
             // Reshape acc_s from ((2, 2, V), MMA_M, MMA_N) to (nrow=(2, MMA_M), ncol=(2, V, MMA_N))
