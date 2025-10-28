@@ -288,49 +288,50 @@ class LiteAttention:
         # os.makedirs(save_path, exist_ok=True)
         # Create subdirectories for each batch and attention head
         batch = query.shape[0]
+        seq_len_q = query.shape[1]
+        seq_len_k = key.shape[1]
+        skip_list = self._skip_list[self._phase]
         for b in range(batch):
             for h in heads_list:
                 batch_head_dir = os.path.join(save_path, f"batch_{b}", f"head_{h}")
                 os.makedirs(batch_head_dir, exist_ok=True)
-        # Reshape for multi-head attention: (batch, seq_len, heads, head_dim) -> (example_heads, seq_len, head_dim)
-        q_reshaped = query[:, :, heads_list].transpose(1, 2)  # (example_heads, seq_len_q, head_dim)
-        k_reshaped = key[:, :, heads_list].transpose(1, 2)    # (example_heads, seq_len_k, head_dim)
-        batch = query.shape[0]
-        seq_len_q = query.shape[1]
-        seq_len_k = key.shape[1]
-        skip_list = self._skip_list[self._phase, :batch, heads_list]
-        skip_list = self._skip_list[self._phase, :batch]
+        
+        # Reshape for multi-head attention: (batch, seq_len, heads, head_dim) -> (batch, example_heads, seq_len, head_dim)
+        q_reshaped = query[:, :, heads_list].transpose(1, 2)  # (batch, example_heads, seq_len_q, head_dim)
+        k_reshaped = key[:, :, heads_list].transpose(1, 2)    # (batch, example_heads, seq_len_k, head_dim)
+
+        q = q_reshaped
+        k = k_reshaped
+        QK = (q @ k.transpose(-2, -1)) * scale
+        attn_softmaxed = torch.softmax(QK, dim=-1)
+        attn_down = F.adaptive_max_pool2d(
+            attn_softmaxed,  # (batch, heads, 1, H, W)
+            output_size=(max_res, max_res)
+        ) # -> (batch, heads, max_res, max_res)
+
+        kBlockM, kBlockN = LiteAttention.get_MN(k.shape[-1], k.dtype.itemsize)
+        # Add grid overlay
+        height, width = max_res, max_res
+        ratio_height = height / seq_len_q
+        ratio_width = width / seq_len_k
+
+        grid_height = kBlockM * ratio_height
+        grid_width = kBlockN * ratio_width
+
+        # Calculate grid line positions
+        y_positions = [b * grid_height for b in range(int(height / grid_height) + 1) if b * grid_height <= height]
+        x_positions = [b * grid_width for b in range(int(width / grid_width) + 1) if b * grid_width <= width]
+
         for b in range(batch):
-            q = q_reshaped[b]
-            k = k_reshaped[b]
-            QK = (q @ k.transpose(-2, -1)) * scale
-            attn_softmaxed = torch.softmax(QK, dim=-1)
-            attn_down = F.adaptive_max_pool2d(
-                attn_softmaxed.unsqueeze(1),  # (heads, 1, H, W)
-                output_size=(max_res, max_res)
-            ).squeeze(1)  # -> (heads, max_res, max_res)
 
-            kBlockM, kBlockN = LiteAttention.get_MN(k.shape[-1], k.dtype.itemsize)
-            # Add grid overlay
-            height, width = max_res, max_res
-            ratio_height = height / seq_len_q
-            ratio_width = width / seq_len_k
-
-            grid_height = kBlockM * ratio_height
-            grid_width = kBlockN * ratio_width
-
-            # Calculate grid line positions
-            y_positions = [b * grid_height for b in range(int(height / grid_height) + 1) if b * grid_height <= height]
-            x_positions = [b * grid_width for b in range(int(width / grid_width) + 1) if b * grid_width <= width]
-
-            for h, attn_map in zip(heads_list, attn_down):
-                current_skip_list = skip_list[[b], [h]]
+            for h, attn_map in zip(heads_list, attn_down[b]):
+                current_skip_list = skip_list[b, h][None, None, ...]
                 perecentage = self.calc_percentage(current_skip_list)
 
                 plt.figure(figsize=(6, 6))
                 attn_cpu = attn_map.detach().float().cpu()
                 plt.imshow(attn_cpu, cmap='viridis', interpolation='nearest')
-                plt.title(f"Batch {i} | Head {h} | Percentage {perecentage * 100:.2f}%")
+                plt.title(f"Batch {b} | Head {h} | Percentage {perecentage * 100:.2f}%")
                 
                 # Add horizontal grid lines
                 for y in y_positions:
