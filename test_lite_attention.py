@@ -52,7 +52,7 @@ for head_dim in [32, 64, 96, 128, 192, 256]:
     torch.cuda.synchronize()
     output = attn(q, k, v)
     torch.cuda.synchronize()
-    passed = (attn._skip_list[1] == attn._skip_list[1]).all()
+    passed = (attn._skip_list[0] == attn._skip_list[1]).all()
     print(f"skip nothing test: {'✅ PASSED' if passed else '❌ FAILED'}")
     
     # Test softmax_lse correctness (with skip optimization disabled)
