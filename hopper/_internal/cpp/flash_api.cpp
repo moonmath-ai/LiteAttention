@@ -702,6 +702,7 @@ mha_fwd(at::Tensor q,   // (b, s_q, h, d) or (total_q, h, d) if there is cu_seql
         int64_t sm_margin,
         // std::optional<at::Tensor> qk_skip_mask_args_,
         std::optional<at::Tensor> attn_read_list_,
+        std::optional<at::Tensor> attn_must_do_list_,
         std::optional<at::Tensor> attn_write_list_,
         double thr
         ) {
@@ -915,6 +916,25 @@ mha_fwd(at::Tensor q,   // (b, s_q, h, d) or (total_q, h, d) if there is cu_seql
     // Expected shape: [batch, heads, limbs] where limbs = ceil_div(q_tiles * k_tiles, 64)
     // bool is_skipable = false;
     // assert(attn_read_list_.has_value() && attn_write_list_.has_value());
+    if (attn_must_do_list_.has_value()) {
+        auto qk_skip_mask_tensor = attn_must_do_list_.value();
+        // TORCH_CHECK(qk_skip_mask_tensor.dtype() == torch::kUInt32, "attn_read_list must be uint32 tensor");
+        TORCH_CHECK(qk_skip_mask_tensor.dtype() == torch::kInt32, "attn_must_do_list must be int32 tensor");
+        TORCH_CHECK(qk_skip_mask_tensor.dim() == 4, "attn_must_do_list must be 4D tensor with shape [batch, heads, q_blocks, k_blocks]");
+        TORCH_CHECK(qk_skip_mask_tensor.is_contiguous(), "attn_must_do_list must be contiguous");
+        
+        // uint32_t* data_ptr = static_cast<uint32_t*>(qk_skip_mask_tensor.data_ptr());
+        int* data_ptr = static_cast<int*>(qk_skip_mask_tensor.data_ptr());
+        
+        params.qk_skip_mask_args.attn_must_do_list = data_ptr;
+        // params.qk_skip_mask_args.thr = (float) thr;
+        // params.is_skipable = true;
+    } else {
+        params.qk_skip_mask_args.attn_must_do_list = nullptr;
+        // params.qk_skip_mask_args.thr = (float) thr;
+        // params.is_skipable = false;
+    }
+
     if (attn_read_list_.has_value()) {
         auto qk_skip_mask_tensor = attn_read_list_.value();
         // TORCH_CHECK(qk_skip_mask_tensor.dtype() == torch::kUInt32, "attn_read_list must be uint32 tensor");
@@ -1743,6 +1763,7 @@ TORCH_LIBRARY(lite_attention, m) {
         "int sm_margin = 0,"
         // "Tensor? qk_skip_mask_args = None,"
         "Tensor? attn_read_list = None,"
+        "Tensor? attn_must_do_list = None,"
         "Tensor? attn_write_list = None,"
         "float thr = -3.0) -> (Tensor(out!), Tensor, Tensor, Tensor)"
     );

@@ -53,6 +53,7 @@ def _flash_attn_forward(
         sm_margin=0,
         # qk_skip_mask_args=None,
         attn_read_list=None,
+        attn_must_do_list=None,
         attn_write_list=None,
         thr=-3.0,
     ):
@@ -104,6 +105,7 @@ def _flash_attn_forward(
         sm_margin,
         # qk_skip_mask_args,
         attn_read_list,
+        attn_must_do_list,
         attn_write_list,
         thr=thr,
     )
@@ -178,6 +180,7 @@ class FlashAttnQKVPackedFunc(torch.autograd.Function):
         sm_margin=0,
         # qk_skip_mask_args=None,
         attn_read_list=None,
+        attn_must_do_list=None,
         attn_write_list=None,
         thr=-3.0,
     ):
@@ -213,6 +216,7 @@ class FlashAttnQKVPackedFunc(torch.autograd.Function):
             sm_margin=sm_margin,
             # qk_skip_mask_args=qk_skip_mask_args,
             attn_read_list=attn_read_list,
+            attn_must_do_list=attn_must_do_list,
             attn_write_list=attn_write_list,
             thr=thr,
         )
@@ -288,6 +292,7 @@ class FlashAttnFunc(torch.autograd.Function):
         sm_margin=0,
         # qk_skip_mask_args=None,
         attn_read_list=None,
+        attn_must_do_list=None,
         attn_write_list=None,
         thr=-3.0,
         return_softmax_lse=False,
@@ -318,6 +323,7 @@ class FlashAttnFunc(torch.autograd.Function):
             sm_margin=sm_margin,
             # qk_skip_mask_args=qk_skip_mask_args,
             attn_read_list=attn_read_list,
+            attn_must_do_list=attn_must_do_list,
             attn_write_list=attn_write_list,
             thr=thr,
         )
@@ -393,6 +399,7 @@ class FlashAttnVarlenFunc(torch.autograd.Function):
         sm_margin=0,
         # qk_skip_mask_args=None,
         attn_read_list=None,
+        attn_must_do_list=None,
         attn_write_list=None,
         thr=-3.0,
     ):
@@ -426,6 +433,7 @@ class FlashAttnVarlenFunc(torch.autograd.Function):
             sm_margin=sm_margin,
             # qk_skip_mask_args=None,
             attn_read_list=attn_read_list,
+            attn_must_do_list=attn_must_do_list,
             attn_write_list=attn_write_list,
             thr=thr,
         )
@@ -553,6 +561,7 @@ def flash_attn_func(
     sm_margin=0,
     # qk_skip_mask_args=None,
     attn_read_list=None,
+    attn_must_do_list=None,
     attn_write_list=None,
     thr=-3.0,
     return_softmax_lse=False,
@@ -619,6 +628,7 @@ def flash_attn_func(
         sm_margin,
         # qk_skip_mask_args,
         attn_read_list,
+        attn_must_do_list,
         attn_write_list,
         thr,
         return_softmax_lse,
@@ -708,6 +718,7 @@ def flash_attn_with_kvcache(
     return_softmax_lse=False,
     # qk_skip_mask_args=None,
     attn_read_list=None,
+    attn_must_do_list=None,
     attn_write_list=None,
     thr=-3.0,
 ):
@@ -839,6 +850,7 @@ def flash_attn_with_kvcache(
         sm_margin=sm_margin,
         # qk_skip_mask_args=qk_skip_mask_args,
         attn_read_list=attn_read_list,
+        attn_must_do_list=attn_must_do_list,
         attn_write_list=attn_write_list,
         thr=thr,
     )

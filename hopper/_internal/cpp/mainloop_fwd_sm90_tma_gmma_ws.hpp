@@ -55,7 +55,7 @@ namespace flash
         // Initialize the reader with calculated offset
         template <typename TileShape_MNK, typename ParamsType>
         __device__ __forceinline__ 
-        void init(const ParamsType &params, int bidb, int bidh, int m_block)
+        void init(const ParamsType &params, int bidb, int bidh, int m_block, bool is_must_do_list = false)
         {
             static constexpr int kBlockM = get<0>(TileShape_MNK{});
             static constexpr int kBlockN = get<1>(TileShape_MNK{});
@@ -67,8 +67,13 @@ namespace flash
             uint64_t mask_offset = (bidb * num_heads * num_q_blocks * num_k_blocks) + 
                                    (bidh * num_q_blocks * num_k_blocks) + 
                                    (q_i * num_k_blocks);
-            
-            list_ptr = &params.qk_skip_mask_args.attn_read_list[mask_offset];
+
+            if (is_must_do_list) {
+                list_ptr = &params.qk_skip_mask_args.attn_must_do_list[mask_offset];    
+            }
+            else {
+                list_ptr = &params.qk_skip_mask_args.attn_read_list[mask_offset];
+            }
             skip_list_len = list_ptr[0];
             // read_idx = 1;
 
@@ -1499,6 +1504,7 @@ namespace flash
             if constexpr (Is_skipable && IsSkipWriter){
                 bool const saving_thread = (thread_idx % 128) == 0;
                 skip_writer.init<TileShape_MNK>(params, bidb, bidh, m_block, saving_thread);
+                must_do_reader.init<TileShape_MNK>(params, bidb, bidh, m_block, true);
             }
 
             int const seqlen_q = seqlen_info.seqlen_q;

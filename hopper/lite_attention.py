@@ -187,8 +187,14 @@ class LiteAttention:
             
         return read_list, write_list
     
+    def _expand_must_do_list(must_do_list, list_shape):
+
+        values = torch.tensor(must_do_list, dtype=torch.int32, device=device)
+        expanded = values.repeat(*list_shape[:3], 1)
+        return expanded
+    
     def __call__(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, 
-                 scale: Optional[float] = None, return_softmax_lse: bool = False) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+                 scale: Optional[float] = None, return_softmax_lse: bool = False, must_do_list: list = None) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """
         Perform flash attention 3 with optional skip list optimization.
         
@@ -203,6 +209,12 @@ class LiteAttention:
         """
         # Get read and write lists (internal mask management)
         read_list, write_list = self._get_read_write_lists(query, value)
+
+        # handle must-do list
+        if must_do_list is not None:
+            must_do_list_expanded = self._expand_must_do_list(must_do_list, write_list.shape)
+        else:
+            must_do_list_expanded = self._expand_must_do_list([2,0,0], write_list.shape)
         
         # Perform flash attention 3 with skip lists
         output = flash_attn_func(
@@ -211,6 +223,7 @@ class LiteAttention:
             v=value,
             softmax_scale=scale,
             attn_read_list=read_list,
+            attn_must_do_list=must_do_list_expanded,
             attn_write_list=write_list,
             thr=self.threshold,
             return_softmax_lse=return_softmax_lse
