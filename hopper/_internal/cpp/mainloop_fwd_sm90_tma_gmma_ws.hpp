@@ -1972,7 +1972,7 @@ namespace flash
 
                 // clear(tOrO);
 
-                auto fwd_step = [&](int const n_block, auto mask_fn, auto is_first_iter_type, auto check_inf_type) -> bool
+                auto fwd_step = [&](int const n_block, auto mask_fn, auto is_first_iter_type, auto check_inf_type)
                 {
                     static constexpr bool Is_first_iter = decltype(is_first_iter_type)::value;
                     static constexpr bool Check_inf = decltype(check_inf_type)::value;
@@ -2013,7 +2013,7 @@ namespace flash
                     Tensor scores_scale = [&]
                     {
                         if constexpr (Is_skipable){
-                            return softmax.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, Is_first_iter, Check_inf, softmax_cond_assign>(tSrS, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests, m_block);
+                            return softmax.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, Is_first_iter, Check_inf>(tSrS, params.qk_skip_mask_args.thr, skip_reader, m_block);
                         }
                         else{
                             return softmax.template max_get_scale<Is_first_iter, Check_inf>(tSrS);
@@ -2026,18 +2026,6 @@ namespace flash
                     }
 
                     softmax.template online_softmax<Is_first_iter, Check_inf>(tSrS);
-
-                    bool skip = false;
-                    if constexpr (Is_skipable && IsSkipWriter && !Is_first_iter){
-                        if (skip_writer.is_saving_thread)
-                        {
-                            skip =
-                                shared_storage.pipelines.skip_tests[0] &
-                                shared_storage.pipelines.skip_tests[1] &
-                                shared_storage.pipelines.skip_tests[2] &
-                                shared_storage.pipelines.skip_tests[3];
-                        }
-                    }
 
                     if constexpr (Is_FP8 && !V_colmajor)
                     {
@@ -2087,7 +2075,6 @@ namespace flash
 
                     warpgroup_wait<0>();
                     pipeline_v.consumer_release(smem_pipe_read); // release V
-                    return skip;
                 };
 
                 auto first_iter_mask_fn = [&](auto &tSrS, int n_block)
@@ -2095,7 +2082,7 @@ namespace flash
                 // fwd_step(n_block, first_iter_mask_fn, cute::true_type{} /*is_first_iter*/, cute::true_type{} /*check_inf*/);
                 bool skip = fwd_step(n_block, first_iter_mask_fn, cute::true_type{} /*is_first_iter*/, cute::true_type{} /*check_inf*/);
                 if constexpr (!Is_skipable) --n_block;
-                if constexpr (Is_causal || Is_local)
+                if constexpr ((Is_causal || Is_local) && !Is_skipable)
                 { // Separate iterations with causal or local masking
                     auto mask_fn = [&](auto &tSrS, int n_block)
                     { mask.template apply<false /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS, m_block, n_block); };
@@ -2119,53 +2106,13 @@ namespace flash
                         fwd_step(n_block, no_mask_fn, cute::false_type{} /*is_first_iter*/, cute::false_type{} /*check_inf*/);
                     }
                 }else{
-                    // bool is_first_iter_skips = true;
-                    // for (; (skip_reader.has_more() || is_first_iter_skips); skip_reader.advance())
-                    // {
-                    //     skip_reader.load_range();
-                    //     for (n_block = skip_reader.start_idx; n_block < skip_reader.end_idx; n_block++)
-                    //     {
-                    //         // this happens only in the first iteration of the loop
-                    //         if (is_first_iter_skips) [[unlikely]]
-                    //         {
-                    //             is_first_iter_skips = false;
-                    //             // continue;
-                    //         }
-                    //         else
-                    //         {
-                    //             skip = fwd_step(n_block, no_mask_fn, cute::false_type{} /*is_first_iter*/, cute::false_type{} /*check_inf*/);
-                    //         }
-                    //         if constexpr (IsSkipWriter) skip_writer.record_transition(skip, n_block);
-                    //     }
-                    //     if constexpr (IsSkipWriter) skip_writer.record_range_end(skip, skip_reader.end_idx);
-                    // }
-                    // if constexpr (IsSkipWriter) skip_writer.finalize();
-
-                    if constexpr (IsSkipWriter) skip_writer.record_transition(skip, n_block);
-                    --n_block;
-                    do
-                    {
-                        for (; n_block >= skip_reader.end_idx; n_block--)
-                        {
-                            skip = fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/, cute::false_type{} /*is_first_iter*/);
-                            if constexpr (IsSkipWriter) skip_writer.record_transition(skip, n_block);
-                        }
-
-                        if constexpr (IsSkipWriter) skip_writer.record_range_end(skip, skip_reader.end_idx);
-
-                        skip_reader.advance();
-                        if (!skip_reader.has_more()) break;
-
-                        skip_reader.load_range();
-                        n_block = skip_reader.start_idx;
-
-                    } while (true);
-
-                    if constexpr (IsSkipWriter) skip_writer.finalize();
+                    while(skip_reader.has_next()){
+                        fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/, skip_reader);
+                    }
                 }
 
                 // Separate masking iterations on the left for local attention
-                if constexpr (Is_local)
+                if constexpr ((Is_local) && !Is_skipable)
                 {
                     auto local_mask_fn = [&](auto &tSrS, int n_block)
                     { mask.template apply<false /*Seqlenk_mask*/, false /*Causal_mask*/, Is_local>(tSrS, m_block, n_block); };
