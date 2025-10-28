@@ -6,8 +6,10 @@ of read and write skip lists, hiding the complexity from users.
 """
 
 import torch
+import torch.nn.functional as F
 import os
 from typing import Optional, Tuple, Union
+import matplotlib.pyplot as plt
 
 from ._internal.flash_attn_interface import flash_attn_func
 
@@ -59,30 +61,51 @@ class LiteAttention:
         return (x + y - 1) // y
 
     @staticmethod
-    def calc_percentage(read_list: torch.Tensor) -> float:
-        """Calculate the percentage of non-skipped attention computations."""
+    def calc_percentage_per_head(read_list: torch.Tensor) -> float:
+        """
+        Calculate the percentage of non-skipped attention computations per head.
+        read_list: [batch, heads, qtiles, ktiles + 1]
+        """
+
         read_list = read_list.to(torch.int64)
-        skip_lengths = read_list[:, :, :, 0] // 2
-        
-        # Calculate range sizes
-        read_list_range_sized = read_list[:, :, :, 2:] - read_list[:, :, :, 1:-1]
-        if read_list_range_sized.shape[-1] % 2 != 0:
+        # remove the first element (the length of the skip list)
+        reshaped_read_list = read_list[..., 1:] # [batch, heads, qtiles, ktiles]
+
+        # pad last dimension to be even
+        # [batch, heads, qtiles, ktiles] -> [batch, heads, qtiles, ktiles + (ktiles % 2)]
+        if reshaped_read_list.shape[-1] % 2 != 0:
             # Pad with 0 if uneven
-            padding_shape = list(read_list_range_sized.shape)
+            padding_shape = list(reshaped_read_list.shape)
             padding_shape[-1] = 1
-            padding = torch.zeros(padding_shape, dtype=read_list_range_sized.dtype, device=read_list_range_sized.device)
-            read_list_range_sized = torch.cat([read_list_range_sized, padding], dim=-1)
+            padding = torch.zeros(padding_shape, dtype=reshaped_read_list.dtype, device=reshaped_read_list.device)
+            reshaped_read_list = torch.cat([reshaped_read_list, padding], dim=-1)
         
-        read_list_range_sized = read_list_range_sized.view(
-            read_list_range_sized.shape[0], read_list_range_sized.shape[1], 
-            read_list_range_sized.shape[2], -1, 2
-        )
-        read_list_range_sized = read_list_range_sized[..., 0].cumsum(dim=-1)
-        
-        total_possible = read_list.shape[0] * read_list.shape[1] * read_list.shape[2] * (read_list.shape[3] - 1)
-        total_not_skipped = torch.gather(read_list_range_sized, dim=-1, index=skip_lengths.unsqueeze(-1)).squeeze(-1).sum()
-        
-        return total_not_skipped / total_possible if total_possible > 0 else 1.0
+        # reshaped_read_list: [batch, heads, qtiles, ktiles + (ktiles % 2)] -> [batch, heads, qtiles, -1, 2]
+        reshaped_read_list = reshaped_read_list.view(
+            reshaped_read_list.shape[0],
+            reshaped_read_list.shape[1],
+            reshaped_read_list.shape[2],
+            -1, 2)
+        # range_sizes: [batch, heads, qtiles, -1]. the + 1 is because the start and end indexs are inclusive
+        range_sizes = (reshaped_read_list[..., 1] - reshaped_read_list[..., 0]).abs() + 1
+        # not_skipped_per_head: [batch, heads, qtiles, -1]
+        not_skipped_per_head = range_sizes.cumsum(dim=-1)
+        # the index for the end of the ranges in not_skipped_per_head
+        # skip_list_sizes: [batch, heads, qtiles]
+        skip_list_sizes = (read_list[:, :, :, 0] - 1) // 2
+        # real_not_skipped_per_head: [batch, heads, qtiles, -1] -> [batch, heads, qtiles]
+        real_not_skipped_per_head = torch.gather(not_skipped_per_head, dim=-1, index=skip_list_sizes.unsqueeze(-1)).squeeze(-1)
+        # take the mean for every q tile
+        num_of_k_tiles = read_list.shape[-1] - 1
+        return real_not_skipped_per_head / num_of_k_tiles
+
+    @staticmethod
+    def calc_percentage(read_list: torch.Tensor) -> float:
+        """
+        Calculate the percentage of non-skipped attention computations.
+        read_list: [batch, heads, qtiles, ktiles + 1]
+        """
+        return LiteAttention.calc_percentage_per_head(read_list).mean()
 
     @staticmethod
     def get_MN(head_dim, element_size, v_colmajor=False):
@@ -121,11 +144,13 @@ class LiteAttention:
         qtiles = LiteAttention.ceil_div(seq_len, kTileM)
         ktiles = LiteAttention.ceil_div(seq_len, kTileN)
         
-        skip_list = torch.zeros(2, batch, heads, qtiles, ktiles + 1, dtype=torch.int32, device=device)
-        # skip_list[:, :, :, :, 2] = ktiles
-        skip_list[:, :, :, :, 1] = ktiles - 1
-        skip_list[:, :, :, :, 0] = 2  # First element is the length of skip list
-        
+        # skip_list = torch.zeros(2, batch, heads, qtiles, ktiles + 1, dtype=torch.int32, device=device)
+        # skip_list[:, :, :, :, 1] = ktiles - 1
+        # skip_list[:, :, :, :, 0] = 2  # First element is the length of skip list
+
+        skip_list = torch.empty(2, batch, heads, qtiles, ktiles + 1, dtype=torch.int32, device=device)
+        skip_list[0, :, :, :, 0:3] = torch.tensor([2, ktiles - 1, 0], dtype=torch.int32, device=device)
+
         return skip_list
 
     def _init_skip_list(self, query: torch.Tensor, value: torch.Tensor) -> torch.Tensor:
@@ -252,6 +277,91 @@ class LiteAttention:
         # TODO @dor: commented out as a reminder to reconsider in the future if resetting the skip state is needed
         # if not enable:
         #     self.reset_skip_state()
+    
+    def visualize_skips(self, query: torch.Tensor, key: torch.Tensor, heads_list: torch.Tensor, scale: float, save_path: str, max_res: int = 520, name_prefix: str = ""):
+        '''
+        heads_list: [N], heads_list[i] == head_idx
+        query: (batch, seq_len, heads, head_dim)
+        key: (batch, seq_len, heads, head_dim)
+        name_prefix: optional prefix for the saved file names
+        '''
+        # os.makedirs(save_path, exist_ok=True)
+        # Create subdirectories for each batch and attention head
+        batch = query.shape[0]
+        seq_len_q = query.shape[1]
+        seq_len_k = key.shape[1]
+        skip_list = self._skip_list[self._phase]
+        for b in range(batch):
+            for h in heads_list:
+                batch_head_dir = os.path.join(save_path, f"batch_{b}", f"head_{h}")
+                os.makedirs(batch_head_dir, exist_ok=True)
+        
+        # Reshape for multi-head attention: (batch, seq_len, heads, head_dim) -> (batch, example_heads, seq_len, head_dim)
+        q_reshaped = query[:, :, heads_list].transpose(1, 2)  # (batch, example_heads, seq_len_q, head_dim)
+        k_reshaped = key[:, :, heads_list].transpose(1, 2)    # (batch, example_heads, seq_len_k, head_dim)
+
+        q = q_reshaped
+        k = k_reshaped
+        QK = (q @ k.transpose(-2, -1)) * scale
+        attn_softmaxed = torch.softmax(QK, dim=-1)
+        attn_down = F.adaptive_max_pool2d(
+            attn_softmaxed,  # (batch, heads, 1, H, W)
+            output_size=(max_res, max_res)
+        ) # -> (batch, heads, max_res, max_res)
+
+        kBlockM, kBlockN = LiteAttention.get_MN(k.shape[-1], k.dtype.itemsize)
+        # Add grid overlay
+        height, width = max_res, max_res
+        ratio_height = height / seq_len_q
+        ratio_width = width / seq_len_k
+
+        grid_height = kBlockM * ratio_height
+        grid_width = kBlockN * ratio_width
+
+        # Calculate grid line positions
+        y_positions = [b * grid_height for b in range(int(height / grid_height) + 1) if b * grid_height <= height]
+        x_positions = [b * grid_width for b in range(int(width / grid_width) + 1) if b * grid_width <= width]
+
+        for b in range(batch):
+
+            for h, attn_map in zip(heads_list, attn_down[b]):
+                current_skip_list = skip_list[b, h][None, None, ...]
+                perecentage = self.calc_percentage(current_skip_list)
+
+                plt.figure(figsize=(6, 6))
+                attn_cpu = attn_map.detach().float().cpu()
+                plt.imshow(attn_cpu, cmap='viridis', interpolation='nearest')
+                plt.title(f"Batch {b} | Head {h} | Percentage {perecentage * 100:.2f}%")
+                
+                # Add horizontal grid lines
+                for y in y_positions:
+                    plt.axhline(y=y-0.5, color='black', linewidth=0.2, alpha=0.7)
+                
+                # Add vertical grid lines  
+                for x in x_positions:
+                    plt.axvline(x=x-0.5, color='black', linewidth=0.2, alpha=0.7)
+
+                for i, row_skip_list in enumerate(current_skip_list[0, 0]):
+                    # print(row_skip_list.shape)
+                    l_row = row_skip_list[0]
+                    # end0, start1, end1, start2, ...
+                    width_ranges = row_skip_list[1 : l_row + 1] * grid_width
+                    # height
+                    row_height = i * grid_height
+
+                    width_ranges = width_ranges.view(-1, 2).cpu()
+                    for end, start in width_ranges:
+                        rect = plt.Rectangle((start, row_height), end + grid_width - start, grid_height, facecolor='white', edgecolor='none', linewidth=0.4, alpha=0.3)
+                        plt.gca().add_patch(rect)
+                
+                plt.axis("off")
+                plt.tight_layout()
+
+                batch_head_dir = os.path.join(save_path, f"batch_{b}", f"head_{h}")
+                filename = f"{name_prefix}.png" if name_prefix else "visualization.png"
+                file_path = os.path.join(batch_head_dir, filename)
+                plt.savefig(file_path, dpi=150)
+                plt.close()
 
 class SeqParallelLiteAttention:
     def __init__(self, num_nodes: int, enable_skipping: bool = True, threshold: float = -10.0, max_batch_size: int = 4):

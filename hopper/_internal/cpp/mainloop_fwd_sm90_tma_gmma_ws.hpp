@@ -1609,7 +1609,7 @@ namespace flash
                 Tensor scores_scale = [&]
                 {
                     if constexpr (Is_skipable){
-                        return softmax.template max_get_scale_detect_qk_skip</*Is_first=*/true, true, softmax_cond_assign>(tSrS, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests);
+                        return softmax.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, /*Is_first=*/true, true, softmax_cond_assign>(tSrS, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests, m_block);
                     }
                     else{
                         return softmax.template max_get_scale</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
@@ -1680,10 +1680,13 @@ namespace flash
                     }
                     scoremod_premask_fn(tSrS);
                     mask_fn(tSrS, n_block);
+                    // if constexpr (Is_skipable){
+                    //     mask.template apply<false /*Seqlenk_mask*/, true /*Seqlenq_mask*/, Is_causal, Is_local>(tSrS, m_block, n_block);
+                    // }
                     if constexpr (Is_skipable){
                     cute::copy(
-                        softmax.template max_get_scale_detect_qk_skip</*Is_first=*/false, Check_inf, softmax_cond_assign>(
-                            tSrS, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests),
+                        softmax.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, /*Is_first=*/false, Check_inf, softmax_cond_assign>(
+                            tSrS, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests, m_block),
                         scores_scale);
                     }else{
                         cute::copy(softmax.template max_get_scale</*Is_first=*/false, Check_inf>(tSrS), scores_scale);
@@ -1893,7 +1896,7 @@ namespace flash
                     Tensor scores_scale = [&]
                     {
                         if constexpr (Is_skipable){
-                            return softmax.template max_get_scale_detect_qk_skip<Is_first_iter, Check_inf, softmax_cond_assign>(tSrS, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests);
+                            return softmax.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, Is_first_iter, Check_inf, softmax_cond_assign>(tSrS, params.qk_skip_mask_args.thr, shared_storage.pipelines.skip_tests, m_block);
                         }
                         else{
                             return softmax.template max_get_scale<Is_first_iter, Check_inf>(tSrS);
