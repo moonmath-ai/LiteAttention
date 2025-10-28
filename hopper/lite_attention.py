@@ -60,32 +60,54 @@ class LiteAttention:
 
     @staticmethod
     def calc_percentage_per_head(read_list: torch.Tensor) -> float:
-        """Calculate the percentage of non-skipped attention computations per head."""
+        """
+        Calculate the percentage of non-skipped attention computations per head.
+        read_list: [batch, heads, qtiles, ktiles + 1]
+        """
+
         read_list = read_list.to(torch.int64)
-        skip_lengths = read_list[:, :, :, 0] // 2
-        
-        # absolute value because it could be reversed and add 1 because start and end indexs are inclusive
-        read_list_range_sized = (read_list[:, :, :, 2:] - read_list[:, :, :, 1:-1]).abs() + 1
-        if read_list_range_sized.shape[-1] % 2 != 0:
+        # remove the first element (the length of the skip list)
+        reshaped_read_list = read_list[..., 1:] # [batch, heads, qtiles, ktiles]
+
+        # pad last dimension to be even
+        # [batch, heads, qtiles, ktiles] -> [batch, heads, qtiles, ktiles + (ktiles % 2)]
+        if reshaped_read_list.shape[-1] % 2 != 0:
             # Pad with 0 if uneven
-            padding_shape = list(read_list_range_sized.shape)
+            padding_shape = list(reshaped_read_list.shape)
             padding_shape[-1] = 1
-            padding = torch.zeros(padding_shape, dtype=read_list_range_sized.dtype, device=read_list_range_sized.device)
-            read_list_range_sized = torch.cat([read_list_range_sized, padding], dim=-1)
+            padding = torch.zeros(padding_shape, dtype=reshaped_read_list.dtype, device=reshaped_read_list.device)
+            reshaped_read_list = torch.cat([reshaped_read_list, padding], dim=-1)
         
-        read_list_range_sized = read_list_range_sized.view(
-            read_list_range_sized.shape[0], read_list_range_sized.shape[1], 
-            read_list_range_sized.shape[2], -1, 2
-        )
-        read_list_range_sized = read_list_range_sized[..., 0].cumsum(dim=-1)
-        not_skipped_per_head = torch.gather(read_list_range_sized, dim=-1, index=skip_lengths.unsqueeze(-1)).squeeze(-1)
+        # reshaped_read_list: [batch, heads, qtiles, ktiles + (ktiles % 2)] -> [batch, heads, qtiles, -1, 2]
+        reshaped_read_list = reshaped_read_list.view(
+            reshaped_read_list.shape[0],
+            reshaped_read_list.shape[1],
+            reshaped_read_list.shape[2],
+            -1, 2)
+        # range_sizes: [batch, heads, qtiles, -1]. the + 1 is because the start and end indexs are inclusive
+        range_sizes = (reshaped_read_list[..., 1] - reshaped_read_list[..., 0]).abs() + 1
+        # not_skipped_per_head: [batch, heads, qtiles, -1]
+        not_skipped_per_head = range_sizes.cumsum(dim=-1)
+        # the index for the end of the ranges in not_skipped_per_head
+        # skip_list_sizes: [batch, heads, qtiles]
+        skip_list_sizes = (read_list[:, :, :, 0] - 1) // 2
+        # real_not_skipped_per_head: [batch, heads, qtiles, -1] -> [batch, heads, qtiles]
+        real_not_skipped_per_head = torch.gather(not_skipped_per_head, dim=-1, index=skip_list_sizes.unsqueeze(-1)).squeeze(-1)
+        # take the mean for every q tile
         num_of_k_tiles = read_list.shape[-1] - 1
-        return not_skipped_per_head / num_of_k_tiles
+        return real_not_skipped_per_head / num_of_k_tiles
 
     @staticmethod
     def calc_percentage(read_list: torch.Tensor) -> float:
-        """Calculate the percentage of non-skipped attention computations."""
+        """
+        Calculate the percentage of non-skipped attention computations.
+        read_list: [batch, heads, qtiles, ktiles + 1]
+        """
         return LiteAttention.calc_percentage_per_head(read_list).mean()
+    
+    @staticmethod
+    def visualize_skips(query: torch.Tensor, key: torch.Tensor, skip_list: torch.Tensor):
+        pass
 
     @staticmethod
     def get_MN(head_dim, element_size, v_colmajor=False):
