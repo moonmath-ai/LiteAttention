@@ -278,12 +278,20 @@ class LiteAttention:
         # if not enable:
         #     self.reset_skip_state()
     
-    def visualize_skips(self, query: torch.Tensor, key: torch.Tensor, heads_list: torch.Tensor, scale: float, save_path: str, max_res: int = 520):
+    def visualize_skips(self, query: torch.Tensor, key: torch.Tensor, heads_list: torch.Tensor, scale: float, save_path: str, max_res: int = 520, name_prefix: str = ""):
         '''
         heads_list: [N], heads_list[i] == head_idx
         query: (batch, seq_len, heads, head_dim)
         key: (batch, seq_len, heads, head_dim)
+        name_prefix: optional prefix for the saved file names
         '''
+        # os.makedirs(save_path, exist_ok=True)
+        # Create subdirectories for each batch and attention head
+        batch = query.shape[0]
+        for b in range(batch):
+            for h in heads_list:
+                batch_head_dir = os.path.join(save_path, f"batch_{b}", f"head_{h}")
+                os.makedirs(batch_head_dir, exist_ok=True)
         # Reshape for multi-head attention: (batch, seq_len, heads, head_dim) -> (example_heads, seq_len, head_dim)
         q_reshaped = query[:, :, heads_list].transpose(1, 2)  # (example_heads, seq_len_q, head_dim)
         k_reshaped = key[:, :, heads_list].transpose(1, 2)    # (example_heads, seq_len_k, head_dim)
@@ -291,9 +299,10 @@ class LiteAttention:
         seq_len_q = query.shape[1]
         seq_len_k = key.shape[1]
         skip_list = self._skip_list[self._phase, :batch, heads_list]
-        for i in range(batch):
-            q = q_reshaped[i]
-            k = k_reshaped[i]
+        skip_list = self._skip_list[self._phase, :batch]
+        for b in range(batch):
+            q = q_reshaped[b]
+            k = k_reshaped[b]
             QK = (q @ k.transpose(-2, -1)) * scale
             attn_softmaxed = torch.softmax(QK, dim=-1)
             attn_down = F.adaptive_max_pool2d(
@@ -311,11 +320,11 @@ class LiteAttention:
             grid_width = kBlockN * ratio_width
 
             # Calculate grid line positions
-            y_positions = [i * grid_height for i in range(int(height / grid_height) + 1) if i * grid_height <= height]
-            x_positions = [i * grid_width for i in range(int(width / grid_width) + 1) if i * grid_width <= width]
+            y_positions = [b * grid_height for b in range(int(height / grid_height) + 1) if b * grid_height <= height]
+            x_positions = [b * grid_width for b in range(int(width / grid_width) + 1) if b * grid_width <= width]
 
             for h, attn_map in zip(heads_list, attn_down):
-                current_skip_list = skip_list[[i], [h]]
+                current_skip_list = skip_list[[b], [h]]
                 perecentage = self.calc_percentage(current_skip_list)
 
                 plt.figure(figsize=(6, 6))
@@ -331,7 +340,7 @@ class LiteAttention:
                 for x in x_positions:
                     plt.axvline(x=x-0.5, color='black', linewidth=0.2, alpha=0.7)
 
-                for i, row_skip_list in enumerate(skip_list[0, 0]):
+                for i, row_skip_list in enumerate(current_skip_list[0, 0]):
                     # print(row_skip_list.shape)
                     l_row = row_skip_list[0]
                     # end0, start1, end1, start2, ...
@@ -347,7 +356,9 @@ class LiteAttention:
                 plt.axis("off")
                 plt.tight_layout()
 
-                file_path = os.path.join(save_path, f"batch_{i}_head_{h}.png")
+                batch_head_dir = os.path.join(save_path, f"batch_{b}", f"head_{h}")
+                filename = f"{name_prefix}.png" if name_prefix else "visualization.png"
+                file_path = os.path.join(batch_head_dir, filename)
                 plt.savefig(file_path, dpi=150)
                 plt.close()
 
