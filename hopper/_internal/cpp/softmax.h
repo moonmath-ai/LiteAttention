@@ -159,9 +159,10 @@ namespace flash
                 cute::fill(scores_scale, 1.f);
                 if (is_warp_leader){ 
                     if constexpr (!softmax_cond_assign){
+                    // if constexpr (softmax_cond_assign){
                         // setting up so we could skip for the next call if needed
                         // (we always assume the first iter in no skip so we don't need to worry about resetting it to false first)
-                        skip_tests[warp_idx_in_warpgroup] = true; 
+                        skip_tests[warp_idx_in_warpgroup] = false; 
                     }
                 }
             }

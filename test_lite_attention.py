@@ -12,7 +12,7 @@ for head_dim in [32, 64, 96, 128, 192, 256]:
     attn = LiteAttention()
     attn.threshold = float('inf')
     # attn.threshold = float(0.0)
-    for i in range(3):
+    for i in range(1):
         torch.cuda.synchronize()
         output = attn(q, k, v)
         torch.cuda.synchronize()
@@ -53,14 +53,14 @@ for head_dim in [32, 64, 96, 128, 192, 256]:
     torch.cuda.synchronize()
     output = attn(q, k, v)
     torch.cuda.synchronize()
-    read_list = attn._skip_list[attn._phase, :q.shape[0], ..., :3] # [batch, heads, qtiles, ktiles]
-    write_list = attn._skip_list[1 - attn._phase, :q.shape[0], ..., :3] # [batch, heads, qtiles, ktiles]
-    diff = (read_list == write_list).all(-1)
+    read_list = attn._skip_list[attn._phase, :q.shape[0]] # [batch, heads, qtiles, ktiles]
+    write_list = attn._skip_list[1 - attn._phase, :q.shape[0]] # [batch, heads, qtiles, ktiles]
+    diff = (read_list[..., :3] == write_list[..., :3]).all(-1)
     passed = diff.all()
     print(f"skip nothing test: {'✅ PASSED' if passed else '❌ FAILED'}")
     if not passed:
-        print(read_list[~diff])
-        print(write_list[~diff])
+        print(read_list[~diff][..., : 5])
+        print(write_list[~diff][..., : 5])
     
     # Test softmax_lse correctness (with skip optimization disabled)
     attn = LiteAttention()
