@@ -667,7 +667,7 @@ namespace flash
              SeqlenInfo_t const &seqlen_info,
              cute::tuple<int32_t, int32_t, int32_t, int32_t> block_coord,
              int &work_idx,
-             SkipListReader &skip_reader,
+            //  SkipListReader &skip_reader,
              auto &skip_writer)
         {
             // some of these are captured in lambda so can't use structured binding
@@ -689,6 +689,7 @@ namespace flash
                 }
             }
 
+            SkipListReader skip_reader;
             if constexpr (Is_skipable)
             {
                 skip_reader.template init<TileShape_MNK>(params, bidb, bidh, m_block);
@@ -1605,7 +1606,7 @@ namespace flash
                         fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/, skip_reader);
                     }
                 }else{
-                    while(skip_reader.has_next()){
+                    while(skip_reader.has_more()){
                         fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/, skip_reader);
                     }
                 }

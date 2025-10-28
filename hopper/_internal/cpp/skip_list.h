@@ -173,7 +173,7 @@ namespace flash
             skip_tests[index][warp_idx_in_warpgroup] &= skip;
         }
 
-        __device__ __forceinline__ bool has_next()
+        __device__ __forceinline__ bool has_more()
         {
             return stop_condition_buffer[index];
         }

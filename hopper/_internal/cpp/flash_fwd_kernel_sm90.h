@@ -425,7 +425,7 @@ namespace flash
 
                 cutlass::arch::wait_on_dependent_grids();
 
-                SkipListReader skip_reader;
+                // SkipListReader skip_reader;
                 // DelayedSkipListWriter<CollectiveMainloop::kStages> skip_writer;
                 // Initialize skip_writer with shared memory buffers
                 DelayedSkipListWriter<CollectiveMainloop::kStages> skip_writer(
@@ -472,7 +472,8 @@ namespace flash
                     };
 
                     mainloop.load(params.mainloop, pipeline_k, pipeline_v, pipeline_vt, smem_pipe_write,
-                                shared_storage, scheduler_prefetch, seqlen_info, block_coord, work_idx, skip_reader, skip_writer);
+                                shared_storage, scheduler_prefetch, seqlen_info, block_coord, work_idx, skip_writer);
+                                // shared_storage, scheduler_prefetch, seqlen_info, block_coord, work_idx, skip_reader, skip_writer);
 
                 }
                 mainloop.load_tail(pipeline_k, pipeline_v, pipeline_vt, smem_pipe_write, shared_storage, work_idx, skip_writer);
