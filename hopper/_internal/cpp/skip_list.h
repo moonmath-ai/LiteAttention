@@ -170,7 +170,7 @@ namespace flash
 
         __device__ __forceinline__ void update_skip(bool skip, int warp_idx_in_warpgroup){
             // consider: using atomic here
-            skip_tests[index][warp_idx_in_warpgroup] &= skip;
+            atomicAnd(&(skip_tests[index][warp_idx_in_warpgroup]), static_cast<int>(skip));
         }
 
         __device__ __forceinline__ bool has_more()
