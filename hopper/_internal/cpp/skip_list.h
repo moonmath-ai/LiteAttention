@@ -247,20 +247,22 @@ namespace flash
         {
             // record the current n_block for replay in DelayAmount iterations from now.
             n_blocks_buffer[record_idx] = n_block;
-            record_idx = (record_idx + 1) % DelayAmount;
+            record_idx = (record_idx + 1) % BufferSize;
         }
 
         __device__ __forceinline__ 
         void record_range_end(int end_idx)
         {
             // we save into previous index!
-            end_range_buffer[(record_idx - 1) % DelayAmount] = end_idx;
+            // end_range_buffer[(record_idx - 1) % DelayAmount] = end_idx;
+            end_range_buffer[(record_idx + BufferSize - 1) % BufferSize] = end_idx;
         }
 
         __device__ __forceinline__ 
         void record_final_iter()
         {
-            stop_condition_buffer[(record_idx - 1) % DelayAmount] = false;
+            // stop_condition_buffer[(record_idx - 1) % DelayAmount] = false;
+            stop_condition_buffer[(record_idx + BufferSize - 1) % BufferSize] = false;
         }
 
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -304,7 +306,7 @@ namespace flash
         {
             replay_transition();
             replay_end_range();
-            replay_idx = (replay_idx + 1) % DelayAmount;
+            replay_idx = (replay_idx + 1) % BufferSize;
         }
 
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

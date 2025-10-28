@@ -1051,40 +1051,6 @@ namespace flash
                 }while(true);
 
                 if (should_load_KV){ skip_writer.record_final_iter(); }
-
-                // #pragma unroll 1
-                // for (; n_block >= skip_reader.end_idx; n_block--)
-                // {
-                //     PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
-                //     ++smem_pipe_write;
-                //     load_KV_for_block(n_block, n_block_prev, smem_pipe_write, smem_pipe_write_v, skip_writer);
-                //     n_block_prev = n_block;
-                //     if constexpr (Transpose_V){ copy_Vt_to_V(smem_pipe_write_v); }
-                // }
-
-                // if (should_load_KV){ skip_writer.record_range_end(skip_reader.end_idx); }
-                // skip_reader.advance();
-
-                // #pragma unroll 1
-                // for (; skip_reader.has_more(); skip_reader.advance())
-                // {
-                //     skip_reader.load_range();
-                //     #pragma unroll 1
-                //     for (n_block = skip_reader.start_idx; n_block >= skip_reader.end_idx; n_block--)
-                //     {
-                //         // // this happens only in the first iteration of the loop
-                //         // if (n_block == n_block_prev) [[unlikely]]
-                //         //     continue;
-
-                //         PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
-                //         ++smem_pipe_write;
-                //         load_KV_for_block(n_block, n_block_prev, smem_pipe_write, smem_pipe_write_v, skip_writer);
-                //         n_block_prev = n_block;
-                //         if constexpr (Transpose_V){ copy_Vt_to_V(smem_pipe_write_v); }
-                //     }
-
-                //     if (should_load_KV){skip_writer.record_range_end(skip_reader.end_idx);}
-                // }
             }else{
                 --n_block;
                 #pragma unroll (!Transpose_V && Use_TMA_KV ? 2 : 1)
@@ -1451,12 +1417,11 @@ namespace flash
             {
                 Tensor tSrS = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
                 consumer_wait(pipeline_k, smem_pipe_read);
-                // PipelineState<kStages*2> smem_pipe_read_k = smem_pipe_read;
+                flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS);
+                warpgroup_wait<0>();
                 if constexpr (Is_skipable){
                     n_block = skip_reader.next_n_block();
                 }
-                flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS);
-                warpgroup_wait<0>();
                 pipeline_k.consumer_release(smem_pipe_read);
                 if constexpr (HasQv)
                 {
