@@ -1056,6 +1056,7 @@ namespace flash
 
                 }while(true);
 
+                // todo: maybe move this to somehwere earlier
                 if (should_load_KV){ skip_writer.record_final_iter(); }
             }else{
                 --n_block;

@@ -5,14 +5,16 @@ torch.manual_seed(0)
 torch.cuda.manual_seed(0)
 
 for head_dim in [32, 64, 96, 128, 192, 256]:
-    q = torch.randn(2, 5000, 32, head_dim, device="cuda", dtype=torch.bfloat16)
-    k = torch.randn(2, 5000, 32, head_dim, device="cuda", dtype=torch.bfloat16)
-    v = torch.randn(2, 5000, 32, head_dim, device="cuda", dtype=torch.bfloat16)
+    q = torch.randn(2, 5000, 7, head_dim, device="cuda", dtype=torch.bfloat16)
+    k = torch.randn(2, 5000, 7, head_dim, device="cuda", dtype=torch.bfloat16)
+    v = torch.randn(2, 5000, 7, head_dim, device="cuda", dtype=torch.bfloat16)
     # skip all test
     attn = LiteAttention()
     attn.threshold = float('inf')
     # attn.threshold = float(0.0)
-    for i in range(1):
+    print(attn._init_skip_list(q, v)[0].shape)
+    # print(attn._skip_list[0].shape)
+    for i in range(3):
         torch.cuda.synchronize()
         output = attn(q, k, v)
         torch.cuda.synchronize()
@@ -48,11 +50,12 @@ for head_dim in [32, 64, 96, 128, 192, 256]:
 
     # skip nothing test
     attn = LiteAttention()
-    # attn.threshold = float('-inf')
-    attn.threshold = float(-30000)
-    torch.cuda.synchronize()
-    output = attn(q, k, v)
-    torch.cuda.synchronize()
+    attn.threshold = float('-inf')
+    # attn.threshold = float(-30000)
+    for i in range(3):
+        torch.cuda.synchronize()
+        output = attn(q, k, v)
+        torch.cuda.synchronize()
     read_list = attn._skip_list[attn._phase, :q.shape[0]] # [batch, heads, qtiles, ktiles]
     write_list = attn._skip_list[1 - attn._phase, :q.shape[0]] # [batch, heads, qtiles, ktiles]
     diff = (read_list[..., :3] == write_list[..., :3]).all(-1)
@@ -67,7 +70,7 @@ for head_dim in [32, 64, 96, 128, 192, 256]:
     attn.threshold = 0.0
     # # intentionally run twice to test how much the skip effects the lse
     # for i in range(2):
-    for i in range(1):
+    for i in range(3):
         torch.cuda.synchronize()
         output_lite, lse_lite = attn(q, k, v, return_softmax_lse=True)
         torch.cuda.synchronize()
