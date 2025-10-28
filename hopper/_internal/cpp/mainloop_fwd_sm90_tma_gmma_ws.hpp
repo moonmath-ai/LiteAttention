@@ -393,10 +393,11 @@ namespace flash
         using TensorStorage = std::conditional_t<!Transpose_V, TensorStorageNoTranspose, TensorStorageTransposeV>;
 
         // These are tuned for speed. They don't affect correctness.
-        static constexpr bool UseSchedulerBarrier = (IntraWGOverlap
+        static constexpr bool UseSchedulerBarrier = Is_skipable || ((IntraWGOverlap
                                                          ? (NumMmaWarpGroups >= 2) && (!Is_FP8 ? kHeadDim <= 128 : kHeadDim >= 128)
                                                          : NumMmaWarpGroups == 2) &&
-                                                    !LargeHeadDimV;
+                                                    !LargeHeadDimV);
+        // static constexpr bool UseSchedulerBarrier = true;
         static constexpr bool RescaleOBeforeGemm = kHeadDim > 128 && (!Is_FP8 || V_colmajor) && IntraWGOverlap;
 
         // Host side kernel arguments
@@ -849,7 +850,12 @@ namespace flash
             auto load_K = [&](int const n_block, auto const &smem_pipe_write, auto need_seqlenk_masking_type, auto &skip_writer)
             {
                 pipeline_k.producer_acquire(smem_pipe_write);
-                if constexpr (Is_skipable){ skip_writer.record_n_block(n_block); }
+                // if(blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0){
+                //     printf("after acquire %d\n", n_block);
+                // }
+                if constexpr (Is_skipable){ 
+                    skip_writer.record_n_block(n_block); 
+                }
                 if constexpr (!PagedKVNonTMA)
                 {
                     auto [n_block_idx, bidb_kv_idx] = paged_kv_manager.get_indices_for_K_TMA();
@@ -1035,18 +1041,18 @@ namespace flash
                 --n_block;
 
                 do{
-                for (; n_block >= skip_reader.end_idx; n_block--)
-                {
-                    PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
-                    ++smem_pipe_write;
-                    load_KV_for_block(n_block, n_block_prev, smem_pipe_write, smem_pipe_write_v, skip_writer);
-                    n_block_prev = n_block;
-                    if constexpr (Transpose_V){ copy_Vt_to_V(smem_pipe_write_v); }
-                }
+                    for (; n_block >= skip_reader.end_idx; n_block--)
+                    {
+                        PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
+                        ++smem_pipe_write;
+                        load_KV_for_block(n_block, n_block_prev, smem_pipe_write, smem_pipe_write_v, skip_writer);
+                        n_block_prev = n_block;
+                        if constexpr (Transpose_V){ copy_Vt_to_V(smem_pipe_write_v); }
+                    }
 
                     if (should_load_KV){skip_writer.record_range_end(skip_reader.end_idx);}
                     if(!skip_reader.has_more()){ break; }
-                skip_reader.advance();
+                    skip_reader.advance();
 
                 }while(true);
 
@@ -1421,6 +1427,9 @@ namespace flash
                 warpgroup_wait<0>();
                 if constexpr (Is_skipable){
                     n_block = skip_reader.next_n_block();
+                    // if((thread_idx == 0) && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0){
+                    //     printf("n_block is %d\n", n_block);
+                    // }
                 }
                 pipeline_k.consumer_release(smem_pipe_read);
                 if constexpr (HasQv)
@@ -1488,9 +1497,6 @@ namespace flash
 
                     }
                     warp_scheduler_barrier_sync();
-                    if constexpr (Is_skipable){
-                        n_block = skip_reader.next_n_block();
-                    }
                     flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS);
                     if constexpr (RescaleOBeforeGemm)
                     {
@@ -1509,6 +1515,9 @@ namespace flash
                     flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP), tOrV(_, _, _, smem_pipe_read_v.index()), tOrO);
                     warp_scheduler_barrier_arrive();
                     warpgroup_wait<1>();
+                    if constexpr (Is_skipable){
+                        n_block = skip_reader.next_n_block();
+                    }
                     pipeline_k.consumer_release(smem_pipe_read); // release K
                     if constexpr (HasQv)
                     {
@@ -1562,6 +1571,11 @@ namespace flash
                     {
                         arrive_on_P_write_barrier();
                     }
+                    // if constexpr (Is_skipable){
+                    //     if((thread_idx == 0) && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0){
+                    //         printf("n_block is %d\n", n_block);
+                    //     }
+                    // }
                 };
 
                 if constexpr ((Is_causal || Is_local) && !Is_skipable)
@@ -1632,6 +1646,12 @@ namespace flash
                     flash::permute_output_fp8(tOrO);
                 }
                 ++smem_pipe_read;
+
+                // if constexpr (Is_skipable){
+                //     if(cute::elect_one_sync() && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0){
+                //         printf("consumer is done!\n");
+                //     }
+                // }
             }
             else
             { // No intra-WG overlap
