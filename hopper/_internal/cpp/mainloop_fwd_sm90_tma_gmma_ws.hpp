@@ -1490,9 +1490,7 @@ namespace flash
                     ++smem_pipe_read;
                     Tensor tSrS = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
                     // if constexpr (!UseSchedulerBarrier || warp_group_idx == 0)
-                    if constexpr (!UseSchedulerBarrier)
-                    {
-                        if(warp_group_idx == 0){
+                    if(!UseSchedulerBarrier || warp_group_idx == 0){
                             consumer_wait(pipeline_k, smem_pipe_read);
                         }
 
@@ -1505,12 +1503,8 @@ namespace flash
                     }
                     if constexpr (!HasQv)
                     {
-                        // if constexpr (!UseSchedulerBarrier || warp_group_idx == 0)
-                        if constexpr (!UseSchedulerBarrier)
-                        {
-                            if(warp_group_idx == 0){
+                        if(!UseSchedulerBarrier || warp_group_idx == 0){
                                 consumer_wait(pipeline_v, smem_pipe_read_v);
-                            }
                         }
                     }
                     flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP), tOrV(_, _, _, smem_pipe_read_v.index()), tOrO);
