@@ -536,6 +536,7 @@ if not SKIP_CUDA_BUILD:
     sources += ["_internal/cpp/flash_prepare_scheduler.cu"]
     nvcc_flags = [
         "-O3",
+        # "-g",
         "-std=c++17",
         "--ftemplate-backtrace-limit=0",  # To debug template code
         "--use_fast_math",
@@ -545,7 +546,7 @@ if not SKIP_CUDA_BUILD:
         # f"--split-compile={os.getenv('NVCC_THREADS', '4')}",  # split-compile is faster
         "-lineinfo",  # TODO: disable this for release to reduce binary size
         "-DCUTE_SM90_EXTENDED_MMA_SHAPES_ENABLED",  # Necessary for the WGMMA shapes that we use
-        "-DCUTLASS_ENABLE_GDC_FOR_SM90",  # For PDL
+        # "-DCUTLASS_ENABLE_GDC_FOR_SM90",  # For PDL
         "-DCUTLASS_DEBUG_TRACE_LEVEL=0",  # Can toggle for debugging
         "-DNDEBUG",  # Important, otherwise performance is severely impacted
     ]
