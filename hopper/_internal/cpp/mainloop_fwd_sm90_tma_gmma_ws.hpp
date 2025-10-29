@@ -1053,6 +1053,7 @@ namespace flash
                     if (should_load_KV){skip_writer.record_range_end(skip_reader.end_idx);}
                     if(!skip_reader.has_more()){ break; }
                     skip_reader.advance();
+                    skip_reader.load_range();
                 }while(true);
 
                 // // todo: maybe move this to somehwere earlier
