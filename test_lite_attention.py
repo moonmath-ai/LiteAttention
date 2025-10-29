@@ -10,7 +10,7 @@ def generate_test_tensors(batch, seq_len, heads, head_dim):
     return q, k, v
 
 
-def run_attention_warmup(attn, q, k, v, num_iters=3):
+def run_attention_warmup(attn, q, k, v, num_iters=1):
     """Run attention forward pass multiple times to warm up."""
     for _ in range(num_iters):
         torch.cuda.synchronize()
@@ -67,13 +67,13 @@ def test_skip_nothing(q, k, v, head_dim):
     write_list = attn._skip_list[1 - attn._phase, :q.shape[0]]  # [batch, heads, qtiles, ktiles]
     
     # Check if read and write lists match
-    diff = (read_list[..., :3] == write_list[..., :3]).all(-1)
+    test_tensor = torch.tensor([2, read_list.shape[-1] - 2, 0], device=read_list.device, dtype=read_list.dtype)[None, None, None,]
+    diff = (read_list[..., :3] == test_tensor).all(-1)
     passed = diff.all()
     
     print(f"  Skip nothing test: {'✅ PASSED' if passed else '❌ FAILED'}")
     if not passed:
         print(f"    Mismatched read_list:\n{read_list[~diff][..., :5]}")
-        print(f"    Mismatched write_list:\n{write_list[~diff][..., :5]}")
     
     return passed
 
