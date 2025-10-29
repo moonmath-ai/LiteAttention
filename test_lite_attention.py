@@ -5,9 +5,10 @@ torch.manual_seed(0)
 torch.cuda.manual_seed(0)
 
 for head_dim in [32, 64, 96, 128, 192, 256]:
-    q = torch.randn(2, 5000, 7, head_dim, device="cuda", dtype=torch.bfloat16)
-    k = torch.randn(2, 5000, 7, head_dim, device="cuda", dtype=torch.bfloat16)
-    v = torch.randn(2, 5000, 7, head_dim, device="cuda", dtype=torch.bfloat16)
+    batch, seq_len, heads = 2, 5000, 32
+    q = torch.randn(batch, seq_len, heads, head_dim, device="cuda", dtype=torch.bfloat16)
+    k = torch.randn(batch, seq_len, heads, head_dim, device="cuda", dtype=torch.bfloat16)
+    v = torch.randn(batch, seq_len, heads, head_dim, device="cuda", dtype=torch.bfloat16)
     # skip all test
     attn = LiteAttention()
     attn.threshold = float('inf')
@@ -68,15 +69,15 @@ for head_dim in [32, 64, 96, 128, 192, 256]:
     # Test softmax_lse correctness (with skip optimization disabled)
     attn = LiteAttention()
     attn.threshold = 0.0
-    # # intentionally run twice to test how much the skip effects the lse
-    # for i in range(2):
-    for i in range(3):
+    for i in range(1):
         torch.cuda.synchronize()
         output_lite, lse_lite = attn(q, k, v, return_softmax_lse=True)
         torch.cuda.synchronize()
         # print("print before stuck in the kernel")
         # skip_list = attn._skip_list[attn._phase, :q.shape[0]]
         # print(skip_list.shape, skip_list[0, :, 10, :3])
+
+    print(attn.calc_percentage(attn._skip_list[attn._phase, :q.shape[0]]))
     
     # Compute reference softmax_lse using PyTorch
     # Shape: q, k, v are [batch, seq_len, num_heads, head_dim]
