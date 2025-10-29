@@ -153,7 +153,7 @@ namespace flash
         {
             if(must_do_reader && skip){
                 // advance the must_do list
-                if (must_do_reader->end_idx > n_block && must_do_reader->has_more()){ // this is an if and not a while sinve the n_block index can never skip a must-do range so it cant get too much ahead
+                if (must_do_reader->end_idx > n_block && must_do_reader->has_more()){ // this is an if and not a while since the n_block index can never skip a must-do range so it cant get too much ahead
                     must_do_reader->advance();
                     must_do_reader->load_range();
                 }
