@@ -850,11 +850,10 @@ namespace flash
             auto load_K = [&](int const n_block, auto const &smem_pipe_write, auto need_seqlenk_masking_type, auto &skip_writer, auto &skip_reader)
             {
                 pipeline_k.producer_acquire(smem_pipe_write);
-                // if(blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0){
-                //     printf("after acquire %d\n", n_block);
-                // }
                 if constexpr (Is_skipable){ 
-                    skip_writer.record_final_iter(skip_reader.has_more_n_block(n_block));
+                    if(!skip_reader.has_more_n_block(n_block)){
+                        skip_writer.record_final_iter();
+                    }
                     skip_writer.record_n_block(n_block); 
                 }
                 if constexpr (!PagedKVNonTMA)
@@ -1424,14 +1423,13 @@ namespace flash
             {
                 Tensor tSrS = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
                 consumer_wait(pipeline_k, smem_pipe_read);
-                flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS);
-                warpgroup_wait<0>();
+                bool has_more = true;
                 if constexpr (Is_skipable){
                     n_block = skip_reader.next_n_block();
-                    // if((thread_idx == 0) && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0){
-                    //     printf("n_block is %d\n", n_block);
-                    // }
+                    has_more = skip_reader.has_more();
                 }
+                flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS);
+                warpgroup_wait<0>();
                 pipeline_k.consumer_release(smem_pipe_read);
                 if constexpr (HasQv)
                 {
@@ -1483,7 +1481,7 @@ namespace flash
                 // tiled_mma_pv.accumulate_ = GMMA::ScaleOut::Zero;
 
                 // Each step does gemm0 for iter n_block, gemm1 for iter n_block + 1, and softmax for iter n_block.
-                auto fwd_step = [&](int n_block, auto mask_fn, auto check_inf_type, auto &skip_reader)
+                auto fwd_step = [&](int n_block, auto mask_fn, auto check_inf_type, auto &skip_reader) -> bool
                 {
                     static constexpr bool Check_inf = decltype(check_inf_type)::value;
                     PipelineState smem_pipe_read_v(smem_pipe_read.index(), smem_pipe_read.phase(), smem_pipe_read.count());
@@ -1491,11 +1489,14 @@ namespace flash
                     Tensor tSrS = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
                     // if constexpr (!UseSchedulerBarrier || warp_group_idx == 0)
                     if(!UseSchedulerBarrier || warp_group_idx == 0){
-                            consumer_wait(pipeline_k, smem_pipe_read);
-                        }
-
+                        consumer_wait(pipeline_k, smem_pipe_read);
                     }
                     warp_scheduler_barrier_sync();
+                    bool has_more = false;
+                    if constexpr (Is_skipable){
+                        n_block = skip_reader.next_n_block();
+                        has_more = skip_reader.has_more();
+                    }
                     flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS);
                     if constexpr (RescaleOBeforeGemm)
                     {
@@ -1504,15 +1505,12 @@ namespace flash
                     if constexpr (!HasQv)
                     {
                         if(!UseSchedulerBarrier || warp_group_idx == 0){
-                                consumer_wait(pipeline_v, smem_pipe_read_v);
+                            consumer_wait(pipeline_v, smem_pipe_read_v);
                         }
                     }
                     flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP), tOrV(_, _, _, smem_pipe_read_v.index()), tOrO);
                     warp_scheduler_barrier_arrive();
                     warpgroup_wait<1>();
-                    if constexpr (Is_skipable){
-                        n_block = skip_reader.next_n_block();
-                    }
                     pipeline_k.consumer_release(smem_pipe_read); // release K
                     if constexpr (HasQv)
                     {
@@ -1523,9 +1521,6 @@ namespace flash
                     }
                     scoremod_premask_fn(tSrS);
                     mask_fn(tSrS, n_block);
-                    // if constexpr (Is_skipable){
-                    //     mask.template apply<false /*Seqlenk_mask*/, true /*Seqlenq_mask*/, Is_causal, Is_local>(tSrS, m_block, n_block);
-                    // }
                     if constexpr (Is_skipable){
                     cute::copy(
                         softmax.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, /*Is_first=*/false, Check_inf>(
@@ -1566,11 +1561,7 @@ namespace flash
                     {
                         arrive_on_P_write_barrier();
                     }
-                    // if constexpr (Is_skipable){
-                    //     if((thread_idx == 0) && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0){
-                    //         printf("n_block is %d\n", n_block);
-                    //     }
-                    // }
+                    return has_more;
                 };
 
                 if constexpr ((Is_causal || Is_local) && !Is_skipable)
@@ -1598,8 +1589,8 @@ namespace flash
                         fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/, skip_reader);
                     }
                 }else{
-                    while(skip_reader.has_more()){
-                        fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/, skip_reader);
+                    while(has_more){
+                        has_more = fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/, skip_reader);
                     }
                 }
 
