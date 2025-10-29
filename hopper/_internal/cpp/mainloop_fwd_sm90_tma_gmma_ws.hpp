@@ -1041,7 +1041,7 @@ namespace flash
                 --n_block;
 
                 do{
-                    for (; n_block >= skip_reader.end_idx; n_block--)
+                    for (; n_block > skip_reader.end_idx; n_block--)
                     {
                         PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
                         ++smem_pipe_write;

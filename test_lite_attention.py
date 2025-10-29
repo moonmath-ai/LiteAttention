@@ -72,7 +72,7 @@ def test_skip_nothing(q, k, v, head_dim):
     write_list = attn._skip_list[1 - attn._phase, :q.shape[0]]  # [batch, heads, qtiles, ktiles]
     
     # Check if read and write lists match
-    test_tensor = torch.tensor([2, read_list.shape[-1] - 2, 0], device=read_list.device, dtype=read_list.dtype)[None, None, None,]
+    test_tensor = torch.tensor([2, read_list.shape[-1] - 2, -1], device=read_list.device, dtype=read_list.dtype)[None, None, None,]
     diff = (read_list[..., :3] == test_tensor).all(-1)
     passed = diff.all()
     
@@ -140,7 +140,9 @@ def stress_test(q, k, v, head_dim, num_iters=10):
     output = attn(q, k, v)
     torch.cuda.synchronize()
 
+    n = 11
     percentage = attn.calc_percentage(attn._skip_list[attn._phase, :q.shape[0]])
+    print(f"  Skip list: {attn._skip_list[attn._phase, 0,0,0,:n]}, ktiles: {attn._skip_list.shape[-1] - 1}")
 
     for i in range(num_iters):
         torch.cuda.synchronize()
@@ -148,6 +150,7 @@ def stress_test(q, k, v, head_dim, num_iters=10):
         torch.cuda.synchronize()
         new_percentage = attn.calc_percentage(attn._skip_list[attn._phase, :q.shape[0]])
         if new_percentage != percentage:
+            print(f"  Skip list: {attn._skip_list[attn._phase, 0,0,0,:n]}, ktiles: {attn._skip_list.shape[-1] - 1}")
             print(f"  percentage changed from {percentage:.2%} to {new_percentage:.2%} at iteration {i}")
             print(f"  Stress test completed: {'✅ PASSED' if False else '❌ FAILED'}")
             return

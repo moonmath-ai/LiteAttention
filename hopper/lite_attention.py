@@ -86,8 +86,8 @@ class LiteAttention:
             reshaped_read_list.shape[1],
             reshaped_read_list.shape[2],
             -1, 2)
-        # range_sizes: [batch, heads, qtiles, -1]. the + 1 is because the start and end indexs are inclusive
-        range_sizes = (reshaped_read_list[..., 1] - reshaped_read_list[..., 0]).abs() + 1
+        # range_sizes: [batch, heads, qtiles, -1]
+        range_sizes = (reshaped_read_list[..., 1] - reshaped_read_list[..., 0]).abs()
         # not_skipped_per_head: [batch, heads, qtiles, -1]
         not_skipped_per_head = range_sizes.cumsum(dim=-1)
         # the index for the end of the ranges in not_skipped_per_head
@@ -167,7 +167,8 @@ class LiteAttention:
         # skip_list.shape[4] == ktiles + 1:
         #   the +1 is because the first element (skip_list[..., 0]) is always the length of the skip list
         skip_list = torch.empty(2, batch, heads, qtiles, ktiles + 1, dtype=torch.int32, device=device)
-        skip_list[0, :, :, :, 0:3] = torch.tensor([2, ktiles - 1, 0], dtype=torch.int32, device=device)
+        skip_list[0, :, :, :, 0:3] = torch.tensor([2, ktiles - 1, -1], dtype=torch.int32, device=device)
+        # skip_list[0, :, :, :, 0:3] = torch.tensor([2, ktiles - 1, 0], dtype=torch.int32, device=device)
         """
         why the order is reversed? (ktiles - 1 and then 0)
         we iterate in reverse order inside of the kernel like in the following code:
@@ -392,7 +393,8 @@ class LiteAttention:
 
                     width_ranges = width_ranges.view(-1, 2).cpu()
                     for end, start in width_ranges:
-                        rect = plt.Rectangle((start, row_height), end + grid_width - start, grid_height, facecolor='white', edgecolor='none', linewidth=0.4, alpha=0.3)
+                        # rect = plt.Rectangle((start, row_height), end + grid_width - start, grid_height, facecolor='white', edgecolor='none', linewidth=0.4, alpha=0.3)
+                        rect = plt.Rectangle((start, row_height), end - start, grid_height, facecolor='white', edgecolor='none', linewidth=0.4, alpha=0.3)
                         plt.gca().add_patch(rect)
                 
                 plt.axis("off")

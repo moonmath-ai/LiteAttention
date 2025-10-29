@@ -69,7 +69,7 @@ namespace flash
         bool has_more_n_block(int const n_block)
         {
             // return has_more() & (n_block - 1 >= end_idx);
-            return has_more() & (n_block > end_idx);
+            return has_more() & (n_block - 1 > end_idx);
         }
     };
 
@@ -222,6 +222,10 @@ namespace flash
         V1 - replay -> replay_idx = 3 -> replay_idx = 0
         K3 - record_n_block -> record_idx = 3 -> record_idx = 0
         V2 - replay -> replay_idx = 0 -> replay_idx = 1
+        K4 - record_n_block -> record_idx = 0 -> record_idx = 1
+        V3 - replay -> replay_idx = 1 -> replay_idx = 2
+        K5 - record_n_block -> record_idx = 1 -> record_idx = 2
+        V4 - replay -> replay_idx = 2 -> replay_idx = 3
         */
         
         // Initialize the underlying writer
