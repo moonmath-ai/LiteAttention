@@ -18,6 +18,10 @@ def run_attention_warmup(attn, q, k, v, num_iters=1):
         torch.cuda.synchronize()
     return output
 
+def print_skip_percentage(attn, q):
+    """Print the skip percentage for the given query."""
+    skip_percentage = attn.calc_percentage(attn._skip_list[attn._phase, :q.shape[0]])
+    print(f"    Skip percentage: {skip_percentage:.2%}")
 
 def test_skip_all(q, k, v, head_dim):
     """
@@ -45,6 +49,7 @@ def test_skip_all(q, k, v, head_dim):
     print(f"  Skip all test: {'✅ PASSED' if passed else '❌ FAILED'}")
     if not passed:
         print(f"    Skip list shape: {skip_list.shape}")
+        print_skip_percentage(attn, q)
         mdiff = diff[~mpassed]
         print(f"    Mismatched diffs: {mdiff}, shape: {mdiff.shape}")
         print(f"    Sample skip_list[0, 1, :, 1:3]:\n{skip_list[0, 1, :, 1:3]}")
@@ -73,6 +78,7 @@ def test_skip_nothing(q, k, v, head_dim):
     
     print(f"  Skip nothing test: {'✅ PASSED' if passed else '❌ FAILED'}")
     if not passed:
+        print_skip_percentage(attn, q)
         print(f"    Mismatched read_list:\n{read_list[~diff][..., :5]}")
     
     return passed
@@ -106,10 +112,6 @@ def test_softmax_lse_correctness(q, k, v, head_dim, tolerance=0.001):
     output_lite, lse_lite = attn(q, k, v, return_softmax_lse=True)
     torch.cuda.synchronize()
     
-    # Print skip percentage for debugging
-    skip_percentage = attn.calc_percentage(attn._skip_list[attn._phase, :q.shape[0]])
-    print(f"  Skip percentage: {skip_percentage:.2%}")
-    
     # Compute reference LSE
     lse_ref = compute_reference_lse(q, k, v, head_dim)
     
@@ -133,11 +135,24 @@ def stress_test(q, k, v, head_dim, num_iters=10):
     """Stress test the attention mechanism."""
     attn = LiteAttention()
     attn.threshold = float(0.0)
+
+    torch.cuda.synchronize()
+    output = attn(q, k, v)
+    torch.cuda.synchronize()
+
+    percentage = attn.calc_percentage(attn._skip_list[attn._phase, :q.shape[0]])
+
     for i in range(num_iters):
         torch.cuda.synchronize()
         output = attn(q, k, v)
         torch.cuda.synchronize()
+        new_percentage = attn.calc_percentage(attn._skip_list[attn._phase, :q.shape[0]])
+        if new_percentage != percentage:
+            print(f"  percentage changed from {percentage:.2%} to {new_percentage:.2%} at iteration {i}")
+            print(f"  Stress test completed: {'✅ PASSED' if False else '❌ FAILED'}")
+            return
 
+    print_skip_percentage(attn, q)
     print(f"  Stress test completed: {'✅ PASSED' if True else '❌ FAILED'}")
     
 
