@@ -142,7 +142,6 @@ def stress_test(q, k, v, head_dim, num_iters=10):
 
     n = 11
     percentage = attn.calc_percentage(attn._skip_list[attn._phase, :q.shape[0]])
-    print(f"  Skip list: {attn._skip_list[attn._phase, 0,0,0,:n]}, ktiles: {attn._skip_list.shape[-1] - 1}")
 
     for i in range(num_iters):
         torch.cuda.synchronize()
