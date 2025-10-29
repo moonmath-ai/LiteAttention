@@ -41,6 +41,7 @@ namespace flash
             // we ignore the edge case which skip_list_len == 0 because even in this case
             // we will be better off loading the first range because it's like to use the first range 2 timesteps ago
             load_range();
+            advance();
         }
 
         __device__ __forceinline__ 
@@ -68,8 +69,7 @@ namespace flash
         __device__ __forceinline__ 
         bool has_more_n_block(int const n_block)
         {
-            // return has_more() & (n_block - 1 >= end_idx);
-            return has_more() & (n_block - 1 > end_idx);
+            return has_more() | (n_block - 1 > end_idx);
         }
     };
 
