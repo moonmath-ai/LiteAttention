@@ -847,13 +847,14 @@ namespace flash
                 }
             }
 
-            auto load_K = [&](int const n_block, auto const &smem_pipe_write, auto need_seqlenk_masking_type, auto &skip_writer)
+            auto load_K = [&](int const n_block, auto const &smem_pipe_write, auto need_seqlenk_masking_type, auto &skip_writer, auto &skip_reader)
             {
                 pipeline_k.producer_acquire(smem_pipe_write);
                 // if(blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0){
                 //     printf("after acquire %d\n", n_block);
                 // }
                 if constexpr (Is_skipable){ 
+                    skip_writer.record_final_iter(skip_reader.has_more_n_block(n_block));
                     skip_writer.record_n_block(n_block); 
                 }
                 if constexpr (!PagedKVNonTMA)
@@ -939,7 +940,7 @@ namespace flash
                     load_V(n_block, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/, skip_writer);
                 }
                 // if (thread_idx == 0) { printf("Producer: main load, before load_K, index = %d\n", smem_pipe_write.index());}
-                load_K(n_block, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/, skip_writer);
+                load_K(n_block, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/, skip_writer, skip_reader);
                 // if (thread_idx == 0) { printf("Producer: main load, after load K, index = %d\n", smem_pipe_write.index());}
             }
 
@@ -994,7 +995,7 @@ namespace flash
             // if (thread_idx == 0) { printf("Producer: main load, after barrier_O\n");}
 
             // Lambda to load K and V for a given n_block
-            auto load_KV_for_block = [&](int n_block, int n_block_prev, PipelineState& smem_pipe_write, PipelineState& smem_pipe_write_v, auto &skip_writer)
+            auto load_KV_for_block = [&](int n_block, int n_block_prev, PipelineState& smem_pipe_write, PipelineState& smem_pipe_write_v, auto &skip_writer, auto &skip_reader)
             {
                 if (should_load_KV)
                 {
@@ -1010,7 +1011,7 @@ namespace flash
                     {
                         load_V(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/, skip_writer);
                     }
-                    load_K(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/, skip_writer);
+                    load_K(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/, skip_writer, skip_reader);
                     if constexpr (!Transpose_V)
                     {
                         if constexpr (IntraWGOverlap)
@@ -1045,7 +1046,7 @@ namespace flash
                     {
                         PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
                         ++smem_pipe_write;
-                        load_KV_for_block(n_block, n_block_prev, smem_pipe_write, smem_pipe_write_v, skip_writer);
+                        load_KV_for_block(n_block, n_block_prev, smem_pipe_write, smem_pipe_write_v, skip_writer, skip_reader);
                         n_block_prev = n_block;
                         if constexpr (Transpose_V){ copy_Vt_to_V(smem_pipe_write_v); }
                     }
@@ -1053,18 +1054,17 @@ namespace flash
                     if (should_load_KV){skip_writer.record_range_end(skip_reader.end_idx);}
                     if(!skip_reader.has_more()){ break; }
                     skip_reader.advance();
-
                 }while(true);
 
-                // todo: maybe move this to somehwere earlier
-                if (should_load_KV){ skip_writer.record_final_iter(); }
+                // // todo: maybe move this to somehwere earlier
+                // if (should_load_KV){ skip_writer.record_final_iter(); }
             }else{
                 --n_block;
                 #pragma unroll (!Transpose_V && Use_TMA_KV ? 2 : 1)
                 for (; n_block >= n_block_min; --n_block) {
                     PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
                     ++smem_pipe_write;
-                    load_KV_for_block(n_block, n_block_prev, smem_pipe_write, smem_pipe_write_v, skip_writer);
+                    load_KV_for_block(n_block, n_block_prev, smem_pipe_write, smem_pipe_write_v, skip_writer, skip_reader);
                     n_block_prev = n_block;
                     if constexpr (Transpose_V) { copy_Vt_to_V(smem_pipe_write_v); }
                 }

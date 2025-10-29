@@ -68,7 +68,8 @@ namespace flash
         __device__ __forceinline__ 
         bool has_more_n_block(int const n_block) const
         {
-            return has_more() & (n_block - 1 >= end_idx);
+            // return has_more() & (n_block - 1 >= end_idx);
+            return has_more() & (n_block > end_idx);
         }
     };
 
@@ -259,10 +260,11 @@ namespace flash
         }
 
         __device__ __forceinline__ 
-        void record_final_iter()
+        // void record_final_iter()
+        void record_final_iter(bool not_final_iter)
         {
-            // stop_condition_buffer[(record_idx - 1) % DelayAmount] = false;
-            stop_condition_buffer[(record_idx + BufferSize - 1) % BufferSize] = false;
+            // stop_condition_buffer[(record_idx + BufferSize - 1) % BufferSize] = false;
+            stop_condition_buffer[record_idx] = not_final_iter;
         }
 
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
