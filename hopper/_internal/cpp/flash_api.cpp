@@ -916,25 +916,6 @@ mha_fwd(at::Tensor q,   // (b, s_q, h, d) or (total_q, h, d) if there is cu_seql
     // Expected shape: [batch, heads, limbs] where limbs = ceil_div(q_tiles * k_tiles, 64)
     // bool is_skipable = false;
     // assert(attn_read_list_.has_value() && attn_write_list_.has_value());
-    if (attn_must_do_list_.has_value()) {
-        auto qk_skip_mask_tensor = attn_must_do_list_.value();
-        // TORCH_CHECK(qk_skip_mask_tensor.dtype() == torch::kUInt32, "attn_read_list must be uint32 tensor");
-        TORCH_CHECK(qk_skip_mask_tensor.dtype() == torch::kInt32, "attn_must_do_list must be int32 tensor");
-        TORCH_CHECK(qk_skip_mask_tensor.dim() == 4, "attn_must_do_list must be 4D tensor with shape [batch, heads, q_blocks, k_blocks]");
-        TORCH_CHECK(qk_skip_mask_tensor.is_contiguous(), "attn_must_do_list must be contiguous");
-        
-        // uint32_t* data_ptr = static_cast<uint32_t*>(qk_skip_mask_tensor.data_ptr());
-        int* data_ptr = static_cast<int*>(qk_skip_mask_tensor.data_ptr());
-        
-        params.qk_skip_mask_args.attn_must_do_list = data_ptr;
-        // params.qk_skip_mask_args.thr = (float) thr;
-        // params.is_skipable = true;
-    } else {
-        params.qk_skip_mask_args.attn_must_do_list = nullptr;
-        // params.qk_skip_mask_args.thr = (float) thr;
-        // params.is_skipable = false;
-    }
-
     if (attn_read_list_.has_value()) {
         auto qk_skip_mask_tensor = attn_read_list_.value();
         // TORCH_CHECK(qk_skip_mask_tensor.dtype() == torch::kUInt32, "attn_read_list must be uint32 tensor");
@@ -966,6 +947,19 @@ mha_fwd(at::Tensor q,   // (b, s_q, h, d) or (total_q, h, d) if there is cu_seql
         params.qk_skip_mask_args.attn_write_list = data_ptr;
     } else {
         params.qk_skip_mask_args.attn_write_list = nullptr;
+    }
+
+    if (attn_must_do_list_.has_value()) {
+        auto qk_skip_mask_tensor = attn_must_do_list_.value();
+        TORCH_CHECK(qk_skip_mask_tensor.dtype() == torch::kInt32, "attn_must_do_list must be int32 tensor");
+        TORCH_CHECK(qk_skip_mask_tensor.dim() == 4, "attn_must_do_list must be 4D tensor with shape [batch, heads, q_blocks, k_blocks]");
+        TORCH_CHECK(qk_skip_mask_tensor.is_contiguous(), "attn_must_do_list must be contiguous");
+        
+        int* data_ptr = static_cast<int*>(qk_skip_mask_tensor.data_ptr());
+        
+        params.qk_skip_mask_args.attn_must_do_list = data_ptr;
+    } else {
+        params.qk_skip_mask_args.attn_must_do_list = nullptr;
     }
 
     params.total_q = total_q;

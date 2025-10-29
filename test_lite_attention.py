@@ -26,14 +26,13 @@ for head_dim in [32, 64, 96, 128, 192, 256]:
 
     # test must do
     attn = LiteAttention()
-    attn.threshold = float('inf')
-    # attn.threshold = float(0.0)
+    attn.threshold = float('inf') # skip all
     torch.cuda.synchronize()
-    must_do_list = [2,k.shape[1]-1,0]
+    must_do_list = [2,k.shape[1]-1,0]  # must not skip anything
     print("must_do_list", must_do_list)
     output = attn(q, k, v, must_do_list = must_do_list)
     torch.cuda.synchronize()
-    passed = (attn._skip_list[1] == attn._skip_list[0]).all()
+    passed = (attn._skip_list[1] == attn._skip_list[0]).all()  # check that nothing was skipped
     print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
     print("head_dim: ", head_dim)
     print("skip all test:", passed)

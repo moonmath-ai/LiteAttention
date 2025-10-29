@@ -189,6 +189,9 @@ class LiteAttention:
     
     @staticmethod
     def _expand_must_do_list(must_do_list, list_shape, query, value):
+        """
+        This function expands the 1d list to a list per head per batch per qi.
+        """
 
         head_dim = query.shape[-1]
         v_colmajor = value.shape[-3] == head_dim
@@ -198,7 +201,8 @@ class LiteAttention:
         element_size = dtype.itemsize
         q_tile_size, k_tile_size = LiteAttention.get_MN(head_dim, element_size, v_colmajor)
 
-        for i in range(1,must_do_list[0]+1):  # from sequence indices to block indices
+        # from sequence indices to block indices:
+        for i in range(1,must_do_list[0]+1):
             if i % 2 == 1:
                 must_do_list[i] = (must_do_list[i] + k_tile_size - 1) // k_tile_size  # round up start indices
             else:
@@ -228,11 +232,11 @@ class LiteAttention:
         # Get read and write lists (internal mask management)
         read_list, write_list = self._get_read_write_lists(query, value)
 
-        # handle must-do list
+        # handle must-do list - expand the 1d list to a list per head per batch per qi
         if must_do_list is not None:
             must_do_list_expanded = self._expand_must_do_list(must_do_list, write_list.shape, query, value)
         else:
-            must_do_list_expanded = self._expand_must_do_list([2,0,0], write_list.shape, query, value)
+            must_do_list_expanded = self._expand_must_do_list([2,0,0], write_list.shape, query, value)  # [2,0,0] is for an empty must-do list
 
         # print("must_do_list_expanded", must_do_list_expanded.shape)
         
