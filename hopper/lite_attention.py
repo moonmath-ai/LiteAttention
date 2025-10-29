@@ -135,28 +135,60 @@ class LiteAttention:
 
     @staticmethod
     def init_skip_list(batch, seq_len, heads, head_dim, v_colmajor, dtype, device) -> torch.Tensor:
-        """Initialize skip list tensors based on query shape."""
+        """
+        Initialize skip list tensors based on query shape.
+        Skip List Format:
+        ================
+        skip_list.shape == [2, batch, heads, qtiles, ktiles + 1]
+        example_skip_list = skip_list[0,0,0,0,:]
+        the data inside example_skip_list is of the form:
+        [length, start_0, end_0, start_1, end_1, ..., start_{(length/2)-1}, end_{(length/2)-1}, uninitialized value, ...., uninitialized value]
+        **the length is always an even number!
+        """
 
         # the number of bytes needed to represent dtype (size(dtype) if it where C code)
         element_size = dtype.itemsize
-        kTileM, kTileN = LiteAttention.get_MN(head_dim, element_size, v_colmajor)
+        # kBlockM: number of rows in each tile, kBlockN: number of columns in each tile
+        kBlockM, kBlockN = LiteAttention.get_MN(head_dim, element_size, v_colmajor)
 
-        qtiles = LiteAttention.ceil_div(seq_len, kTileM)
-        ktiles = LiteAttention.ceil_div(seq_len, kTileN)
+        # qtiles: number of tiles in each row of Q@K.T
+        qtiles = LiteAttention.ceil_div(seq_len, kBlockM)
+        # ktiles: number of tiles in each column of Q@K.T
+        ktiles = LiteAttention.ceil_div(seq_len, kBlockN)
         
         # skip_list = torch.zeros(2, batch, heads, qtiles, ktiles + 1, dtype=torch.int32, device=device)
         # skip_list[:, :, :, :, 1] = ktiles - 1
         # skip_list[:, :, :, :, 0] = 2  # First element is the length of skip list
 
+        # memory allocation for the skip list data structre
+        # Shape explained:
+        # skip_list.shape[0] == 2:
+        #   some times skip_list[0] would be the read_list and skip_list[1] the write_list and some times the oposite
+        # skip_list.shape[4] == ktiles + 1:
+        #   the +1 is because the first element (skip_list[..., 0]) is always the length of the skip list
         skip_list = torch.empty(2, batch, heads, qtiles, ktiles + 1, dtype=torch.int32, device=device)
         skip_list[0, :, :, :, 0:3] = torch.tensor([2, ktiles - 1, 0], dtype=torch.int32, device=device)
+        """
+        why the order is reversed? (ktiles - 1 and then 0)
+        we iterate in reverse order inside of the kernel like in the following code:
+        for i in range(start = ktiles - 1, end = -1, step = -1):
+            pass
+        ktiles - 1
+        ktiles - 2
+        ...
+        1
+        0
+        **important: the end index is inclusive!
+        """
 
         return skip_list
 
     def _init_skip_list(self, query: torch.Tensor, value: torch.Tensor) -> torch.Tensor:
         """Initialize skip list tensors based on query shape."""
+        # (query @ key.T).shape: [batch, heads, seq_len, seq_len]
         batch, seq_len, heads, head_dim = query.shape
         assert batch <= self.max_batch_size, "batch size must be less than or equal to max_batch_size (modify max_batch_size in LiteAttention constructor)"
+        # attributes that help with finding the TILE size
         v_colmajor = value.shape[-3] == head_dim
         dtype = query.dtype
         device = query.device
@@ -165,9 +197,12 @@ class LiteAttention:
     
     def _get_read_write_lists(self, query: torch.Tensor, value: torch.Tensor) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
         """Get the current read and write lists for this attention step."""
+
+        # if disable skipping, return None
         if not self.enable_skipping:
             return None, None
             
+        # attributes we check in the decision to REINITIALIZE the skip list
         current_seq_len = query.shape[1]
         head_dim = query.shape[-1]
         current_head_dim = head_dim
@@ -177,6 +212,7 @@ class LiteAttention:
         device = query.device
         
         # Initialize or reinitialize skip list if needed
+        # we always enter this in the first call
         if (self._skip_list is None or 
             self._last_seq_len != current_seq_len or 
             self._skip_list.device != query.device or
@@ -187,9 +223,12 @@ class LiteAttention:
             self._last_num_heads != current_num_heads
             ):
 
+            # initialize the skip list (actually allocate the memory)
             self._skip_list = self._init_skip_list(query, value)
+            # ditermines which part of self._skip_list to use for read_list and write_list
             self._phase = 0
 
+            # update the last attributes to the current values
             self._last_seq_len = current_seq_len
             self._last_head_dim = current_head_dim
             self._last_v_colmajor = v_colmajor
@@ -204,10 +243,12 @@ class LiteAttention:
         if self._phase == 0:
             read_list = self._skip_list[0]
             write_list = self._skip_list[1]
+            # switch so the current read_list and write_list roles would switch
             self._phase = 1
         else:
             read_list = self._skip_list[1]
             write_list = self._skip_list[0]
+            # switch so the current read_list and write_list roles would switch
             self._phase = 0
             
         return read_list, write_list
