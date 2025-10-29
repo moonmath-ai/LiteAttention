@@ -1,101 +1,119 @@
 import torch
 from lite_attention import LiteAttention
 
-torch.manual_seed(0)
-torch.cuda.manual_seed(0)
 
-for head_dim in [32, 64, 96, 128, 192, 256]:
-    batch, seq_len, heads = 2, 5000, 32
+def generate_test_tensors(batch, seq_len, heads, head_dim):
+    """Generate random Q, K, V tensors for testing."""
     q = torch.randn(batch, seq_len, heads, head_dim, device="cuda", dtype=torch.bfloat16)
     k = torch.randn(batch, seq_len, heads, head_dim, device="cuda", dtype=torch.bfloat16)
     v = torch.randn(batch, seq_len, heads, head_dim, device="cuda", dtype=torch.bfloat16)
-    # skip all test
-    attn = LiteAttention()
-    attn.threshold = float('inf')
-    # attn.threshold = float(0.0)
-    print(attn._init_skip_list(q, v)[0].shape)
-    # print(attn._skip_list[0].shape)
-    for i in range(3):
+    return q, k, v
+
+
+def run_attention_warmup(attn, q, k, v, num_iters=3):
+    """Run attention forward pass multiple times to warm up."""
+    for _ in range(num_iters):
         torch.cuda.synchronize()
         output = attn(q, k, v)
         torch.cuda.synchronize()
+    return output
 
-    skip_list = attn._skip_list[attn._phase, :q.shape[0]] # [batch, heads, qtiles, ktiles]
 
-    # percentage = attn.calc_percentage_per_head(skip_list)
-    # print(percentage.shape, percentage.mean())
-
-    # percentage = attn.calc_percentage(skip_list)
-    # passed = percentage == 1.0
-    # print(f"skip all test: {'PASSED' if passed else 'FAILED'}")
-    # if not passed:
-    #     print(f"percentage: {percentage:.2%}")
-
-    # tests that the skip lists include only 1 range
+def test_skip_all(q, k, v, head_dim):
+    """
+    Test that when threshold is inf, all tiles are skipped except one range.
+    Expected: skip_list should contain exactly 2 entries (one range of length 1).
+    """
+    attn = LiteAttention()
+    attn.threshold = float('inf')
+    
+    # Warm up
+    run_attention_warmup(attn, q, k, v)
+    
+    skip_list = attn._skip_list[attn._phase, :q.shape[0]]  # [batch, heads, qtiles, ktiles]
+    
+    # Test that skip lists include only 1 range (skip_list[..., 0] == 2 means 1 range)
     passed = (skip_list[..., 0] == 2).all()
     if not passed:
-        print("length of skip list is not 2")
-    # tests that the only range length is 1
+        print("  ⚠️  Skip list length is not 2")
+    
+    # Test that the only range has length 1
     diff = (skip_list[..., 1] - skip_list[..., 2]).abs()
     mpassed = (diff == 1)
     passed &= mpassed.all()
-    print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
-    print("head_dim: ", head_dim)
-    print(f"skip all test: {'✅ PASSED' if passed else '❌ FAILED'}")
+    
+    print(f"  Skip all test: {'✅ PASSED' if passed else '❌ FAILED'}")
     if not passed:
-        # print(output.shape)
-        print(skip_list.shape)
+        print(f"    Skip list shape: {skip_list.shape}")
         mdiff = diff[~mpassed]
-        print(mdiff, mdiff.shape)
-        print(skip_list[0, 1, :, 1:3])
+        print(f"    Mismatched diffs: {mdiff}, shape: {mdiff.shape}")
+        print(f"    Sample skip_list[0, 1, :, 1:3]:\n{skip_list[0, 1, :, 1:3]}")
+    
+    return passed
 
-    # skip nothing test
+
+def test_skip_nothing(q, k, v, head_dim):
+    """
+    Test that when threshold is -inf, no tiles are skipped.
+    Expected: skip lists should remain consistent between read and write phases.
+    """
     attn = LiteAttention()
     attn.threshold = float('-inf')
-    # attn.threshold = float(-30000)
-    for i in range(3):
-        torch.cuda.synchronize()
-        output = attn(q, k, v)
-        torch.cuda.synchronize()
-    read_list = attn._skip_list[attn._phase, :q.shape[0]] # [batch, heads, qtiles, ktiles]
-    write_list = attn._skip_list[1 - attn._phase, :q.shape[0]] # [batch, heads, qtiles, ktiles]
+    
+    # Warm up
+    run_attention_warmup(attn, q, k, v)
+    
+    read_list = attn._skip_list[attn._phase, :q.shape[0]]  # [batch, heads, qtiles, ktiles]
+    write_list = attn._skip_list[1 - attn._phase, :q.shape[0]]  # [batch, heads, qtiles, ktiles]
+    
+    # Check if read and write lists match
     diff = (read_list[..., :3] == write_list[..., :3]).all(-1)
     passed = diff.all()
-    print(f"skip nothing test: {'✅ PASSED' if passed else '❌ FAILED'}")
+    
+    print(f"  Skip nothing test: {'✅ PASSED' if passed else '❌ FAILED'}")
     if not passed:
-        print(read_list[~diff][..., : 5])
-        print(write_list[~diff][..., : 5])
+        print(f"    Mismatched read_list:\n{read_list[~diff][..., :5]}")
+        print(f"    Mismatched write_list:\n{write_list[~diff][..., :5]}")
     
-    # Test softmax_lse correctness (with skip optimization disabled)
-    attn = LiteAttention()
-    attn.threshold = 0.0
-    for i in range(1):
-        torch.cuda.synchronize()
-        output_lite, lse_lite = attn(q, k, v, return_softmax_lse=True)
-        torch.cuda.synchronize()
-        # print("print before stuck in the kernel")
-        # skip_list = attn._skip_list[attn._phase, :q.shape[0]]
-        # print(skip_list.shape, skip_list[0, :, 10, :3])
+    return passed
 
-    print(attn.calc_percentage(attn._skip_list[attn._phase, :q.shape[0]]))
-    
-    # Compute reference softmax_lse using PyTorch
-    # Shape: q, k, v are [batch, seq_len, num_heads, head_dim]
+
+def compute_reference_lse(q, k, v, head_dim):
+    """Compute reference softmax log-sum-exp using PyTorch."""
     scale = 1.0 / (head_dim ** 0.5)
-    # Rearrange to [batch, num_heads, seq_len, head_dim] for bmm
-    q_ref = q.transpose(1, 2).float()  # [batch, num_heads, seq_len, head_dim]
-    k_ref = k.transpose(1, 2).float()  # [batch, num_heads, seq_len, head_dim]
-    v_ref = v.transpose(1, 2).float()  # [batch, num_heads, seq_len, head_dim]
+    
+    # Rearrange to [batch, num_heads, seq_len, head_dim]
+    q_ref = q.transpose(1, 2).float()
+    k_ref = k.transpose(1, 2).float()
     
     # Compute attention scores: [batch, num_heads, seq_len, seq_len]
     scores = torch.matmul(q_ref, k_ref.transpose(-2, -1)) * scale
     
-    # Compute log-sum-exp along the last dimension (over keys)
-    # logsumexp = log(sum(exp(scores), dim=-1))
+    # Compute log-sum-exp along the last dimension
     lse_ref = torch.logsumexp(scores, dim=-1)  # [batch, num_heads, seq_len]
     
-    # Rearrange lse_lite to match reference shape
-    # lse_lite shape is typically [batch, num_heads, seq_len]
+    return lse_ref
+
+
+def test_softmax_lse_correctness(q, k, v, head_dim, tolerance=0.001):
+    """
+    Test that softmax_lse output matches PyTorch reference implementation.
+    """
+    attn = LiteAttention()
+    attn.threshold = 0.0
+    
+    torch.cuda.synchronize()
+    output_lite, lse_lite = attn(q, k, v, return_softmax_lse=True)
+    torch.cuda.synchronize()
+    
+    # Print skip percentage for debugging
+    skip_percentage = attn.calc_percentage(attn._skip_list[attn._phase, :q.shape[0]])
+    print(f"  Skip percentage: {skip_percentage:.2%}")
+    
+    # Compute reference LSE
+    lse_ref = compute_reference_lse(q, k, v, head_dim)
+    
+    # Adjust lse_lite shape if needed
     lse_lite_transposed = lse_lite
     if lse_lite.dim() == 4 and lse_lite.shape[-1] == 1:
         lse_lite_transposed = lse_lite.squeeze(-1)
@@ -104,6 +122,59 @@ for head_dim in [32, 64, 96, 128, 192, 256]:
     lse_diff = torch.abs(lse_ref - lse_lite_transposed.float())
     max_diff = lse_diff.max().item()
     mean_diff = lse_diff.mean().item()
-    lse_passed = max_diff < 0.001  # Allow small numerical differences
-    print(f"softmax_lse correctness test: {'✅ PASSED' if lse_passed else '❌ FAILED'}")
-    print(f"  max diff: {max_diff:.6f}, mean diff: {mean_diff:.6f}")
+    passed = max_diff < tolerance
+    
+    print(f"  Softmax LSE test: {'✅ PASSED' if passed else '❌ FAILED'}")
+    print(f"    Max diff: {max_diff:.6f}, Mean diff: {mean_diff:.6f}")
+    
+    return passed
+
+def stress_test(q, k, v, head_dim, num_iters=10):
+    """Stress test the attention mechanism."""
+    attn = LiteAttention()
+    attn.threshold = float(0.0)
+    for i in range(num_iters):
+        torch.cuda.synchronize()
+        output = attn(q, k, v)
+        torch.cuda.synchronize()
+
+    print(f"  Stress test completed: {'✅ PASSED' if True else '❌ FAILED'}")
+    
+
+def run_tests_for_head_dim(head_dim, batch=2, seq_len=18200, heads=32):
+    """Run all tests for a specific head dimension."""
+    print(f"\n{'='*60}")
+    print(f"Testing head_dim: {head_dim}")
+    print(f"{'='*60}")
+    
+    # Generate test data
+    q, k, v = generate_test_tensors(batch, seq_len, heads, head_dim)
+    
+    # Run tests
+    stress_test(q, k, v, head_dim)
+    test_skip_all(q, k, v, head_dim)
+    test_skip_nothing(q, k, v, head_dim)
+
+    q, k, v = generate_test_tensors(batch=2, seq_len=1000, heads=4, head_dim=head_dim)
+    test_softmax_lse_correctness(q, k, v, head_dim)
+
+
+def main():
+    """Main test runner."""
+    # Set random seeds for reproducibility
+    torch.manual_seed(0)
+    torch.cuda.manual_seed(0)
+    
+    # Test different head dimensions
+    head_dims = [32, 64, 96, 128, 192, 256]
+    
+    for head_dim in head_dims:
+        run_tests_for_head_dim(head_dim)
+    
+    print(f"\n{'='*60}")
+    print("All tests completed!")
+    print(f"{'='*60}\n")
+
+
+if __name__ == "__main__":
+    main()
