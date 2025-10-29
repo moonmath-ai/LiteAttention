@@ -155,7 +155,7 @@ def run_tests_for_head_dim(head_dim, batch=2, seq_len=18200, heads=32):
     test_skip_all(q, k, v, head_dim)
     test_skip_nothing(q, k, v, head_dim)
 
-    q, k, v = generate_test_tensors(batch=2, seq_len=1000, heads=4, head_dim=head_dim)
+    q, k, v = generate_test_tensors(batch=batch, seq_len=min(6000, seq_len), heads=heads, head_dim=head_dim)
     test_softmax_lse_correctness(q, k, v, head_dim)
 
 
