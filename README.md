@@ -80,6 +80,26 @@ self.attn.enable_skip_optimization(enable=False)
 > ```
 > However, **do reuse** the same instance across multiple forward passes (different calls to your model over time).
 
+For parts of the sequence that should not be skipped use the must-do feature. Pass the must_do_list parameter:
+
+```python
+self.attn(query, key, value, scale, must_do_list = must_do_list)
+```
+
+The must_do_list defines ranges that must not be skipped and the format is as follows:
+
+    must_do_list = [length, start_0, end_0, start_1, end_1, ..., start_(length/2-1), end_(length/2-1)]
+    length - number of elements in the list.
+    start_i - start index of a range we must no skip. (inclusive)
+    end_i - end index of a range we must not skip. (exclusive)
+    IMPORTANT: start_i > end_i > start_(i+1) > end_(i+1) > ... because we iterate in reverse order inside of the kernel.
+
+For example, if we have a sequence of length 100, the must_do_list could look like this:
+
+```python
+must_do_list = [6, 80, 60, 45, 40, 12, 2]
+```
+
 ### Multi-GPU Usage (Sequence Parallelism)
 
 When using multi-GPU with sequence parallelism, use `SeqParallelLiteAttention`:
