@@ -167,7 +167,8 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream)
     // since we'll avoid launching a bunch of thread blocks that immediately exit.
     // On Sm80, noncausal persistent seems a bit slower.
     // static constexpr bool UsePersistentScheduler = Arch >= 90 ? !(Split && !Varlen) : ((Is_causal && !Varlen) || (Varlen && Split));
-    static constexpr bool UsePersistentScheduler = ((Arch >= 90) && !Is_skipable) ? !(Split && !Varlen) : ((Is_causal && !Varlen) || (Varlen && Split));
+    // static constexpr bool UsePersistentScheduler = ((Arch >= 90) && !Is_skipable) ? !(Split && !Varlen) : ((Is_causal && !Varlen) || (Varlen && Split));
+    static constexpr bool UsePersistentScheduler = !Is_skipable && ((Arch >= 90) ? !(Split && !Varlen) : ((Is_causal && !Varlen) || (Varlen && Split)));
     using Scheduler = std::conditional_t<!UsePersistentScheduler, SchedulerSingleTile, SchedulerPersistent>;
 
     // Final attention kernel type combining all components with CuTe-based tensor operations
