@@ -383,11 +383,12 @@ class LiteAttention:
                 for x in x_positions:
                     plt.axvline(x=x-0.5, color='black', linewidth=0.2, alpha=0.7)
 
+
                 for i, row_skip_list in enumerate(current_skip_list[0, 0]):
                     # print(row_skip_list.shape)
                     l_row = row_skip_list[0]
                     # end0, start1, end1, start2, ...
-                    width_ranges = row_skip_list[1 : l_row + 1] * grid_width
+                    width_ranges = (row_skip_list[1 : l_row + 1] + 1) * grid_width
                     # height
                     row_height = i * grid_height
 
