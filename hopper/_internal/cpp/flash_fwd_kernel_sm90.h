@@ -162,7 +162,7 @@ namespace flash
                 int n_blocks_buffer[BufferSize];
                 int end_range_buffer[BufferSize];
                 int skip_tests[BufferSize][4];
-                int stop_condition_buffer[BufferSize];
+                int last_n_block[1];
             } pipelines;
         };
 
@@ -425,14 +425,11 @@ namespace flash
 
                 cutlass::arch::wait_on_dependent_grids();
 
-                // SkipListReader skip_reader;
-                // DelayedSkipListWriter<CollectiveMainloop::kStages> skip_writer;
                 // Initialize skip_writer with shared memory buffers
                 DelayedSkipListWriter<CollectiveMainloop::kStages> skip_writer(
                     shared_storage.pipelines.n_blocks_buffer,
                     shared_storage.pipelines.end_range_buffer,
-                    shared_storage.pipelines.skip_tests,
-                    shared_storage.pipelines.stop_condition_buffer
+                    shared_storage.pipelines.skip_tests
                 );
                 // Load Q, K, V
                 for (auto work_tile_info = SingleProducerWarp || warp_idx_in_warpgroup == 0
@@ -539,14 +536,6 @@ namespace flash
                         softmax_scale_log2 *= q_descale * k_descale;
                     }                    
                     const int thread_idx = threadIdx.x - MmaThreadOffset;
-
-                    // const int m_block = get<0>(block_coord);
-                    // // const int local_row_idx = thread_idx / 4;
-                    // const int local_row_idx = (thread_idx / 32) * 16 + (thread_idx % 32) / 4;
-                    // // const bool not_last_m_block = params.scheduler.num_blocks > m_block + 1;
-                    // // const bool not_masked_by_seqlen = not_last_m_block | ();
-                    // // how many rows are active in the current m_block? (it's not always kBlockM in the last Q tile)
-                    // const int row_mask = get<0>(params.mainloop.shape_Q) - (m_block * kBlockM) + kBlockM;
 
                     // // DOR: kNRows = 2 * (2 * 128 / 256) = 2
                     // flash::Softmax<!LargeHeadDimV ? 2 * (2 * kBlockM / NumMmaThreads) : 2, /*Max_offset=*/!Is_FP8 ? 0 : 8> softmax(softmax_scale_log2, row_mask, local_row_idx);

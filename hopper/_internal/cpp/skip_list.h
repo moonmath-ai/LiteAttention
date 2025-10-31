@@ -65,12 +65,18 @@ namespace flash
             return read_idx <= skip_list_len;
         }
 
-        // Check if we have more ranges to process
         __device__ __forceinline__ 
-        bool has_more_n_block(int const n_block)
+        int last_n_block() const
         {
-            return has_more() | (n_block - 1 > end_idx);
+            return list_ptr[skip_list_len] + 1;
         }
+
+        // // Check if we have more ranges to process
+        // __device__ __forceinline__ 
+        // bool has_more_n_block(int const n_block)
+        // {
+        //     return has_more() | (n_block - 1 > end_idx);
+        // }
     };
 
     // ============================================================================
@@ -146,18 +152,17 @@ namespace flash
         
         // Pointers to shared memory buffers
         int* n_blocks_buffer;
-        int* end_range_buffer;
         int (*skip_tests)[4];
-        int* stop_condition_buffer;
+        int* last_n_block;
 
         // we start with -1 because the first call to next_n_block will increment it to 0.
         int index = -1;
 
         // Constructor to initialize with shared memory pointers
         __device__ __forceinline__
-        DelayedSkipListReader(int* n_blocks, int* end_range, int (*skip)[4], int* stop_cond)
-            : n_blocks_buffer(n_blocks), end_range_buffer(end_range), 
-              skip_tests(skip), stop_condition_buffer(stop_cond) {}
+        DelayedSkipListReader(int* n_blocks, int (*skip)[4], int* final_n_block)
+            : n_blocks_buffer(n_blocks), 
+              skip_tests(skip), last_n_block(final_n_block) {}
 
         // Default constructor
         __device__ __forceinline__
@@ -174,9 +179,9 @@ namespace flash
             atomicAnd(&(skip_tests[index][warp_idx_in_warpgroup]), static_cast<int>(skip));
         }
 
-        __device__ __forceinline__ bool has_more()
+        __device__ __forceinline__ bool has_more(int n_block)
         {
-            return stop_condition_buffer[index];
+            return *last_n_block != n_block;
         }
 
     };
@@ -195,7 +200,6 @@ namespace flash
         int* n_blocks_buffer;
         int* end_range_buffer;
         int (*skip_tests)[4];
-        int* stop_condition_buffer;
 
         //should reside in thread registers.
         SkipListWriter writer;
@@ -205,27 +209,32 @@ namespace flash
 
         // Constructor to initialize with shared memory pointers
         __device__ __forceinline__
-        DelayedSkipListWriter(int* n_blocks, int* end_range, int (*skip)[4], int* stop_cond)
+        DelayedSkipListWriter(int* n_blocks, int* end_range, int (*skip)[4])
             : n_blocks_buffer(n_blocks), end_range_buffer(end_range), 
-              skip_tests(skip), stop_condition_buffer(stop_cond) {}
+              skip_tests(skip) {}
 
         // Default constructor
         __device__ __forceinline__
         DelayedSkipListWriter() = default;
 
         /*
-        DelayAmount = 4, example:
-        K0 - record_n_block -> record_idx = 0 -> record_idx = 1
-        K1 - record_n_block -> record_idx = 1 -> record_idx = 2
-        V0 - replay -> replay_idx = 2 -> replay_idx = 3
-        K2 - record_n_block -> record_idx = 2 -> record_idx = 3
-        V1 - replay -> replay_idx = 3 -> replay_idx = 0
-        K3 - record_n_block -> record_idx = 3 -> record_idx = 0
-        V2 - replay -> replay_idx = 0 -> replay_idx = 1
-        K4 - record_n_block -> record_idx = 0 -> record_idx = 1
-        V3 - replay -> replay_idx = 1 -> replay_idx = 2
-        K5 - record_n_block -> record_idx = 1 -> record_idx = 2
-        V4 - replay -> replay_idx = 2 -> replay_idx = 3
+        DelayAmount = 4, and we iterate over the range [5, 0] example:
+        Producer - record n_block=5 with record_idx = 0 -> load K0
+        Consumer - waits for K0 to load -> load n_block=5 with index = 0 -> QK0 -> release K0 -> update skip with index 0
+        Producer - record n_block=4 with record_idx = 1 -> load K1
+        Consumer - waits for K1 to load -> load n_block=4 with index = 1 -> QK1 -> release K1 -> update skip with index 1
+        Producer - replay n_block=nothing with replay_idx=2 -> load V0
+        Consumer - waits for V0 to load -> PV0 -> release V0
+        Producer - waits for K0 release -> record n_block=3 with record_idx = 2 -> load K2
+        Consumer - waits for K2 to load -> load n_block=3 with index = 2 -> QK2 -> release K2 -> update skip with index 2
+        Producer - replay n_block=nothing with replay_idx=3 -> load V1
+        Consumer - waits for V1 to load -> PV1 -> release V1
+        Producer - waits for K1 release -> record n_block=2 with record_idx = 3 -> load K3
+        Consumer - waits for K3 to load -> load n_block=2 with index = 3 -> QK3 -> release K3 -> update skip with index 3
+        Producer - waits for V0 release -> replay n_block=5 with replay_idx=0 -> load V2
+        Consumer - waits for V2 to load -> PV2 -> release V2
+        Producer - waits for K2 release -> record n_block=1 with record_idx = 0 -> load K4
+        Consumer - waits for K4 to load -> load n_block=1 with index = 0 -> QK4 -> release K4 -> update skip with index 0
         */
         
         // Initialize the underlying writer
@@ -242,7 +251,6 @@ namespace flash
                 skip_tests[i][2] = 1;
                 skip_tests[i][3] = 1;
                 end_range_buffer[i] = -2;
-                stop_condition_buffer[i] = true;
             }
         }
 
@@ -261,12 +269,6 @@ namespace flash
             // we save into previous index!
             // end_range_buffer[(record_idx - 1) % DelayAmount] = end_idx;
             end_range_buffer[(record_idx + BufferSize - 1) % BufferSize] = end_idx;
-        }
-
-        __device__ __forceinline__ 
-        void record_final_iter()
-        {
-            stop_condition_buffer[record_idx] = false;
         }
 
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
