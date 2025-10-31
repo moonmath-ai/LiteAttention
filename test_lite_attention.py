@@ -166,6 +166,59 @@ def test_softmax_lse_correctness(q, k, v, head_dim, tolerance=0.001):
     
     return passed
 
+def consistency_test(q, k, v, head_dim, num_iters=10):
+    """Test that the skip list is consistent between reads and writes."""
+    attn = LiteAttention()
+    attn.threshold = float(0.0)
+    run_attention_warmup(attn, q, k, v)
+    
+    skip_list = attn._skip_list[attn._phase, :q.shape[0]]
+    percentage = attn.calc_percentage(skip_list)
+    
+    for i in range(num_iters):
+        q, k, v = generate_test_tensors(batch=q.shape[0], seq_len=q.shape[1], heads=q.shape[2], head_dim=q.shape[3])
+        torch.cuda.synchronize()
+        output = attn(q, k, v)
+        torch.cuda.synchronize()
+
+        skip_list = attn._skip_list[attn._phase, :q.shape[0]]
+
+        # check new percentage is not bigger than the previous one
+        new_percentage = attn.calc_percentage(skip_list)
+        if new_percentage > percentage:
+            print(f"  Consistency test: {'✅ PASSED' if False else '❌ FAILED'}")
+            print(f"    New percentage is bigger than the previous one: {new_percentage:.2%} > {percentage:.2%}")
+            return False
+        percentage = new_percentage
+
+        # check that the first element in the skip list is the last block
+        if not check_first_element_is_last_block(skip_list):
+            print(f"  Consistency test: {'✅ PASSED' if False else '❌ FAILED'}")
+            return False
+        
+        # check that that the list length isn't bigger then ktiles + 1
+        passed = (skip_list.shape[-1] > skip_list[..., 0]).all()
+        if not passed:
+            print(f"  Consistency test: {'✅ PASSED' if False else '❌ FAILED'}")
+            print(f"    List length is bigger than the length of the skip list: {skip_list[..., 0]} <= {skip_list.shape[-1]}")
+            return False
+
+        # check that we don't have empty or negative ranges
+        # diff = ((skip_list[..., 1:-1] - skip_list[..., 2:]) > 0) * (torch.arange(skip_list.shape[-1] - 2, device=skip_list.device) < skip_list[..., 0])
+        diff = (skip_list[..., 1:-1] - skip_list[..., 2:]) > 0
+        arange = torch.arange(diff.shape[-1], device=skip_list.device).view(1,1,1, -1)
+        # print(diff.shape, arange.shape, skip_list[..., 0:1].shape)
+        passed = (arange < skip_list[..., 0:1]) * diff
+        passed = passed.all()
+        if not passed:
+            print(f"  Consistency test: {'✅ PASSED' if False else '❌ FAILED'}")
+            print(f"    Empty or negative ranges!")
+            return False
+    
+    print(f"  Consistency test: {'✅ PASSED' if True else '❌ FAILED'}")
+    return True
+
+
 def stress_test(q, k, v, head_dim, num_iters=10):
     """Stress test the attention mechanism."""
     attn = LiteAttention()
@@ -213,9 +266,10 @@ def run_tests_for_head_dim(head_dim, batch=2, seq_len=18200, heads=32):
     stress_test(q, k, v, head_dim)
     test_skip_all(q, k, v, head_dim)
     test_skip_nothing(q, k, v, head_dim)
-
     q, k, v = generate_test_tensors(batch=batch, seq_len=min(6000, seq_len), heads=heads, head_dim=head_dim)
     test_softmax_lse_correctness(q, k, v, head_dim)
+
+    consistency_test(q, k, v, head_dim)
 
 
 def main():
