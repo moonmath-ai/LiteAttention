@@ -37,8 +37,43 @@ def check_first_element_is_last_block(skip_list):
     is_n_block = skip_list[..., 1] == last_n_block
     is_all_n_blocks = is_n_block.all()
     if not is_all_n_blocks:
-        print(f"  ⚠️  First Element is not ktiles - 1!, it's: {skip_list[..., 1]} != {last_n_block}")
+        print(f"     ⚠️  First Element is not ktiles - 1!, it's: {skip_list[..., 1]} != {last_n_block}")
     return is_all_n_blocks
+
+def check_skip_list_length_valid(skip_list):
+    """
+    Check that the list length isn't bigger than ktiles + 1.
+    
+    Args:
+        skip_list: Skip list tensor of shape [batch, heads, qtiles, ktiles]
+    
+    Returns:
+        bool: True if all list lengths are valid, False otherwise.
+    """
+    passed = (skip_list.shape[-1] > skip_list[..., 0]).all()
+    if not passed:
+        print(f"      ⚠️  List length is bigger than the length of the skip list: {skip_list[..., 0]} <= {skip_list.shape[-1]}")
+    return passed
+
+def check_no_empty_or_negative_ranges(skip_list):
+    """
+    Check that we don't have empty or negative ranges in the skip list.
+    
+    Args:
+        skip_list: Skip list tensor of shape [batch, heads, qtiles, ktiles]
+    
+    Returns:
+        bool: True if no empty or negative ranges exist, False otherwise.
+    """
+    # Check that all ranges are positive (start < end)
+    diff = (skip_list[..., 1:-1] - skip_list[..., 2:]) > 0
+    arange = torch.arange(diff.shape[-1], device=skip_list.device).view(1, 1, 1, -1) >= skip_list[..., 0:1] - 1
+    # Only check ranges that are within the valid list length
+    passed = (arange + diff) > 0
+    passed = passed.all()
+    if not passed:
+        print(f"     ⚠️  Empty or negative ranges found!")
+    return passed
 
 def test_skip_all(q, k, v, head_dim):
     """
@@ -56,21 +91,13 @@ def test_skip_all(q, k, v, head_dim):
     # Test that skip lists include only 1 range (skip_list[..., 0] == 2 means 1 range)
     passed = (skip_list[..., 0] == 2).all()
     if not passed:
-        print("  ⚠️  Skip list length is not 2")
+        print("      ⚠️  Skip list length is not 2")
     
     # Test that the only range has length 1
     diff = (skip_list[..., 1] - skip_list[..., 2]).abs()
     mpassed = (diff == 1)
     passed &= mpassed.all()
 
-    # # test that that the only block we don't skiip is the last one
-    # last_n_block = skip_list.shape[-1] - 2
-    # is_n_block = skip_list[..., 1] == last_n_block
-    # is_all_n_blocks = is_n_block.all()
-    # if not is_all_n_blocks:
-    #     print("  ⚠️  First Element is not ktiles - 1!, it's: {skip_list[..., 1]} != {last_n_block}")
-    # passed &= is_all_n_blocks
-    
     # Test that the only block we don't skip is the last one
     passed &= check_first_element_is_last_block(skip_list)
     
@@ -157,10 +184,6 @@ def test_softmax_lse_correctness(q, k, v, head_dim, tolerance=0.001):
     mean_diff = lse_diff.mean().item()
     passed = max_diff < tolerance
     
-    # Test that the only block we don't skip is the last one
-    skip_list = attn._skip_list[attn._phase, :q.shape[0]]
-    passed &= check_first_element_is_last_block(skip_list)
-    
     print(f"  Softmax LSE test: {'✅ PASSED' if passed else '❌ FAILED'}")
     print(f"    Max diff: {max_diff:.6f}, Mean diff: {mean_diff:.6f}")
     
@@ -190,29 +213,20 @@ def consistency_test(q, k, v, head_dim, num_iters=10):
             print(f"    New percentage is bigger than the previous one: {new_percentage:.2%} > {percentage:.2%}")
             return False
         percentage = new_percentage
-
-        # check that the first element in the skip list is the last block
+        
+        # Check that the first element in the skip list is the last block
         if not check_first_element_is_last_block(skip_list):
             print(f"  Consistency test: {'✅ PASSED' if False else '❌ FAILED'}")
             return False
         
-        # check that that the list length isn't bigger then ktiles + 1
-        passed = (skip_list.shape[-1] > skip_list[..., 0]).all()
-        if not passed:
+        # Check that the list length isn't bigger than ktiles + 1
+        if not check_skip_list_length_valid(skip_list):
             print(f"  Consistency test: {'✅ PASSED' if False else '❌ FAILED'}")
-            print(f"    List length is bigger than the length of the skip list: {skip_list[..., 0]} <= {skip_list.shape[-1]}")
             return False
 
-        # check that we don't have empty or negative ranges
-        # diff = ((skip_list[..., 1:-1] - skip_list[..., 2:]) > 0) * (torch.arange(skip_list.shape[-1] - 2, device=skip_list.device) < skip_list[..., 0])
-        diff = (skip_list[..., 1:-1] - skip_list[..., 2:]) > 0
-        arange = torch.arange(diff.shape[-1], device=skip_list.device).view(1,1,1, -1)
-        # print(diff.shape, arange.shape, skip_list[..., 0:1].shape)
-        passed = (arange < skip_list[..., 0:1]) * diff
-        passed = passed.all()
-        if not passed:
+        # Check that we don't have empty or negative ranges
+        if not check_no_empty_or_negative_ranges(skip_list):
             print(f"  Consistency test: {'✅ PASSED' if False else '❌ FAILED'}")
-            print(f"    Empty or negative ranges!")
             return False
     
     print(f"  Consistency test: {'✅ PASSED' if True else '❌ FAILED'}")
