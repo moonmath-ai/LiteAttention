@@ -538,7 +538,8 @@ if not SKIP_CUDA_BUILD:
     nvcc_flags = [
         "-O3",
         # "-g",
-        "-std=c++17",
+        # "-std=c++17",
+        "-std=c++20",
         "--ftemplate-backtrace-limit=0",  # To debug template code
         "--use_fast_math",
         # "--keep",

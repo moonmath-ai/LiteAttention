@@ -7,6 +7,37 @@ namespace flash
 
     using namespace cute;
 
+    template <const int BufferSize>
+    struct SkipListStorage
+    {
+
+        // alignas(16) std::conditional_t<CollectiveMainloop::Is_skipable,
+        //                    int[CollectiveMainloop::kStages],
+        //                    cute::array<int, 0>> curr_n_block;
+        // int curr_n_block[NumMmaWarpGroups][CollectiveMainloop::kStages];
+        // int skip_tests[NumMmaWarpGroups][CollectiveMainloop::kStages][4];
+        // int skip_tests[4];
+        // int skip_tests[CollectiveMainloop::kStages][NumMmaWarpGroups][4];
+        // producer
+        // K0 K1 V0 K2 V1 K3 V2 ... only when the producer accuired V2 we are guaranteed that the skip result of QK0 is ready.
+        // consumer
+        // QK0 -> skip0 -> save0 shared -> PV0 -> release V0
+        // QK2 -> skip2 -> save2 shared -> PV2 -> release V2
+        //
+        // // meaning we need at most kStages + 1 of skip tests arrays
+        // int skip_tests[CollectiveMainloop::kStages*2][4];
+        // // the first index is the n_block and the second is the stop condition
+        // int current_n_block[CollectiveMainloop::kStages*2][2];
+
+        // static constexpr int BufferSize = CollectiveMainloop::kStages * 2;
+        // these arrays should reside in shared memory.
+
+        int n_blocks_buffer[BufferSize];
+        int end_range_buffer[BufferSize];
+        int skip_tests[BufferSize][4];
+        int last_n_block[1];
+    };
+
     // ============================================================================
     // Helper struct for reading skip lists
     // Encapsulates all the logic for iterating through skip list ranges
@@ -21,7 +52,8 @@ namespace flash
 
         // Initialize the reader with calculated offset
         template <typename TileShape_MNK, typename ParamsType>
-        __device__ __forceinline__ 
+        __device__
+        // __forceinline__ 
         void init(const ParamsType &params, int bidb, int bidh, int m_block)
         {
             static constexpr int kBlockM = get<0>(TileShape_MNK{});
@@ -44,39 +76,36 @@ namespace flash
             advance();
         }
 
-        __device__ __forceinline__ 
+        __device__
+        // __forceinline__ 
         void load_range()
         {
-            start_idx = list_ptr[read_idx];
-            end_idx = list_ptr[read_idx + 1];
+            start_idx = flash::warp_uniform(list_ptr[read_idx]);
+            end_idx = flash::warp_uniform(list_ptr[read_idx + 1]);
         }
 
         // Advance to the next skip list range
-        __device__ __forceinline__ 
+        __device__
+        // __forceinline__ 
         void advance()
         {
             read_idx += 2;
         }
 
         // Check if we have more ranges to process
-        __device__ __forceinline__ 
+        __device__
+        // __forceinline__ 
         bool has_more()
         {
-            return read_idx <= skip_list_len;
+            return flash::warp_uniform(read_idx <= skip_list_len);
         }
 
-        __device__ __forceinline__ 
+        __device__
+        // __forceinline__ 
         int last_n_block() const
         {
-            return list_ptr[skip_list_len] + 1;
+            return flash::warp_uniform(list_ptr[skip_list_len] + 1);
         }
-
-        // // Check if we have more ranges to process
-        // __device__ __forceinline__ 
-        // bool has_more_n_block(int const n_block)
-        // {
-        //     return has_more() | (n_block - 1 > end_idx);
-        // }
     };
 
     // ============================================================================
@@ -91,7 +120,8 @@ namespace flash
 
         // Initialize the writer with calculated offset
         template <typename TileShape_MNK, typename ParamsType>
-        __device__ __forceinline__ 
+        __device__
+        // __forceinline__ 
         void init(const ParamsType &params, int bidb, int bidh, int m_block)
         {
             static constexpr int kBlockM = get<0>(TileShape_MNK{});
@@ -109,7 +139,8 @@ namespace flash
         }
 
         // Record a transition in skip state
-        __device__ __forceinline__ 
+        __device__
+        // __forceinline__ 
         void record_transition(bool skip, int n_block)
         {
             if (skip != is_skipping)
@@ -121,7 +152,8 @@ namespace flash
         }
 
         // Record the end of a range (force transition to skipping)
-        __device__ __forceinline__ 
+        __device__
+        // __forceinline__ 
         void record_range_end(bool skip, int end_idx)
         {
             is_skipping = true;
@@ -133,7 +165,8 @@ namespace flash
         }
 
         // Finalize the skip list by writing the count
-        __device__ __forceinline__ 
+        __device__
+        // __forceinline__ 
         void finalize()
         {
             list_ptr[0] = write_idx - 1;
@@ -159,29 +192,37 @@ namespace flash
         int index = -1;
 
         // Constructor to initialize with shared memory pointers
-        __device__ __forceinline__
+        __device__
+        // __forceinline__ 
         DelayedSkipListReader(int* n_blocks, int (*skip)[4], int* final_n_block)
             : n_blocks_buffer(n_blocks), 
               skip_tests(skip), last_n_block(final_n_block) {}
 
-        // Default constructor
-        __device__ __forceinline__
-        DelayedSkipListReader() = default;
+        // // Default constructor
+        // __device__ __forceinline__ 
+        // DelayedSkipListReader() = default;
 
-        __device__ __forceinline__ int next_n_block()
+        __device__
+        // __forceinline__ 
+        int next_n_block()
         {
             index = (index + 1) % BufferSize;
-            return n_blocks_buffer[index];
+            return flash::warp_uniform(n_blocks_buffer[index]);
         }
 
-        __device__ __forceinline__ void update_skip(bool skip, int warp_idx_in_warpgroup){
+        __device__
+        // __forceinline__ 
+        void update_skip(bool skip, int warp_idx_in_warpgroup){
             // consider: using atomic here
             atomicAnd(&(skip_tests[index][warp_idx_in_warpgroup]), static_cast<int>(skip));
+            // skip_tests[index][warp_idx_in_warpgroup] &= static_cast<int>(skip);
         }
 
-        __device__ __forceinline__ bool has_more(int n_block)
+        __device__
+        // __forceinline__ 
+        bool has_more(int n_block)
         {
-            return *last_n_block != n_block;
+            return flash::warp_uniform(*last_n_block != n_block);
         }
 
     };
@@ -208,14 +249,16 @@ namespace flash
         int replay_idx = DelayAmount;
 
         // Constructor to initialize with shared memory pointers
-        __device__ __forceinline__
+        __device__
+        // __forceinline__ 
         DelayedSkipListWriter(int* n_blocks, int* end_range, int (*skip)[4])
             : n_blocks_buffer(n_blocks), end_range_buffer(end_range), 
               skip_tests(skip) {}
 
-        // Default constructor
-        __device__ __forceinline__
-        DelayedSkipListWriter() = default;
+        // // Default constructor
+        // __device__
+        // // __forceinline__ 
+        // DelayedSkipListWriter() = default;
 
         /*
         DelayAmount = 4, and we iterate over the range [5, 0] example:
@@ -239,7 +282,8 @@ namespace flash
         
         // Initialize the underlying writer
         template <typename TileShape_MNK, typename ParamsType>
-        __device__ __forceinline__ 
+        __device__
+        // __forceinline__ 
         void init(const ParamsType &params, int bidb, int bidh, int m_block)
         {
             writer.template init<TileShape_MNK>(params, bidb, bidh, m_block);
@@ -255,7 +299,8 @@ namespace flash
         }
 
         // consider: calling this when acquiring K for loading.
-        __device__ __forceinline__ 
+        __device__
+        // __forceinline__ 
         void record_n_block(int n_block)
         {
             // record the current n_block for replay in DelayAmount iterations from now.
@@ -263,7 +308,8 @@ namespace flash
             record_idx = (record_idx + 1) % BufferSize;
         }
 
-        __device__ __forceinline__ 
+        __device__
+        // __forceinline__ 
         void record_range_end(int end_idx)
         {
             // we save into previous index!
@@ -274,7 +320,8 @@ namespace flash
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         // consider: making these functions private and making replay() public.
 
-        __device__ __forceinline__ 
+        __device__
+        // __forceinline__ 
         void replay_transition()
         {
             // calculate the replayed skip result from DelayAmount ago.
@@ -297,7 +344,8 @@ namespace flash
             skip_tests[replay_idx][3] = 1;
         }
 
-        __device__ __forceinline__ 
+        __device__
+        // __forceinline__ 
         void replay_end_range()
         {
             int replayed_end_idx = end_range_buffer[replay_idx];
@@ -307,7 +355,8 @@ namespace flash
             end_range_buffer[replay_idx] = -2;
         }
 
-        __device__ __forceinline__ 
+        __device__
+        // __forceinline__ 
         void replay()
         {
             replay_transition();
@@ -318,7 +367,8 @@ namespace flash
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         
         // Finalize by flushing all remaining queue entries
-        __device__ __forceinline__ 
+        __device__
+        // __forceinline__ 
         void finalize()
         {
             // replay all of the buffer.

@@ -112,6 +112,8 @@ namespace flash
         // and nothing else, so we'll pad in case sizeof(smem_o) > sizeof(smem_v).
         static constexpr int mainloop_smem_padding_ = int(sizeof(typename CollectiveEpilogue::TensorStorage)) - int(sizeof(decltype((typename CollectiveMainloop::TensorStorage{}).smem_v)));
         static constexpr int mainloop_smem_padding = mainloop_smem_padding_ < 0 ? 0 : mainloop_smem_padding_;
+
+        static constexpr int BufferSize = CollectiveMainloop::kStages * 2;
         struct SharedStorage
         {
             struct TensorStorage : cute::aligned_struct<128, _1>
@@ -127,6 +129,7 @@ namespace flash
                     typename CollectiveEpilogue::TensorStorage epilogue;
                 };
             } tensors;
+
             struct PipelineStorage : cute::aligned_struct<16, _1>
             {
                 alignas(16) BarrierQ barrier_Q;
@@ -138,32 +141,37 @@ namespace flash
                 alignas(16) typename CollectiveMainloop::MainloopPipelineKVNew::SharedStorage pipeline_k_new;
                 alignas(16) typename CollectiveMainloop::MainloopPipelineKVNew::SharedStorage pipeline_v_new;
                 alignas(16) typename TileScheduler::SharedStorage smem_scheduler;
-
-                // alignas(16) std::conditional_t<CollectiveMainloop::Is_skipable,
-                //                    int[CollectiveMainloop::kStages],
-                //                    cute::array<int, 0>> curr_n_block;
-                // int curr_n_block[NumMmaWarpGroups][CollectiveMainloop::kStages];
-                // int skip_tests[NumMmaWarpGroups][CollectiveMainloop::kStages][4];
-                // int skip_tests[4];
-                // int skip_tests[CollectiveMainloop::kStages][NumMmaWarpGroups][4];
-                // producer
-                // K0 K1 V0 K2 V1 K3 V2 ... only when the producer accuired V2 we are guaranteed that the skip result of QK0 is ready.
-                // consumer
-                // QK0 -> skip0 -> save0 shared -> PV0 -> release V0
-                // QK2 -> skip2 -> save2 shared -> PV2 -> release V2
-                //
-                // // meaning we need at most kStages + 1 of skip tests arrays
-                // int skip_tests[CollectiveMainloop::kStages*2][4];
-                // // the first index is the n_block and the second is the stop condition
-                // int current_n_block[CollectiveMainloop::kStages*2][2];
-
-                static constexpr int BufferSize = CollectiveMainloop::kStages * 2;
-                // these arrays should reside in shared memory.
-                int n_blocks_buffer[BufferSize];
-                int end_range_buffer[BufferSize];
-                int skip_tests[BufferSize][4];
-                int last_n_block[1];
             } pipelines;
+
+            SkipListStorage<BufferSize> skip_list_storage;
+            // {
+
+            //     // alignas(16) std::conditional_t<CollectiveMainloop::Is_skipable,
+            //     //                    int[CollectiveMainloop::kStages],
+            //     //                    cute::array<int, 0>> curr_n_block;
+            //     // int curr_n_block[NumMmaWarpGroups][CollectiveMainloop::kStages];
+            //     // int skip_tests[NumMmaWarpGroups][CollectiveMainloop::kStages][4];
+            //     // int skip_tests[4];
+            //     // int skip_tests[CollectiveMainloop::kStages][NumMmaWarpGroups][4];
+            //     // producer
+            //     // K0 K1 V0 K2 V1 K3 V2 ... only when the producer accuired V2 we are guaranteed that the skip result of QK0 is ready.
+            //     // consumer
+            //     // QK0 -> skip0 -> save0 shared -> PV0 -> release V0
+            //     // QK2 -> skip2 -> save2 shared -> PV2 -> release V2
+            //     //
+            //     // // meaning we need at most kStages + 1 of skip tests arrays
+            //     // int skip_tests[CollectiveMainloop::kStages*2][4];
+            //     // // the first index is the n_block and the second is the stop condition
+            //     // int current_n_block[CollectiveMainloop::kStages*2][2];
+
+            //     // static constexpr int BufferSize = CollectiveMainloop::kStages * 2;
+            //     // these arrays should reside in shared memory.
+
+            //     int n_blocks_buffer[BufferSize];
+            //     int end_range_buffer[BufferSize];
+            //     int skip_tests[BufferSize][4];
+            //     int last_n_block[1];
+            // } skip_list_storage;
         };
 
         static constexpr int SharedStorageSize = sizeof(SharedStorage);
@@ -425,12 +433,15 @@ namespace flash
 
                 cutlass::arch::wait_on_dependent_grids();
 
+                // consider: move this to shared memory to reduce register pressure + not needing to worry about which thread been elected
                 // Initialize skip_writer with shared memory buffers
                 DelayedSkipListWriter<CollectiveMainloop::kStages> skip_writer(
-                    shared_storage.pipelines.n_blocks_buffer,
-                    shared_storage.pipelines.end_range_buffer,
-                    shared_storage.pipelines.skip_tests
+                    shared_storage.skip_list_storage.n_blocks_buffer,
+                    shared_storage.skip_list_storage.end_range_buffer,
+                    shared_storage.skip_list_storage.skip_tests
                 );
+
+                bool should_load_KV=false;
                 // Load Q, K, V
                 for (auto work_tile_info = SingleProducerWarp || warp_idx_in_warpgroup == 0
                                                ? scheduler.template get_initial_work</*IsProducerWarp=*/true>(params.scheduler)
@@ -468,12 +479,12 @@ namespace flash
                         scheduler.prefetch_next_work(params.scheduler, work_tile_info);
                     };
 
-                    mainloop.load(params.mainloop, pipeline_k, pipeline_v, pipeline_vt, smem_pipe_write,
+                    should_load_KV = mainloop.load(params.mainloop, pipeline_k, pipeline_v, pipeline_vt, smem_pipe_write,
                                 shared_storage, scheduler_prefetch, seqlen_info, block_coord, work_idx, skip_writer);
                                 // shared_storage, scheduler_prefetch, seqlen_info, block_coord, work_idx, skip_reader, skip_writer);
 
                 }
-                mainloop.load_tail(pipeline_k, pipeline_v, pipeline_vt, smem_pipe_write, shared_storage, work_idx, skip_writer);
+                mainloop.load_tail(pipeline_k, pipeline_v, pipeline_vt, smem_pipe_write, shared_storage, work_idx, skip_writer, should_load_KV);
             }
             else
             { // Consumer
