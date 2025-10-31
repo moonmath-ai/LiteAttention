@@ -23,6 +23,23 @@ def print_skip_percentage(attn, q):
     skip_percentage = attn.calc_percentage(attn._skip_list[attn._phase, :q.shape[0]])
     print(f"    Skip percentage: {skip_percentage:.2%}")
 
+def check_first_element_is_last_block(skip_list):
+    """
+    Check that the first element in the skip list is the last block (ktiles - 1).
+    
+    Args:
+        skip_list: Skip list tensor of shape [batch, heads, qtiles, ktiles]
+    
+    Returns:
+        bool: True if all first elements equal the last block index, False otherwise.
+    """
+    last_n_block = skip_list.shape[-1] - 2
+    is_n_block = skip_list[..., 1] == last_n_block
+    is_all_n_blocks = is_n_block.all()
+    if not is_all_n_blocks:
+        print(f"  ⚠️  First Element is not ktiles - 1!, it's: {skip_list[..., 1]} != {last_n_block}")
+    return is_all_n_blocks
+
 def test_skip_all(q, k, v, head_dim):
     """
     Test that when threshold is inf, all tiles are skipped except one range.
@@ -45,6 +62,17 @@ def test_skip_all(q, k, v, head_dim):
     diff = (skip_list[..., 1] - skip_list[..., 2]).abs()
     mpassed = (diff == 1)
     passed &= mpassed.all()
+
+    # # test that that the only block we don't skiip is the last one
+    # last_n_block = skip_list.shape[-1] - 2
+    # is_n_block = skip_list[..., 1] == last_n_block
+    # is_all_n_blocks = is_n_block.all()
+    # if not is_all_n_blocks:
+    #     print("  ⚠️  First Element is not ktiles - 1!, it's: {skip_list[..., 1]} != {last_n_block}")
+    # passed &= is_all_n_blocks
+    
+    # Test that the only block we don't skip is the last one
+    passed &= check_first_element_is_last_block(skip_list)
     
     print(f"  Skip all test: {'✅ PASSED' if passed else '❌ FAILED'}")
     if not passed:
@@ -75,6 +103,9 @@ def test_skip_nothing(q, k, v, head_dim):
     test_tensor = torch.tensor([2, read_list.shape[-1] - 2, -1], device=read_list.device, dtype=read_list.dtype)[None, None, None,]
     diff = (read_list[..., :3] == test_tensor).all(-1)
     passed = diff.all()
+    
+    # Test that the only block we don't skip is the last one
+    passed &= check_first_element_is_last_block(read_list)
     
     print(f"  Skip nothing test: {'✅ PASSED' if passed else '❌ FAILED'}")
     if not passed:
@@ -126,6 +157,10 @@ def test_softmax_lse_correctness(q, k, v, head_dim, tolerance=0.001):
     mean_diff = lse_diff.mean().item()
     passed = max_diff < tolerance
     
+    # Test that the only block we don't skip is the last one
+    skip_list = attn._skip_list[attn._phase, :q.shape[0]]
+    passed &= check_first_element_is_last_block(skip_list)
+    
     print(f"  Softmax LSE test: {'✅ PASSED' if passed else '❌ FAILED'}")
     print(f"    Max diff: {max_diff:.6f}, Mean diff: {mean_diff:.6f}")
     
@@ -142,12 +177,19 @@ def stress_test(q, k, v, head_dim, num_iters=10):
 
     n = 11
     percentage = attn.calc_percentage(attn._skip_list[attn._phase, :q.shape[0]])
+    
+    passed = True
 
     for i in range(num_iters):
         torch.cuda.synchronize()
         output = attn(q, k, v)
         torch.cuda.synchronize()
         new_percentage = attn.calc_percentage(attn._skip_list[attn._phase, :q.shape[0]])
+        
+        # Test that the only block we don't skip is the last one
+        skip_list = attn._skip_list[attn._phase, :q.shape[0]]
+        passed &= check_first_element_is_last_block(skip_list)
+        
         if new_percentage != percentage:
             print(f"  Skip list: {attn._skip_list[attn._phase, 0,0,0,:n]}, ktiles: {attn._skip_list.shape[-1] - 1}")
             print(f"  percentage changed from {percentage:.2%} to {new_percentage:.2%} at iteration {i}")
@@ -155,7 +197,7 @@ def stress_test(q, k, v, head_dim, num_iters=10):
             return
 
     print_skip_percentage(attn, q)
-    print(f"  Stress test completed: {'✅ PASSED' if True else '❌ FAILED'}")
+    print(f"  Stress test completed: {'✅ PASSED' if passed else '❌ FAILED'}")
     
 
 def run_tests_for_head_dim(head_dim, batch=2, seq_len=18200, heads=32):
@@ -186,7 +228,7 @@ def main():
     head_dims = [32, 64, 96, 128, 192, 256]
     
     for head_dim in head_dims:
-        run_tests_for_head_dim(head_dim)
+        run_tests_for_head_dim(head_dim, seq_len=18200, batch=1, heads=32)
     
     print(f"\n{'='*60}")
     print("All tests completed!")
