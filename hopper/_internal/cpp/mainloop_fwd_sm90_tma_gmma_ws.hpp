@@ -1050,7 +1050,6 @@ namespace flash
                 // finish the first range
                 // ++n_block;
                 --n_block;
-
                 do{
                     for (; n_block > skip_reader.end_idx; n_block--)
                     {
@@ -1064,6 +1063,7 @@ namespace flash
                     if (should_load_KV){skip_writer.record_range_end(skip_reader.end_idx);}
                     if(!skip_reader.has_more()){ break; }
                     skip_reader.load_range();
+                    n_block = skip_reader.start_idx;
                     skip_reader.advance();
                 }while(true);
             }else{
