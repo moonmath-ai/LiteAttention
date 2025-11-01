@@ -351,8 +351,7 @@ class LiteAttention:
         # q = q_reshaped
         # k = k_reshaped
         QK = (q_reshaped @ k_reshaped.transpose(-2, -1)) * scale
-        # attn_softmaxed = torch.softmax(QK, dim=-1)
-        attn_softmaxed = QK
+        attn_softmaxed = torch.softmax(QK, dim=-1)
         attn_down = F.adaptive_max_pool2d(
             attn_softmaxed,  # (batch, heads, 1, H, W)
             output_size=(max_res, max_res)
