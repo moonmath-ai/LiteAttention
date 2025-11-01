@@ -64,7 +64,7 @@ namespace flash
     // - V_colmajor_: Whether V matrix is stored in column-major layout
     template <int Stages, class ClusterShape_, class TileShape_MNK_, int kHeadDimV, class Element_, class ElementAccum_, class ArchTag_,
               bool Is_causal_, bool Is_local_, bool Has_softcap_, bool Varlen_, bool PagedKVNonTMA_, bool AppendKV_, bool HasQv_,
-              bool MmaPV_is_RS, bool IntraWGOverlap, bool PackGQA_, bool Split_, bool V_colmajor_, bool Is_skipable_>
+              bool MmaPV_is_RS, bool IntraWGOverlap, bool PackGQA_, bool Split_, bool V_colmajor_, bool Is_skipable_, bool ReverseSkipList_=false, bool Phase_= true>
     struct CollectiveMainloopFwdSm90
     {
 
@@ -102,7 +102,8 @@ namespace flash
         static constexpr bool SameHeadDim = get<2>(TileShape_MNK{}) == kHeadDimV;
         static constexpr bool LargeHeadDimV = kHeadDimV > 256;
         static constexpr bool Is_skipable = Is_skipable_;
-
+        static constexpr bool ReverseSkipList = ReverseSkipList_;
+        static constexpr bool Phase = Phase_;
         static_assert(ArchTag::kMinComputeCapability >= 90);
 
         static constexpr cute::GMMA::Major MmaMajorV = !Is_FP8 && !V_colmajor ? GMMA::Major::MN : GMMA::Major::K;
@@ -691,7 +692,7 @@ namespace flash
                 }
             }
 
-            SkipListReader skip_reader;
+            SkipListReader<ReverseSkipList, Phase> skip_reader;
             if constexpr (Is_skipable)
             {
                 skip_reader.template init<TileShape_MNK>(params, bidb, bidh, m_block);
@@ -1049,15 +1050,28 @@ namespace flash
             if constexpr (Is_skipable){
                 // finish the first range
                 // ++n_block;
-                --n_block;
+                // --n_block;
+                n_block += skip_reader.step;
                 do{
-                    for (; n_block > skip_reader.end_idx; n_block--)
-                    {
-                        PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
-                        ++smem_pipe_write;
-                        load_KV_for_block(n_block, n_block_prev, smem_pipe_write, smem_pipe_write_v, skip_writer);
-                        n_block_prev = n_block;
-                        if constexpr (Transpose_V){ copy_Vt_to_V(smem_pipe_write_v); }
+                    // for (; n_block > skip_reader.end_idx; n_block--)
+                    if constexpr (Phase){
+                        for (; n_block < skip_reader.end_idx; n_block += skip_reader.step)
+                        {
+                            PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
+                            ++smem_pipe_write;
+                            load_KV_for_block(n_block, n_block_prev, smem_pipe_write, smem_pipe_write_v, skip_writer);
+                            n_block_prev = n_block;
+                            if constexpr (Transpose_V){ copy_Vt_to_V(smem_pipe_write_v); }
+                        }
+                    }else{
+                        for (; n_block > skip_reader.end_idx; n_block += skip_reader.step)
+                        {
+                            PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
+                            ++smem_pipe_write;
+                            load_KV_for_block(n_block, n_block_prev, smem_pipe_write, smem_pipe_write_v, skip_writer);
+                            n_block_prev = n_block;
+                            if constexpr (Transpose_V){ copy_Vt_to_V(smem_pipe_write_v); }
+                        }
                     }
 
                     if (should_load_KV){skip_writer.record_range_end(skip_reader.end_idx);}

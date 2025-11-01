@@ -42,18 +42,28 @@ namespace flash
     // Helper struct for reading skip lists
     // Encapsulates all the logic for iterating through skip list ranges
     // ============================================================================
+    template <bool ReverseSkipList, bool Phase = true>
     struct SkipListReader
     {
         const int *list_ptr;
         int skip_list_len;
-        int read_idx = 1;
+        int read_idx;
         int start_idx;
         int end_idx;
+
+        static constexpr int step = Phase ? 1 : -1;
+        /*
+        reverse:
+        [2, 30, -1] -> [2, 0, 31]
+        reverse:
+        [2, 0, 31] -> [2, 30, -1]
+        reverse:
+        [2, 30, -1] -> [2, 0, 31]
+        */
 
         // Initialize the reader with calculated offset
         template <typename TileShape_MNK, typename ParamsType>
         __device__
-        // __forceinline__ 
         void init(const ParamsType &params, int bidb, int bidh, int m_block)
         {
             static constexpr int kBlockM = get<0>(TileShape_MNK{});
@@ -69,6 +79,7 @@ namespace flash
             
             list_ptr = &params.qk_skip_mask_args.attn_read_list[mask_offset];
             skip_list_len = list_ptr[0];
+            read_idx = ReverseSkipList ? skip_list_len : 1;
 
             // we ignore the edge case which skip_list_len == 0 because even in this case
             // we will be better off loading the first range because it's like to use the first range 2 timesteps ago
@@ -77,34 +88,47 @@ namespace flash
         }
 
         __device__
-        // __forceinline__ 
         void load_range()
         {
-            start_idx = flash::warp_uniform(list_ptr[read_idx]);
-            end_idx = flash::warp_uniform(list_ptr[read_idx + 1]);
+            if constexpr (!ReverseSkipList) {
+                start_idx = flash::warp_uniform(list_ptr[read_idx]);
+                end_idx = flash::warp_uniform(list_ptr[read_idx + 1]);
+            }else{
+                start_idx = flash::warp_uniform(list_ptr[read_idx] + step);
+                end_idx = flash::warp_uniform(list_ptr[read_idx - 1] + step);
+            }
         }
 
         // Advance to the next skip list range
         __device__
-        // __forceinline__ 
         void advance()
         {
-            read_idx += 2;
+            if constexpr (!ReverseSkipList) {
+                read_idx += 2;
+            }else{
+                read_idx -= 2;
+            }
         }
 
         // Check if we have more ranges to process
         __device__
-        // __forceinline__ 
         bool has_more()
         {
-            return flash::warp_uniform(read_idx <= skip_list_len);
+            if constexpr (!ReverseSkipList) {
+                return flash::warp_uniform(read_idx <= skip_list_len);
+            }else{
+                return flash::warp_uniform(read_idx >= 1);
+            }
         }
 
         __device__
-        // __forceinline__ 
         int last_n_block() const
         {
-            return flash::warp_uniform(list_ptr[skip_list_len] + 1);
+            if constexpr (!ReverseSkipList) {
+                return flash::warp_uniform(list_ptr[skip_list_len] + 1);
+            }else{
+                return flash::warp_uniform(list_ptr[1]);
+            }
         }
     };
 
@@ -385,4 +409,3 @@ namespace flash
     };
 
 } // namespace flash
-
