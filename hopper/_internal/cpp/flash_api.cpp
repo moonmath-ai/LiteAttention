@@ -703,8 +703,12 @@ mha_fwd(at::Tensor q,   // (b, s_q, h, d) or (total_q, h, d) if there is cu_seql
         // std::optional<at::Tensor> qk_skip_mask_args_,
         std::optional<at::Tensor> attn_read_list_,
         std::optional<at::Tensor> attn_write_list_,
-        double thr
-        ) {
+        double thr,
+        bool reverse_skip_list = false,
+        bool phase = false
+    ) {
+    params.reverse_skip_list = reverse_skip_list;
+    params.phase = phase;
 
     auto dprops = at::cuda::getCurrentDeviceProperties();
     bool is_sm8x = dprops->major >= 8;
@@ -1744,7 +1748,9 @@ TORCH_LIBRARY(lite_attention, m) {
         // "Tensor? qk_skip_mask_args = None,"
         "Tensor? attn_read_list = None,"
         "Tensor? attn_write_list = None,"
-        "float thr = -3.0) -> (Tensor(out!), Tensor, Tensor, Tensor)"
+        "float thr = -3.0,"
+        "bool reverse_skip_list = False,"
+        "bool phase = False) -> (Tensor(out!), Tensor, Tensor, Tensor)"
     );
     m.def("bwd("
         "Tensor dout,"
