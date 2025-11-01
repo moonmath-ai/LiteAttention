@@ -66,13 +66,18 @@ def check_no_empty_or_negative_ranges(skip_list):
         bool: True if no empty or negative ranges exist, False otherwise.
     """
     # Check that all ranges are positive (start < end)
+    # [start0 - end0, end0 - start1, start1 - end1, end1 - start2, ..., start_n - end_n]
     diff = (skip_list[..., 1:-1] - skip_list[..., 2:]) > 0
     arange = torch.arange(diff.shape[-1], device=skip_list.device).view(1, 1, 1, -1) >= skip_list[..., 0:1] - 1
     # Only check ranges that are within the valid list length
-    passed = (arange + diff) > 0
-    passed = passed.all()
+    passed_individually = (arange + diff) > 0
+    passed_individually = passed_individually.all(-1)
+    passed = passed_individually.all()
     if not passed:
         print(f"     ⚠️  Empty or negative ranges found!")
+        not_passed = skip_list[~passed_individually]
+        max_len = (not_passed[..., 0].flatten().max() + 1).item()
+        print(f"    Failed items: {not_passed[..., :max_len]}")
     return passed
 
 def test_skip_all(q, k, v, head_dim):
@@ -210,6 +215,7 @@ def consistency_test(q, k, v, head_dim, num_iters=10):
         new_percentage = attn.calc_percentage(skip_list)
         if new_percentage > percentage:
             print(f"  Consistency test: {'✅ PASSED' if False else '❌ FAILED'}")
+            print(f"    Failed on iteration {i}")
             print(f"    New percentage is bigger than the previous one: {new_percentage:.2%} > {percentage:.2%}")
             return False
         percentage = new_percentage
@@ -217,16 +223,19 @@ def consistency_test(q, k, v, head_dim, num_iters=10):
         # Check that the first element in the skip list is the last block
         if not check_first_element_is_last_block(skip_list):
             print(f"  Consistency test: {'✅ PASSED' if False else '❌ FAILED'}")
+            print(f"    Failed on iteration {i}")
             return False
         
         # Check that the list length isn't bigger than ktiles + 1
         if not check_skip_list_length_valid(skip_list):
             print(f"  Consistency test: {'✅ PASSED' if False else '❌ FAILED'}")
+            print(f"    Failed on iteration {i}")
             return False
 
         # Check that we don't have empty or negative ranges
         if not check_no_empty_or_negative_ranges(skip_list):
             print(f"  Consistency test: {'✅ PASSED' if False else '❌ FAILED'}")
+            print(f"    Failed on iteration {i}")
             return False
     
     print(f"  Consistency test: {'✅ PASSED' if True else '❌ FAILED'}")
