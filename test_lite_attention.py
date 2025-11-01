@@ -198,17 +198,17 @@ def consistency_test(q, k, v, head_dim, num_iters=10):
     """Test that the skip list is consistent between reads and writes."""
     attn = LiteAttention()
     attn.threshold = float(0.0)
-    run_attention_warmup(attn, q, k, v)
-    
-    skip_list = attn._skip_list[attn._phase, :q.shape[0]]
-    percentage = attn.calc_percentage(skip_list)
-    
+
+    previous_skip_list = None
+    skip_list = None
+    percentage = float('inf')
     for i in range(num_iters):
         q, k, v = generate_test_tensors(batch=q.shape[0], seq_len=q.shape[1], heads=q.shape[2], head_dim=q.shape[3])
         torch.cuda.synchronize()
         output = attn(q, k, v)
         torch.cuda.synchronize()
 
+        previous_skip_list = skip_list
         skip_list = attn._skip_list[attn._phase, :q.shape[0]]
 
         # check new percentage is not bigger than the previous one
