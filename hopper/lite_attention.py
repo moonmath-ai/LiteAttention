@@ -342,16 +342,17 @@ class LiteAttention:
         q_reshaped = query[:, :, heads_list].transpose(1, 2)  # (batch, example_heads, seq_len_q, head_dim)
         k_reshaped = key[:, :, heads_list].transpose(1, 2)    # (batch, example_heads, seq_len_k, head_dim)
 
-        q = q_reshaped
-        k = k_reshaped
-        QK = (q @ k.transpose(-2, -1)) * scale
-        attn_softmaxed = torch.softmax(QK, dim=-1)
+        # q = q_reshaped
+        # k = k_reshaped
+        QK = (q_reshaped @ k_reshaped.transpose(-2, -1)) * scale
+        # attn_softmaxed = torch.softmax(QK, dim=-1)
+        attn_softmaxed = QK
         attn_down = F.adaptive_max_pool2d(
             attn_softmaxed,  # (batch, heads, 1, H, W)
             output_size=(max_res, max_res)
         ) # -> (batch, heads, max_res, max_res)
 
-        kBlockM, kBlockN = LiteAttention.get_MN(k.shape[-1], k.dtype.itemsize)
+        kBlockM, kBlockN = LiteAttention.get_MN(key.shape[-1], key.dtype.itemsize)
         # Add grid overlay
         height, width = max_res, max_res
         ratio_height = height / seq_len_q

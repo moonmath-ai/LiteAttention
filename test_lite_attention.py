@@ -305,7 +305,7 @@ def main():
     head_dims = [32, 64, 96, 128, 192, 256]
     
     for head_dim in head_dims:
-        run_tests_for_head_dim(head_dim, seq_len=18200, batch=1, heads=32)
+        run_tests_for_head_dim(head_dim)
     
     print(f"\n{'='*60}")
     print("All tests completed!")
