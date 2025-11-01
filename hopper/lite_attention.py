@@ -35,11 +35,11 @@ class LiteAttention:
         >>> print(f"Skipped {lite_attn.get_skip_percentage():.2%} computations")
     """
     
-    def __init__(self, enable_skipping: bool = True, threshold: float = -10.0, max_batch_size: int = 4):
+    def __init__(self, enable_skipping: bool = True, threshold: float = -10.0, max_batch_size: int = 4, reverse_skip_list: bool = True):
         # Internal skip list management
         self._skip_list = None
         self._phase = 0
-
+        self.reverse_skip_list = reverse_skip_list
         self._last_seq_len = None
         self._last_head_dim = None
         self._last_v_colmajor = None
@@ -280,7 +280,9 @@ class LiteAttention:
             attn_read_list=read_list,
             attn_write_list=write_list,
             thr=self.threshold,
-            return_softmax_lse=return_softmax_lse
+            return_softmax_lse=return_softmax_lse,
+            reverse_skip_list=self.reverse_skip_list,
+            phase=(self._phase == 1) if self.reverse_skip_list else False
         )
 
         # Calculate and store statistics if enabled

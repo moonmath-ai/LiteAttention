@@ -707,8 +707,8 @@ mha_fwd(at::Tensor q,   // (b, s_q, h, d) or (total_q, h, d) if there is cu_seql
         bool reverse_skip_list = false,
         bool phase = false
     ) {
-    params.reverse_skip_list = reverse_skip_list;
-    params.phase = phase;
+    // params.reverse_skip_list = reverse_skip_list;
+    // params.phase = phase;
 
     auto dprops = at::cuda::getCurrentDeviceProperties();
     bool is_sm8x = dprops->major >= 8;
@@ -914,6 +914,9 @@ mha_fwd(at::Tensor q,   // (b, s_q, h, d) or (total_q, h, d) if there is cu_seql
                      attention_chunk,
                      softcap,
                      sm_margin);
+
+    params.reverse_skip_list = reverse_skip_list;
+    params.phase = phase;
 
     // Convert skip mask tensors to QKSkipMaskArgs struct
     // Expected shape: [batch, heads, limbs] where limbs = ceil_div(q_tiles * k_tiles, 64)
