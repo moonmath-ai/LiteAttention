@@ -53,9 +53,9 @@ namespace flash
 
         static constexpr int step = Phase ? 1 : -1;
         /*
-        reverse:
+        reverse, phase=0:
         [2, 30, -1] -> [2, 0, 31]
-        reverse:
+        reverse, phase=1:
         [2, 0, 31] -> [2, 30, -1]
         reverse:
         [2, 30, -1] -> [2, 0, 31]

@@ -40,6 +40,7 @@ class LiteAttention:
         self._skip_list = None
         self._phase = 0
         self.reverse_skip_list = reverse_skip_list
+        self._last_batch_size = None
         self._last_seq_len = None
         self._last_head_dim = None
         self._last_v_colmajor = None
@@ -54,6 +55,7 @@ class LiteAttention:
         self.set_threshold(threshold)
 
         self.max_batch_size = max_batch_size
+
 
     @staticmethod
     def ceil_div(x, y):
@@ -236,6 +238,7 @@ class LiteAttention:
             self._last_dtype = dtype
             self._last_device = device
             self._last_num_heads = current_num_heads
+            self._last_batch_size = query.shape[0]
 
             if os.getenv("LITE_ATTENTION_VERBOSE", "FALSE") != "FALSE":
                 print(f"[Warning]: reinitialized skip list during the forward pass")
@@ -282,6 +285,7 @@ class LiteAttention:
             thr=self.threshold,
             return_softmax_lse=return_softmax_lse,
             reverse_skip_list=self.reverse_skip_list,
+            # self._phase == 1 because we changed it in _get_read_write_lists!
             phase=(self._phase == 1) if self.reverse_skip_list else False
         )
 
@@ -409,6 +413,14 @@ class LiteAttention:
                 file_path = os.path.join(batch_head_dir, filename)
                 plt.savefig(file_path, dpi=150)
                 plt.close()
+
+    @property
+    def read_list(self) -> torch.Tensor:
+        return self._skip_list[self._phase, :self._last_batch_size]
+    
+    @property
+    def write_list(self) -> torch.Tensor:
+        return self._skip_list[1 - self._phase, :self._last_batch_size]
 
 class SeqParallelLiteAttention:
     def __init__(self, num_nodes: int, enable_skipping: bool = True, threshold: float = -10.0, max_batch_size: int = 4):
