@@ -245,8 +245,8 @@ namespace flash
         //should reside in thread registers.
         SkipListWriter writer;
         bool replayed_skip;
-        int record_idx = 0;
-        int replay_idx = DelayAmount;
+        int record_idx = -1;
+        int replay_idx = DelayAmount - 1;
 
         // Constructor to initialize with shared memory pointers
         __device__
@@ -303,9 +303,9 @@ namespace flash
         // __forceinline__ 
         void record_n_block(int n_block)
         {
+            record_idx = (record_idx + 1) % BufferSize;
             // record the current n_block for replay in DelayAmount iterations from now.
             n_blocks_buffer[record_idx] = n_block;
-            record_idx = (record_idx + 1) % BufferSize;
         }
 
         __device__
@@ -314,7 +314,8 @@ namespace flash
         {
             // we save into previous index!
             // end_range_buffer[(record_idx - 1) % DelayAmount] = end_idx;
-            end_range_buffer[(record_idx + BufferSize - 1) % BufferSize] = end_idx;
+            // end_range_buffer[(record_idx + BufferSize - 1) % BufferSize] = end_idx;
+            end_range_buffer[record_idx] = end_idx;
         }
 
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -359,9 +360,10 @@ namespace flash
         // __forceinline__ 
         void replay()
         {
+            replay_idx = (replay_idx + 1) % BufferSize;
             replay_transition();
             replay_end_range();
-            replay_idx = (replay_idx + 1) % BufferSize;
+            // replay_idx = (replay_idx + 1) % BufferSize;
         }
 
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
