@@ -235,10 +235,13 @@ class LiteAttention:
         read_list, write_list = self._get_read_write_lists(query, value)
 
         # handle must-do list - expand the 1d list to a list per head per batch per qi
-        if must_do_list is not None:
-            must_do_list_expanded = self._expand_must_do_list(must_do_list, write_list.shape, query, value)
+        if self.enable_skipping:
+            if must_do_list is not None:
+                must_do_list_expanded = self._expand_must_do_list(must_do_list, write_list.shape, query, value)
+            else:
+                must_do_list_expanded = self._expand_must_do_list([0,0], write_list.shape, query, value)  # [0,0] is for an empty must-do list
         else:
-            must_do_list_expanded = self._expand_must_do_list([0,0], write_list.shape, query, value)  # [0,0] is for an empty must-do list
+            must_do_list_expanded = None
 
         # print("must_do_list_expanded", must_do_list_expanded.shape)
         
