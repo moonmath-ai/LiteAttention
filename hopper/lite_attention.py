@@ -415,10 +415,14 @@ class LiteAttention:
 
     @property
     def read_list(self) -> torch.Tensor:
+        if self._skip_list is None:
+            return None
         return self._skip_list[self._phase, :self._last_batch_size]
     
     @property
     def write_list(self) -> torch.Tensor:
+        if self._skip_list is None:
+            return None
         return self._skip_list[1 - self._phase, :self._last_batch_size]
 
 class SeqParallelLiteAttention:
