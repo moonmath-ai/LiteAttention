@@ -145,6 +145,8 @@ class LiteAttention:
         example_skip_list = skip_list[0,0,0,0,:]
         the data inside example_skip_list is of the form:
         [length, start_0, end_0, start_1, end_1, ..., start_{(length/2)-1}, end_{(length/2)-1}, uninitialized value, ...., uninitialized value]
+        start_0 >= end_0 >= start_1 >= end_1 >= ... >= start_{(length/2)-1} >= end_{(length/2)-1}
+        start_0 <= end_0 <= start_1 <= end_1 <= ... <= start_{(length/2)-1} <= end_{(length/2)-1}
         **the length is always an even number!
         """
 
@@ -326,7 +328,7 @@ class LiteAttention:
         # if not enable:
         #     self.reset_skip_state()
     
-    def visualize_skips(self, query: torch.Tensor, key: torch.Tensor, heads_list: torch.Tensor, scale: float, save_path: str, max_res: int = 520, name_prefix: str = ""):
+    def visualize_skips(self, query: torch.Tensor, key: torch.Tensor, heads_list: torch.Tensor, scale: float, save_path: str, max_res: int = 520, name_prefix: str = "", do_softmax: bool = True):
         '''
         heads_list: [N], heads_list[i] == head_idx
         query: (batch, seq_len, heads, head_dim)
@@ -351,19 +353,6 @@ class LiteAttention:
             for h in heads_list:
                 batch_head_dir = os.path.join(save_path, f"batch_{b}", f"head_{h}")
                 os.makedirs(batch_head_dir, exist_ok=True)
-        
-        # # Reshape for multi-head attention: (batch, seq_len, heads, head_dim) -> (batch, example_heads, seq_len, head_dim)
-        # q_reshaped = query[:, :, heads_list].transpose(1, 2)  # (batch, example_heads, seq_len_q, head_dim)
-        # k_reshaped = key[:, :, heads_list].transpose(1, 2)    # (batch, example_heads, seq_len_k, head_dim)
-
-        # # q = q_reshaped
-        # # k = k_reshaped
-        # QK = (q_reshaped @ k_reshaped.transpose(-2, -1)) * scale
-        # attn_softmaxed = torch.softmax(QK, dim=-1)
-        # attn_down = F.adaptive_max_pool2d(
-        #     attn_softmaxed,  # (batch, heads, 1, H, W)
-        #     output_size=(max_res, max_res)
-        # ) # -> (batch, heads, max_res, max_res)
 
         kBlockM, kBlockN = LiteAttention.get_MN(key.shape[-1], key.dtype.itemsize)
         # Add grid overlay
@@ -390,7 +379,10 @@ class LiteAttention:
                 
                 # Compute attention
                 QK = (q_reshaped @ k_reshaped.transpose(-2, -1)) * scale  # (1, 1, seq_len_q, seq_len_k)
-                attn_softmaxed = torch.softmax(QK, dim=-1)
+                if do_softmax:
+                    attn_softmaxed = torch.softmax(QK, dim=-1)
+                else:
+                    attn_softmaxed = QK
                 attn_down = F.adaptive_max_pool2d(
                     attn_softmaxed,  # (1, 1, seq_len_q, seq_len_k)
                     output_size=(max_res, max_res)
@@ -404,7 +396,7 @@ class LiteAttention:
                 plt.figure(figsize=(6, 6))
                 attn_cpu = attn_map.detach().float().cpu()
                 plt.imshow(attn_cpu, cmap='viridis', interpolation='nearest')
-                plt.title(f"Batch {b} | Head {h} | Percentage {perecentage * 100:.2f}%")
+                plt.title(f"Batch {b} | Head {h} | Percentage {perecentage * 100:.2f}% | Do Softmax: {do_softmax}")
                 
                 # Add horizontal grid lines
                 for y in y_positions:
