@@ -170,8 +170,11 @@ class LiteAttention:
         #   some times skip_list[0] would be the read_list and skip_list[1] the write_list and some times the oposite
         # skip_list.shape[4] == ktiles + 1:
         #   the +1 is because the first element (skip_list[..., 0]) is always the length of the skip list
-        skip_list = torch.empty(2, batch, heads, qtiles, ktiles + 1, dtype=torch.int32, device=device)
-        skip_list[0, :, :, :, 0:3] = torch.tensor([2, ktiles - 1, -1], dtype=torch.int32, device=device)
+
+        # dtype = torch.int32
+        dtype = torch.int16
+        skip_list = torch.empty(2, batch, heads, qtiles, ktiles + 1, dtype=dtype, device=device)
+        skip_list[0, :, :, :, 0:3] = torch.tensor([2, ktiles - 1, -1], dtype=dtype, device=device)
         # skip_list[0, :, :, :, 0:3] = torch.tensor([2, ktiles - 1, 0], dtype=torch.int32, device=device)
         """
         why the order is reversed? (ktiles - 1 and then 0)

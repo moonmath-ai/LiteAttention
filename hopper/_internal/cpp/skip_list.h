@@ -45,7 +45,8 @@ namespace flash
     template <bool ReverseSkipList, bool Phase = true>
     struct SkipListReader
     {
-        const int *list_ptr;
+        // const int *list_ptr;
+        const int16_t *list_ptr;
         int skip_list_len;
         int read_idx;
         int start_idx;
@@ -138,7 +139,8 @@ namespace flash
     // ============================================================================
     struct SkipListWriter
     {
-        int *list_ptr;
+        // int *list_ptr;
+        int16_t *list_ptr;
         int write_idx = 1;
         bool is_skipping = true;
 
