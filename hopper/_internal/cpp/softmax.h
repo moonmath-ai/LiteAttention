@@ -219,21 +219,14 @@ namespace flash
                     float prev = scores_max_prev(mi);
                     scores_scale(mi) = exp2f((prev - cur) * softmax_scale_log2);
                     row_sum(mi) *= scores_scale(mi);
-                    // do_qk |= (((cur - prev) * softmax_scale_log2) > thr);
 
-                    // do_qk |= (((scores_max_local(mi) - prev) * softmax_scale_log2) > thr);
-                    // do_qk |= (((scores_max_local(mi) - prev) * softmax_scale_log2) > thr) & (row_mask >= (local_row_idx + mi * 8));
-                    do_qk |= (((scores_max_local(mi) - prev) * softmax_scale_log2) > thr) & row_not_out_of_bounds;
+                    // do_qk |= (((scores_max_local(mi) - prev) * softmax_scale_log2) > thr) & row_not_out_of_bounds;
 
-                    // do_qk |= scores_max_local(mi) * thr > prev;
+                    // do_qk |= ((scores_max_local(mi) * thr) >= prev) & row_not_out_of_bounds;
 
-                    // do_qk |= (prev - scores_max_local(mi)) * thr < prev;
-                    // do_qk |= (cur - scores_max_local(mi)) * thr < cur;
-
-                    // prev * thr - scores_max_local(mi) * thr < prev;
-                    // prev * thr - prev < scores_max_local(mi) * thr;
-                    // prev * (thr - 1.0f) < scores_max_local(mi) * thr;
-                    // prev * ((thr - 1.0f)/ thr) < scores_max_local(mi);
+                    bool cond1 = (scores_max_local(mi) - prev + abs(scores_max_local(mi)) * 0.5f >= 0); // if the current max is at least 1.5 times the previous max
+                    bool cond2 = ((scores_max_local(mi) - prev) * softmax_scale_log2) > thr; // if the current max is more than thr times the previous max
+                    do_qk |= cond1 & cond2 & row_not_out_of_bounds; // if both conditions are true and the row is not out of bounds, then set do_qk to true
                 }
 
                 // (warp = 32) * 4 = warpgroup, 2 * warpgroup
