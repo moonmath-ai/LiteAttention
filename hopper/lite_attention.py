@@ -339,23 +339,31 @@ class LiteAttention:
         seq_len_q = query.shape[1]
         seq_len_k = key.shape[1]
         skip_list = self._skip_list[self._phase]
+
+        # find out if the skip list is reversed or not
+        r1, r2 = skip_list[0, 0, 0, 1:3]
+        if r1 > r2:
+            step = 1
+        else:
+            step = 0
+
         for b in range(batch):
             for h in heads_list:
                 batch_head_dir = os.path.join(save_path, f"batch_{b}", f"head_{h}")
                 os.makedirs(batch_head_dir, exist_ok=True)
         
-        # Reshape for multi-head attention: (batch, seq_len, heads, head_dim) -> (batch, example_heads, seq_len, head_dim)
-        q_reshaped = query[:, :, heads_list].transpose(1, 2)  # (batch, example_heads, seq_len_q, head_dim)
-        k_reshaped = key[:, :, heads_list].transpose(1, 2)    # (batch, example_heads, seq_len_k, head_dim)
+        # # Reshape for multi-head attention: (batch, seq_len, heads, head_dim) -> (batch, example_heads, seq_len, head_dim)
+        # q_reshaped = query[:, :, heads_list].transpose(1, 2)  # (batch, example_heads, seq_len_q, head_dim)
+        # k_reshaped = key[:, :, heads_list].transpose(1, 2)    # (batch, example_heads, seq_len_k, head_dim)
 
-        # q = q_reshaped
-        # k = k_reshaped
-        QK = (q_reshaped @ k_reshaped.transpose(-2, -1)) * scale
-        attn_softmaxed = torch.softmax(QK, dim=-1)
-        attn_down = F.adaptive_max_pool2d(
-            attn_softmaxed,  # (batch, heads, 1, H, W)
-            output_size=(max_res, max_res)
-        ) # -> (batch, heads, max_res, max_res)
+        # # q = q_reshaped
+        # # k = k_reshaped
+        # QK = (q_reshaped @ k_reshaped.transpose(-2, -1)) * scale
+        # attn_softmaxed = torch.softmax(QK, dim=-1)
+        # attn_down = F.adaptive_max_pool2d(
+        #     attn_softmaxed,  # (batch, heads, 1, H, W)
+        #     output_size=(max_res, max_res)
+        # ) # -> (batch, heads, max_res, max_res)
 
         kBlockM, kBlockN = LiteAttention.get_MN(key.shape[-1], key.dtype.itemsize)
         # Add grid overlay
@@ -371,8 +379,25 @@ class LiteAttention:
         x_positions = [b * grid_width for b in range(int(width / grid_width) + 1) if b * grid_width <= width]
 
         for b in range(batch):
-
-            for h, attn_map in zip(heads_list, attn_down[b]):
+            for h in heads_list:
+                # Calculate QK for this specific head
+                q_head = query[b:b+1, :, h:h+1, :]  # (1, seq_len_q, 1, head_dim)
+                k_head = key[b:b+1, :, h:h+1, :]    # (1, seq_len_k, 1, head_dim)
+                
+                # Reshape: (1, seq_len, 1, head_dim) -> (1, 1, seq_len, head_dim)
+                q_reshaped = q_head.transpose(1, 2)  # (1, 1, seq_len_q, head_dim)
+                k_reshaped = k_head.transpose(1, 2)  # (1, 1, seq_len_k, head_dim)
+                
+                # Compute attention
+                QK = (q_reshaped @ k_reshaped.transpose(-2, -1)) * scale  # (1, 1, seq_len_q, seq_len_k)
+                attn_softmaxed = torch.softmax(QK, dim=-1)
+                attn_down = F.adaptive_max_pool2d(
+                    attn_softmaxed,  # (1, 1, seq_len_q, seq_len_k)
+                    output_size=(max_res, max_res)
+                )  # -> (1, 1, max_res, max_res)
+                
+                attn_map = attn_down[0, 0]  # (max_res, max_res)
+                
                 current_skip_list = skip_list[b, h][None, None, ...]
                 perecentage = self.calc_percentage(current_skip_list)
 
@@ -394,12 +419,16 @@ class LiteAttention:
                     # print(row_skip_list.shape)
                     l_row = row_skip_list[0]
                     # end0, start1, end1, start2, ...
-                    width_ranges = (row_skip_list[1 : l_row + 1] + 1) * grid_width
+                    # width_ranges = (row_skip_list[1 : l_row + 1] + 1) * grid_width
+                    width_ranges = (row_skip_list[1 : l_row + 1] + step) * grid_width
                     # height
                     row_height = i * grid_height
 
                     width_ranges = width_ranges.view(-1, 2).cpu()
-                    for end, start in width_ranges:
+                    # for end, start in width_ranges:
+                    for r1, r2 in width_ranges:
+                        start = min(r1, r2)
+                        end = max(r1, r2)
                         # rect = plt.Rectangle((start, row_height), end + grid_width - start, grid_height, facecolor='white', edgecolor='none', linewidth=0.4, alpha=0.3)
                         rect = plt.Rectangle((start, row_height), end - start, grid_height, facecolor='white', edgecolor='none', linewidth=0.4, alpha=0.3)
                         plt.gca().add_patch(rect)
