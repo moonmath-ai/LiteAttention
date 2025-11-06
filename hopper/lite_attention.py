@@ -303,10 +303,10 @@ class SeqParallelLiteAttention:
         self.set_threshold(threshold)
 
     def __call__(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, split_idx: int,
-                 scale: Optional[float] = None, return_softmax_lse: bool = False) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+                 scale: Optional[float] = None, return_softmax_lse: bool = False, must_do_list: list = None) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         assert split_idx < self.num_nodes, "split_idx must be less than num_nodes"
         lite_attention = self.lite_attention[split_idx]
-        return lite_attention(query, key, value, scale, return_softmax_lse)
+        return lite_attention(query, key, value, scale, return_softmax_lse, must_do_list)
 
     def reset_skip_state(self):
         for lite_attention in self.lite_attention:
