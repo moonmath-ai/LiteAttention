@@ -35,7 +35,7 @@ class LiteAttention:
         >>> print(f"Skipped {lite_attn.get_skip_percentage():.2%} computations")
     """
     
-    def __init__(self, enable_skipping: bool = True, threshold: float = -10.0, max_batch_size: int = 4, reverse_skip_list: bool = True):
+    def __init__(self, enable_skipping: bool = True, threshold: float = -10.0, max_batch_size: int = 2, reverse_skip_list: bool = True):
         # Internal skip list management
         self._skip_list = None
         self._phase = 0
@@ -450,7 +450,7 @@ class LiteAttention:
         return self._skip_list[1 - self._phase, :self._last_batch_size]
 
 class SeqParallelLiteAttention:
-    def __init__(self, num_nodes: int, enable_skipping: bool = True, threshold: float = -10.0, max_batch_size: int = 4):
+    def __init__(self, num_nodes: int, enable_skipping: bool = True, threshold: float = -10.0, max_batch_size: int = 2):
 
         self.num_nodes = num_nodes
         self.lite_attention = [LiteAttention(enable_skipping, threshold, max_batch_size) for _ in range(num_nodes)]
