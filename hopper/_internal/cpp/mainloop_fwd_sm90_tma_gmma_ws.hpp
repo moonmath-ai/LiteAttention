@@ -1462,13 +1462,15 @@ namespace flash
                     flash::gemm</*zero_init=*/false, /*wg_wait=*/0>(tiled_mma_qv, tSrQv, tSrV(_, _, _, smem_pipe_read.index()), tSrS);
                 }
                 scoremod_premask_fn(tSrS);
-                mask.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS, m_block, n_block);
+                // mask.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS, m_block, n_block);
+                mask.template apply<(!Phase || !Is_skipable) /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS, m_block, n_block);
 
                 // Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
                 Tensor scores_scale = [&]
                 {
                     if constexpr (Is_skipable){
-                        return softmax.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, /*Is_first=*/true, true>(
+                        // return softmax.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, /*Is_first=*/true, true>(
+                        return softmax.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, /*Is_first=*/true, !Phase>(
                             tSrS, params.qk_skip_mask_args.thr, skip_reader, m_block
                         );
                     }
@@ -1478,7 +1480,8 @@ namespace flash
                 }();
                 // Don't need to store scales to send to WG1 (in the case of LargeHeadDimV) since it's 1.f
 
-                softmax.template online_softmax</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
+                // softmax.template online_softmax</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
+                softmax.template online_softmax</*Is_first=*/true, /*Check_inf=*/(!Phase || !Is_skipable)>>(tSrS);
                 if constexpr (Is_FP8 && !V_colmajor)
                 {
                     flash::permute_Cregs_fp8(tSrS);
@@ -1618,6 +1621,16 @@ namespace flash
                     while(skip_reader.has_more(n_block)){
                         n_block = fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/, skip_reader);
                     }
+                }
+                
+                // padding for the last n_block
+                if constexpr (Is_skipable && Phase){
+                    // TODO: implement padding for the last n_block
+                    // mask.template apply<(!Phase || !Is_skipable) /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS, m_block, n_block);
+                    auto padding_mask_fn = [&](auto &tSrS, int n_block){
+                        mask.template apply<(!Phase || !Is_skipable) /*Seqlenk_mask*/, false /*Causal_mask*/, false /*Is_local*/>(tSrS, m_block, n_block);
+                    };
+                    n_block = fwd_step(n_block, padding_mask_fn, cute::true_type{} /*check_inf*/, skip_reader);
                 }
 
                 // Separate masking iterations on the left for local attention
