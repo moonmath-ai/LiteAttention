@@ -1481,7 +1481,7 @@ namespace flash
                 // Don't need to store scales to send to WG1 (in the case of LargeHeadDimV) since it's 1.f
 
                 // softmax.template online_softmax</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
-                softmax.template online_softmax</*Is_first=*/true, /*Check_inf=*/(!Phase || !Is_skipable)>>(tSrS);
+                softmax.template online_softmax</*Is_first=*/true, /*Check_inf=*/(!Phase || !Is_skipable)>(tSrS);
                 if constexpr (Is_FP8 && !V_colmajor)
                 {
                     flash::permute_Cregs_fp8(tSrS);
