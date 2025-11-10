@@ -111,7 +111,7 @@ class LiteAttention:
                 return 128, 128
 
     @staticmethod
-    def init_skip_list(batch, seq_len, heads, head_dim, v_colmajor, dtype, device) -> torch.Tensor:
+    def init_skip_list(batch, seq_len, heads, head_dim, v_colmajor, dtype, device, must_skip_list) -> torch.Tensor:
         """Initialize skip list tensors based on query shape."""
 
         # the number of bytes needed to represent dtype (size(dtype) if it where C code)
@@ -122,23 +122,47 @@ class LiteAttention:
         ktiles = LiteAttention.ceil_div(seq_len, kTileN)
         
         skip_list = torch.zeros(2, batch, heads, qtiles, ktiles + 1, dtype=torch.int32, device=device)
-        # skip_list[:, :, :, :, 2] = ktiles
-        skip_list[:, :, :, :, 1] = ktiles - 1
-        skip_list[:, :, :, :, 0] = 2  # First element is the length of skip list
+        
+        if must_skip_list is not None:
+
+            k_tile_size = kTileN
+            # from sequence indices to block indices:
+            for i in range(1,must_skip_list[0]+1):
+                if i % 2 == 1:
+                    must_skip_list[i] = (must_skip_list[i] + k_tile_size - 1) // k_tile_size  # round up end indices
+                else:
+                    must_skip_list[i] = must_skip_list[i] // k_tile_size  # round down start indices
+
+            # convert from skip-ranges to do-ranges:
+            must_skip_list.insert(0, ktiles - 1)
+            must_skip_list.append(0)
+            
+            must_skip_list.insert(0,len(must_skip_list)) # append the list length at the start
+
+            print("must_skip_list", must_skip_list)
+
+            values = torch.tensor(must_skip_list, dtype=torch.int32, device=device)
+            skip_list[:, :, :, :, :len(must_skip_list)] = values
+        
+        else:
+
+            # skip_list[:, :, :, :, 2] = ktiles
+            skip_list[:, :, :, :, 1] = ktiles - 1
+            skip_list[:, :, :, :, 0] = 2  # First element is the length of skip list
         
         return skip_list
 
-    def _init_skip_list(self, query: torch.Tensor, value: torch.Tensor) -> torch.Tensor:
+    def _init_skip_list(self, query: torch.Tensor, value: torch.Tensor, must_skip_list: list = None) -> torch.Tensor:
         """Initialize skip list tensors based on query shape."""
         batch, seq_len, heads, head_dim = query.shape
         assert batch <= self.max_batch_size, "batch size must be less than or equal to max_batch_size (modify max_batch_size in LiteAttention constructor)"
         v_colmajor = value.shape[-3] == head_dim
         dtype = query.dtype
         device = query.device
-        return LiteAttention.init_skip_list(self.max_batch_size, seq_len, heads, head_dim, v_colmajor, dtype, device)
+        return LiteAttention.init_skip_list(self.max_batch_size, seq_len, heads, head_dim, v_colmajor, dtype, device, must_skip_list)
     
     
-    def _get_read_write_lists(self, query: torch.Tensor, value: torch.Tensor) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+    def _get_read_write_lists(self, query: torch.Tensor, value: torch.Tensor, must_skip_list: list = None) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
         """Get the current read and write lists for this attention step."""
         if not self.enable_skipping:
             return None, None
@@ -162,7 +186,7 @@ class LiteAttention:
             self._last_num_heads != current_num_heads
             ):
 
-            self._skip_list = self._init_skip_list(query, value)
+            self._skip_list = self._init_skip_list(query, value, must_skip_list)
             self._phase = 0
 
             self._last_seq_len = current_seq_len
@@ -218,7 +242,7 @@ class LiteAttention:
         return expanded
     
     def __call__(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, 
-                 scale: Optional[float] = None, return_softmax_lse: bool = False, must_do_list: list = None) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+                 scale: Optional[float] = None, return_softmax_lse: bool = False, must_do_list: list = None, must_skip_list: list = None) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """
         Perform flash attention 3 with optional skip list optimization.
         
@@ -232,7 +256,7 @@ class LiteAttention:
             torch.Tensor: Attention output of shape (batch, seq_len, heads * head_dim)
         """
         # Get read and write lists (internal mask management)
-        read_list, write_list = self._get_read_write_lists(query, value)
+        read_list, write_list = self._get_read_write_lists(query, value, must_skip_list)
 
         # handle must-do list - expand the 1d list to a list per head per batch per qi
         if must_do_list is not None:
