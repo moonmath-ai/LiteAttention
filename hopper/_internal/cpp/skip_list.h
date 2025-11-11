@@ -10,6 +10,28 @@ namespace flash
     template <const int BufferSize>
     struct SkipListStorage
     {
+
+        // alignas(16) std::conditional_t<CollectiveMainloop::Is_skipable,
+        //                    int[CollectiveMainloop::kStages],
+        //                    cute::array<int, 0>> curr_n_block;
+        // int curr_n_block[NumMmaWarpGroups][CollectiveMainloop::kStages];
+        // int skip_tests[NumMmaWarpGroups][CollectiveMainloop::kStages][4];
+        // int skip_tests[4];
+        // int skip_tests[CollectiveMainloop::kStages][NumMmaWarpGroups][4];
+        // producer
+        // K0 K1 V0 K2 V1 K3 V2 ... only when the producer accuired V2 we are guaranteed that the skip result of QK0 is ready.
+        // consumer
+        // QK0 -> skip0 -> save0 shared -> PV0 -> release V0
+        // QK2 -> skip2 -> save2 shared -> PV2 -> release V2
+        //
+        // // meaning we need at most kStages + 1 of skip tests arrays
+        // int skip_tests[CollectiveMainloop::kStages*2][4];
+        // // the first index is the n_block and the second is the stop condition
+        // int current_n_block[CollectiveMainloop::kStages*2][2];
+
+        // static constexpr int BufferSize = CollectiveMainloop::kStages * 2;
+        // these arrays should reside in shared memory.
+
         int n_blocks_buffer[BufferSize];
         int end_range_buffer[BufferSize];
         int skip_tests[BufferSize][4];
@@ -106,12 +128,7 @@ namespace flash
             if constexpr (!ReverseSkipList) {
                 return flash::warp_uniform(list_ptr[skip_list_len] + 1);
             }else{
-                int temp = list_ptr[1];
-                if constexpr (Phase){
-                    temp--;
-                }
-                // return flash::warp_uniform(list_ptr[1]);
-                return flash::warp_uniform(temp);
+                return flash::warp_uniform(list_ptr[1]);
             }
         }
     };
