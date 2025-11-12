@@ -111,7 +111,7 @@ class LiteAttention:
                 return 128, 128
 
     @staticmethod
-    def init_skip_list(batch, seq_len, heads, head_dim, v_colmajor, dtype, device, must_skip_list) -> torch.Tensor:
+    def init_skip_list(batch, seq_len, heads, head_dim, v_colmajor, dtype, device, must_skip_list = None) -> torch.Tensor:
         """Initialize skip list tensors based on query shape."""
 
         # the number of bytes needed to represent dtype (size(dtype) if it where C code)
@@ -127,7 +127,7 @@ class LiteAttention:
 
             k_tile_size = kTileN
             # from sequence indices to block indices:
-            for i in range(1,must_skip_list[0]+1):
+            for i in range(1, must_skip_list[0] + 1):
                 if i % 2 == 1:
                     must_skip_list[i] = (must_skip_list[i] + k_tile_size - 1) // k_tile_size  # round up end indices
                 else:
