@@ -46,9 +46,11 @@ for head_dim in [32, 64, 96, 128, 192, 256]:
     attn = LiteAttention()
     attn.threshold = float('-inf')
     torch.cuda.synchronize()
+    # output = attn(q, k, v, must_skip_list = [1000,500])
     output = attn(q, k, v)
     torch.cuda.synchronize()
     passed = (attn._skip_list[1] == attn._skip_list[0]).all()
+    # print(attn._skip_list[1])
     print("skip nothing test:", passed)
     
     # Test softmax_lse correctness (with skip optimization disabled)
