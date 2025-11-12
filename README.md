@@ -99,6 +99,12 @@ For example, if we have a sequence of length 100, the must_do_list could look li
 must_do_list = [80, 60, 45, 40, 12, 2]
 ```
 
+The must_skip_list defines ranges that can always be skipped according to the same convention as the must_do_list. For example if:
+```python
+must_skip_list = [80, 40]
+```
+then all the tokens between 80 and 40 can always be skipped.
+
 ### Multi-GPU Usage (Sequence Parallelism)
 
 When using multi-GPU with sequence parallelism, use `SeqParallelLiteAttention`:
