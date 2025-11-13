@@ -7,15 +7,6 @@ namespace flash
 
     using namespace cute;
 
-    // template <const int BufferSize>
-    // struct SkipListStorage
-    // {
-    //     int n_blocks_buffer[BufferSize]; // 4
-    //     int end_range_buffer[BufferSize]; // 4
-    //     int skip_tests[BufferSize][4]; // 16
-    //     int last_n_block[1]; // 4
-    // };
-
     // ============================================================================
     // Helper struct for reading skip lists
     // Encapsulates all the logic for iterating through skip list ranges
@@ -23,7 +14,6 @@ namespace flash
     template <bool ReverseSkipList, bool Phase = true>
     struct SkipListReader
     {
-        // const int *list_ptr;
         const int16_t *list_ptr;
         int skip_list_len;
         int read_idx;
@@ -125,7 +115,6 @@ namespace flash
         // Initialize the writer with calculated offset
         template <typename TileShape_MNK, typename ParamsType>
         __device__
-        // __forceinline__ 
         void init(const ParamsType &params, int bidb, int bidh, int m_block)
         {
             static constexpr int kBlockM = get<0>(TileShape_MNK{});
@@ -144,7 +133,6 @@ namespace flash
 
         // Record a transition in skip state
         __device__
-        // __forceinline__ 
         void record_transition(bool skip, int n_block)
         {
             if (skip != is_skipping)
@@ -157,7 +145,6 @@ namespace flash
 
         // Record the end of a range (force transition to skipping)
         __device__
-        // __forceinline__ 
         void record_range_end(bool skip, int end_idx)
         {
             is_skipping = true;
@@ -170,7 +157,6 @@ namespace flash
 
         // Finalize the skip list by writing the count
         __device__
-        // __forceinline__ 
         void finalize()
         {
             list_ptr[0] = write_idx - 1;
@@ -197,25 +183,22 @@ namespace flash
 
         // Constructor to initialize with shared memory pointers
         __device__
-        // __forceinline__ 
         DelayedSkipListReader(int* n_blocks, int (*skip)[4], int* final_n_block)
             : n_blocks_buffer(n_blocks), 
               skip_tests(skip), last_n_block(final_n_block) {}
 
-        // // Default constructor
-        // __device__ __forceinline__ 
-        // DelayedSkipListReader() = default;
 
         __device__
-        // __forceinline__ 
         int next_n_block()
         {
+            // issue: many uniform instructions!
             index = (index + 1) % BufferSize;
             return flash::warp_uniform(n_blocks_buffer[index]);
+            // index = (index + 1) % BufferSize;
+            // return n_blocks_buffer[index];
         }
 
         __device__
-        // __forceinline__ 
         void update_skip(bool skip, int warp_idx_in_warpgroup){
             // consider: using atomic here
             // atomicAnd(&(skip_tests[index][warp_idx_in_warpgroup]), static_cast<int>(skip));
@@ -223,10 +206,10 @@ namespace flash
         }
 
         __device__
-        // __forceinline__ 
         bool has_more(int n_block)
         {
             return flash::warp_uniform(*last_n_block != n_block);
+            // return *last_n_block != n_block;
         }
 
     };
