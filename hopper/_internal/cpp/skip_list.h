@@ -7,14 +7,14 @@ namespace flash
 
     using namespace cute;
 
-    template <const int BufferSize>
-    struct SkipListStorage
-    {
-        int n_blocks_buffer[BufferSize]; // 4
-        int end_range_buffer[BufferSize]; // 4
-        int skip_tests[BufferSize][4]; // 16
-        int last_n_block[1]; // 4
-    };
+    // template <const int BufferSize>
+    // struct SkipListStorage
+    // {
+    //     int n_blocks_buffer[BufferSize]; // 4
+    //     int end_range_buffer[BufferSize]; // 4
+    //     int skip_tests[BufferSize][4]; // 16
+    //     int last_n_block[1]; // 4
+    // };
 
     // ============================================================================
     // Helper struct for reading skip lists
@@ -218,8 +218,8 @@ namespace flash
         // __forceinline__ 
         void update_skip(bool skip, int warp_idx_in_warpgroup){
             // consider: using atomic here
-            atomicAnd(&(skip_tests[index][warp_idx_in_warpgroup]), static_cast<int>(skip));
-            // skip_tests[index][warp_idx_in_warpgroup] &= static_cast<int>(skip);
+            // atomicAnd(&(skip_tests[index][warp_idx_in_warpgroup]), static_cast<int>(skip));
+            skip_tests[index][warp_idx_in_warpgroup] &= static_cast<int>(skip);
         }
 
         __device__
@@ -386,6 +386,17 @@ namespace flash
 
             writer.finalize();
         }
+    };
+
+    template <const int BufferSize, bool ReverseSkipList, bool Phase>
+    struct SkipListStorage
+    {
+        alignas(16) int n_blocks_buffer[BufferSize]; // 4
+        alignas(16) int end_range_buffer[BufferSize]; // 4
+        alignas(16) int skip_tests[BufferSize][4]; // 16
+        int last_n_block[1]; // 4
+        SkipListReader<ReverseSkipList, Phase> reader;
+        // DelayedSkipListWriter<BufferSize / 2> writer;  // BufferSize = DelayAmount * 2, so DelayAmount = BufferSize / 2
     };
 
 } // namespace flash

@@ -692,7 +692,8 @@ namespace flash
                 }
             }
 
-            SkipListReader<ReverseSkipList, Phase> skip_reader;
+            // SkipListReader<ReverseSkipList, Phase> skip_reader;
+            auto &skip_reader = shared_storage.skip_list_storage.reader;
             if constexpr (Is_skipable)
             {
                 skip_reader.template init<TileShape_MNK>(params, bidb, bidh, m_block);

@@ -132,8 +132,8 @@ namespace flash
         float const softmax_scale_log2; // (log2(e) * 1/sqrt(128)) * q_dequant * k_dequant
         // int const warp_idx_in_warpgroup = (threadIdx.x / 32) % 4;
         int const warp_idx_in_warpgroup = __shfl_sync(0xffffffff, (threadIdx.x / 32) % 4, 0);
-        // bool const is_warp_leader = (threadIdx.x % 32) == 0;
-        bool const is_warp_leader = cute::elect_one_sync();
+        bool const is_warp_leader = (threadIdx.x % 32) == 0;
+        // bool const is_warp_leader = cute::elect_one_sync();
         // int const row_mask;
         // int const local_row_idx;
         int const seqlen_q;
