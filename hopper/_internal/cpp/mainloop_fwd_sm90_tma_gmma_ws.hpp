@@ -1611,16 +1611,21 @@ namespace flash
                 int const n_block_min_before_local_mask = BlockMN_t::get_n_block_min_before_local_mask(
                     seqlen_info, m_block, n_block_min, params.window_size_left,
                     params.attention_chunk_divmod, params.qhead_per_khead_divmod);
-                auto no_mask_fn = [](auto &tSrS, int n_block) {};
+                // auto no_mask_fn = [](auto &tSrS, int n_block) {};
                 if constexpr (!Is_skipable){
+                    auto no_mask_fn = [](auto &tSrS, int n_block) {};
                     #pragma unroll 1
                     for (; n_block >= n_block_min_before_local_mask; --n_block)
                     {
                         fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/, skip_reader);
                     }
                 }else{
+                    auto mask_fn = [&](auto &tSrS, int n_block) {
+                        mask.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS, m_block, n_block); 
+                    };
                     while(skip_reader.has_more(n_block)){
-                        n_block = fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/, skip_reader);
+                        // n_block = fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/, skip_reader);
+                        n_block = fwd_step(n_block, mask_fn, cute::true_type{} /*check_inf*/, skip_reader);
                     }
                 }
 
