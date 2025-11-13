@@ -866,8 +866,11 @@ namespace flash
                 if constexpr (!PagedKVNonTMA)
                 {
                     auto [n_block_idx, bidb_kv_idx] = paged_kv_manager.get_indices_for_K_TMA();
-                    copy(params.tma_load_K.with(*pipeline_k.producer_get_barrier(smem_pipe_write), mcast_mask_kv, TMA::CacheHintSm90::EVICT_LAST),
-                         tKgK_TMA(_, n_block_idx, bidb_kv_idx), tKsK_TMA(_, smem_pipe_write.index()));
+                    copy(
+                        params.tma_load_K.with(*pipeline_k.producer_get_barrier(smem_pipe_write), mcast_mask_kv, TMA::CacheHintSm90::EVICT_LAST), // barrier
+                        tKgK_TMA(_, n_block_idx, bidb_kv_idx), // src (TMA, k, batch)
+                        tKsK_TMA(_, smem_pipe_write.index()) // dst (TMA, PIPE)
+                        );
                 }
                 else
                 {
@@ -890,6 +893,7 @@ namespace flash
                 }
                 if constexpr (!PagedKVNonTMA)
                 {
+                    // already pad with zeros when out of bounds
                     auto [n_block_idx, bidb_kv_idx] = paged_kv_manager.get_indices_for_V_TMA();
                     copy(params.tma_load_V.with(*pipeline_v_load.producer_get_barrier(smem_pipe_write), mcast_mask_kv, TMA::CacheHintSm90::EVICT_LAST),
                          tVgVt_TMA(_, n_block_idx, bidb_kv_idx), tVsVt_TMA(_, smem_pipe_write.index()));
