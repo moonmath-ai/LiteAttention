@@ -1681,7 +1681,7 @@ namespace flash
 
                 // clear(tOrO);
 
-                auto fwd_step = [&](int const n_block, auto mask_fn, auto is_first_iter_type, auto check_inf_type)
+                auto fwd_step = [&](int const n_block, auto mask_fn, auto is_first_iter_type, auto check_inf_type, auto &skip_reader) -> int
                 {
                     static constexpr bool Is_first_iter = decltype(is_first_iter_type)::value;
                     static constexpr bool Check_inf = decltype(check_inf_type)::value;
@@ -1693,6 +1693,11 @@ namespace flash
 
                     Tensor tSrS = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
                     consumer_wait(pipeline_k, smem_pipe_read);
+                    
+                    int new_n_block = n_block;
+                    if constexpr (Is_skipable){
+                        new_n_block = skip_reader.next_n_block();
+                    }
 
                     flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS);
 
@@ -1717,7 +1722,7 @@ namespace flash
                     }
 
                     scoremod_premask_fn(tSrS);
-                    mask_fn(tSrS, n_block);
+                    mask_fn(tSrS, new_n_block);
                     // Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
                     Tensor scores_scale = [&]
                     {
@@ -1784,13 +1789,19 @@ namespace flash
 
                     warpgroup_wait<0>();
                     pipeline_v.consumer_release(smem_pipe_read); // release V
+                    
+                    return new_n_block;
                 };
 
                 auto first_iter_mask_fn = [&](auto &tSrS, int n_block)
                 { mask.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS, m_block, n_block); };
-                // fwd_step(n_block, first_iter_mask_fn, cute::true_type{} /*is_first_iter*/, cute::true_type{} /*check_inf*/);
-                bool skip = fwd_step(n_block, first_iter_mask_fn, cute::true_type{} /*is_first_iter*/, cute::true_type{} /*check_inf*/);
-                if constexpr (!Is_skipable) --n_block;
+                // fwd_step(n_block, first_iter_mask_fn, cute::true_type{} /*is_first_iter*/, cute::true_type{} /*check_inf*/, skip_reader);
+                if constexpr (Is_skipable){
+                    n_block = fwd_step(n_block, first_iter_mask_fn, cute::true_type{} /*is_first_iter*/, cute::true_type{} /*check_inf*/, skip_reader);
+                }else{
+                    fwd_step(n_block, first_iter_mask_fn, cute::true_type{} /*is_first_iter*/, cute::true_type{} /*check_inf*/, skip_reader);
+                    --n_block;
+                }
                 if constexpr ((Is_causal || Is_local) && !Is_skipable)
                 { // Separate iterations with causal or local masking
                     auto mask_fn = [&](auto &tSrS, int n_block)
@@ -1801,22 +1812,26 @@ namespace flash
                     #pragma unroll 1
                     for (; n_block >= n_block_min_causal_local_mask; --n_block)
                     {
-                        fwd_step(n_block, mask_fn, cute::false_type{} /*is_first_iter*/, cute::true_type{} /*check_inf*/);
+                        fwd_step(n_block, mask_fn, cute::false_type{} /*is_first_iter*/, cute::true_type{} /*check_inf*/, skip_reader);
                     }
                 }
                 int const n_block_min_before_local_mask = BlockMN_t::get_n_block_min_before_local_mask(
                     seqlen_info, m_block, n_block_min, params.window_size_left,
                     params.attention_chunk_divmod, params.qhead_per_khead_divmod);
-                auto no_mask_fn = [](auto &tSrS, int n_block) {};
+                // auto no_mask_fn = [](auto &tSrS, int n_block) {};
                 if constexpr (!Is_skipable){
+                    auto no_mask_fn = [](auto &tSrS, int n_block) {};
                     #pragma unroll 1
                     for (; n_block >= n_block_min_before_local_mask; --n_block)
                     {
-                        fwd_step(n_block, no_mask_fn, cute::false_type{} /*is_first_iter*/, cute::false_type{} /*check_inf*/);
+                        fwd_step(n_block, no_mask_fn, cute::false_type{} /*is_first_iter*/, cute::false_type{} /*check_inf*/, skip_reader);
                     }
                 }else{
-                    while(skip_reader.has_next()){
-                        fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/, skip_reader);
+                    auto mask_fn = [&](auto &tSrS, int n_block) {
+                        mask.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS, m_block, n_block); 
+                    };
+                    while(skip_reader.has_more(n_block)){
+                        n_block = fwd_step(n_block, mask_fn, cute::false_type{} /*is_first_iter*/, cute::true_type{} /*check_inf*/, skip_reader);
                     }
                 }
 
@@ -1828,7 +1843,7 @@ namespace flash
                     #pragma unroll 1
                     for (; n_block >= n_block_min; --n_block)
                     {
-                        fwd_step(n_block, local_mask_fn, cute::false_type{} /*is_first_iter*/, cute::bool_constant<Is_local>{} /*check_inf*/);
+                        fwd_step(n_block, local_mask_fn, cute::false_type{} /*is_first_iter*/, cute::bool_constant<Is_local>{} /*check_inf*/, skip_reader);
                     }
                 }
                 warp_scheduler_barrier_arrive();
