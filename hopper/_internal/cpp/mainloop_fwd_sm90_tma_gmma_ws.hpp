@@ -1509,7 +1509,7 @@ namespace flash
                 // tiled_mma_pv.accumulate_ = GMMA::ScaleOut::Zero;
 
                 // Each step does gemm0 for iter n_block, gemm1 for iter n_block + 1, and softmax for iter n_block.
-                auto fwd_step = [&](const int n_block, auto mask_fn, auto check_inf_type, auto &skip_reader) -> int
+                auto fwd_step = [&](const int n_block, auto mask_fn, auto check_inf_type, auto &skip_reader) -> bool
                 {
                     static constexpr bool Check_inf = decltype(check_inf_type)::value;
                     PipelineState smem_pipe_read_v(smem_pipe_read.index(), smem_pipe_read.phase(), smem_pipe_read.count());
@@ -1519,13 +1519,23 @@ namespace flash
                     if(!UseSchedulerBarrier || warp_group_idx == 0){
                         consumer_wait(pipeline_k, smem_pipe_read);
                     }
+
                     warp_scheduler_barrier_sync();
-                    int new_n_block = n_block;
+                    // int new_n_block = n_block;
+                    int new_n_block;
                     if constexpr (Is_skipable){
                         // we put this after the warp_scheduler_barrier_sync so wg1 woudn't
                         // read the next n_block too early since it's not waiting for pipeline_k
                         new_n_block = skip_reader.next_n_block();
+                    }else{
+                        new_n_block = n_block;
                     }
+
+                    bool has_more = true;
+                    if constexpr (Is_skipable){
+                        has_more = skip_reader.has_more(new_n_block);
+                    }
+
                     flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS);
                     if constexpr (RescaleOBeforeGemm)
                     {
@@ -1591,7 +1601,8 @@ namespace flash
                     {
                         arrive_on_P_write_barrier();
                     }
-                    return new_n_block;
+                    // return new_n_block;
+                    return has_more;
                 };
 
                 if constexpr ((Is_causal || Is_local) && !Is_skipable)
@@ -1623,9 +1634,12 @@ namespace flash
                     auto mask_fn = [&](auto &tSrS, int n_block) {
                         mask.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS, m_block, n_block); 
                     };
-                    while(skip_reader.has_more(n_block)){
+                    bool has_more_outer = skip_reader.has_more(n_block);
+                    // while(skip_reader.has_more(n_block)){
+                    while(has_more_outer){
                         // n_block = fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/, skip_reader);
-                        n_block = fwd_step(n_block, mask_fn, cute::true_type{} /*check_inf*/, skip_reader);
+                        // n_block = fwd_step(n_block, mask_fn, cute::true_type{} /*check_inf*/, skip_reader);
+                        has_more_outer = fwd_step(0, mask_fn, cute::true_type{} /*check_inf*/, skip_reader);
                     }
                 }
 
