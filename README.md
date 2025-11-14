@@ -328,8 +328,8 @@ If you find LiteAttention useful or relevant to your research, please cite our p
 
 ```bibtex
 ```
-
-## 🙏 Acknowledgements -->
+-->
+## 🙏 Acknowledgements
 
 LiteAttention is built on top of [FlashAttention3](https://github.com/Dao-AILab/flash-attention) by Tri Dao and contributors. We thank the FlashAttention team for their foundational work on efficient attention mechanisms.
 
