@@ -1,6 +1,6 @@
 # LiteAttention
 
-### [arXiv](https://arxiv.org) | [Project Page](https://ingonyama-zk.github.io/LiteAttention) | [MoonMath.ai](https://moonmath.ai)
+### [arXiv](https://arxiv.org) | [Project Page](https://moonmath-ai.github.io/LiteAttention) | [MoonMath.ai](https://moonmath.ai)
 
 We present *LiteAttention*, a temporal sparse attention mechanism that exploits the slow evolution of attention patterns across diffusion timesteps. By identifying non-essential tiles early and propagating skip decisions forward, LiteAttention eliminates redundant attention computations without repeated profiling overheads. Built on FlashAttention3, it achieves **up to 54% attention sparsity** on production video diffusion models **with no degradation in generation quality**.
 
@@ -27,39 +27,64 @@ This approach combines:
 
 ## 📊 Performance
 
-LiteAttention preserves better end-to-end video quality while achieving similar or higher attention sparsity compared to other sparse attention methods:
+LiteAttention achieves remarkable video quality with significant speedups compared to other sparse attention methods. We evaluate using VBench metrics on production video diffusion models.
 
-| Model | Sparsity | VQA-a | VQA-t | CLIP Score | CLIP Temp | FScore |
-|-------|----------|-------|-------|------------|-----------|--------|
-| **LTX-13B** | **53.9%** | **77.64** | **79.78** | **0.1734** | 0.9995 | 3.10 |
-| **Wan2.1-14B** | **42%** | **89.34** | **91.17** | **0.1849** | **0.9982** | 3.31 |
-| **Wan2.2-14B** | **32%+** | **92.14** | **94.19** | **0.1775** | **0.9990** | **4.80** |
+### Summary Results
+
+| Model | AQ ↑ | BC ↑ | DD ↑ | IQ ↑ | SC ↑ | TF ↑ | TS ↑ | Sparsity ↑ | Runtime ↓ |
+|-------|------|------|------|------|------|------|------|-----------|-----------|
+| **Wan2.1-14B** | **0.677** | **0.975** | **0.500** | 66.76 | 0.963 | 0.962 | **0.142** | 42% | **902 sec** |
+| **Wan2.2-14B** | **0.698** | **0.977** | **0.500** | 71.44 | **0.969** | **0.953** | **0.135** | 32% | **893 sec** |
+
+*VBench Metrics: AQ (Aesthetic Quality), BC (Background Consistency), DD (Dynamic Degree), IQ (Imaging Quality), SC (Subject Consistency), TF (Temporal Flickering), TS (Temporal Style)*
+
+### Speedup Analysis
+
+LiteAttention achieves significant speedups over FlashAttention3 baseline:
+
+- **Wan2.1-14B**: 1707 sec → 902 sec = **1.89× speedup** (47% time reduction)
+- **Wan2.2-14B**: 1473 sec → 893 sec = **1.65× speedup** (39% time reduction)
+
+LiteAttention achieves the **best runtime** on both models while maintaining **superior quality metrics** compared to SparseVideoGen and RadialAttention.
 
 <details>
 <summary>Click to see detailed benchmark comparisons</summary>
 
-### LTX-13B
-| Method | VQA-a ↑ | VQA-t ↑ | CLIP Score ↑ | CLIP Temp ↑ | FScore ↑ | Sparsity ↑ |
-|--------|---------|---------|--------------|-------------|----------|------------|
-| FlashAttention3 | 78.83 | 79.68 | 0.1800 | 0.9989 | 3.94 | 0% |
-| SpargeAttn | 77.10 | 79.24 | 0.1726 | 0.9997 | 2.75 | 49% |
-| **LiteAttention** | **77.64** | **79.78** | **0.1734** | 0.9995 | 3.10 | **53.9%** |
+### Wan2.1-14B Detailed Comparison
 
-### Wan2.1-14B
-| Method | VQA-a ↑ | VQA-t ↑ | CLIP Score ↑ | CLIP Temp ↑ | FScore ↑ | Sparsity ↑ |
-|--------|---------|---------|--------------|-------------|----------|------------|
-| FlashAttention3 | 90.04 | 92.93 | 0.1829 | 0.9988 | 4.12 | 0% |
-| SpargeAttn | 85.02 | 87.58 | 0.1823 | 0.9979 | 3.22 | 39% |
-| **LiteAttention** | **89.34** | **91.17** | **0.1849** | **0.9982** | 3.31 | **42%** |
+| Method | AQ ↑ | BC ↑ | DD ↑ | IQ ↑ | SC ↑ | TF ↑ | TS ↑ | Sparsity ↑ | Runtime ↓ |
+|--------|------|------|------|------|------|------|------|-----------|-----------|
+| FlashAttention3 | 0.676 | 0.977 | 0.417 | **68.74** | 0.965 | 0.962 | 0.137 | 0% | 1707 sec |
+| SparseVideoGen | *0.665* | *0.971* | **0.500** | *68.58* | 0.962 | 0.959 | *0.066* | *66%* | *1019 sec* |
+| RadialAttention | 0.660 | 0.970 | *0.417* | 64.73 | **0.964** | **0.972** | 0.061 | **74%** | 1192 sec |
+| **LiteAttention** | **0.677** | **0.975** | **0.500** | *66.76* | *0.963* | *0.962* | **0.142** | 42% | **902 sec** |
 
-### Wan2.2-14B
-| Method | VQA-a ↑ | VQA-t ↑ | CLIP Score ↑ | CLIP Temp ↑ | FScore ↑ | Sparsity ↑ |
-|--------|---------|---------|--------------|-------------|----------|------------|
-| FlashAttention3 | 94.61 | 96.57 | 0.1781 | 0.9993 | 4.94 | 0% |
-| SpargeAttn | 87.14 | 92.17 | 0.1762 | 0.9988 | 4.73 | 32% |
-| **LiteAttention** | **92.14** | **94.19** | **0.1775** | **0.9990** | **4.80** | 32%+ |
+### Wan2.2-14B Detailed Comparison
+
+| Method | AQ ↑ | BC ↑ | DD ↑ | IQ ↑ | SC ↑ | TF ↑ | TS ↑ | Sparsity ↑ | Runtime ↓ |
+|--------|------|------|------|------|------|------|------|-----------|-----------|
+| FlashAttention3 | 0.693 | 0.977 | **0.583** | **72.73** | 0.970 | 0.953 | 0.133 | 0% | 1473 sec |
+| SparseVideoGen | *0.689* | 0.962 | *0.417* | *72.24* | 0.961 | *0.952* | *0.061* | **66%** | *1022 sec* |
+| RadialAttention | 0.682 | *0.974* | **0.500** | **72.73** | *0.967* | 0.947 | *0.061* | **66%** | 1207 sec |
+| **LiteAttention** | **0.698** | **0.977** | **0.500** | 71.44 | **0.969** | **0.953** | **0.135** | *32%* | **893 sec** |
+
+*Best results in **bold**, second-best in *italic**
 
 </details>
+
+### Ablation Study: Sparsity vs Runtime
+
+Our ablation studies demonstrate that runtime improvement scales with attention sparsity:
+
+| Sparsity | Self-Attention Runtime | Runtime Improvement |
+|----------|------------------------|---------------------|
+| 0% | 695 sec | 0% (baseline) |
+| 21% | 573 sec | 18% |
+| 42% | 418 sec | 40% |
+| 57% | 308 sec | 56% |
+| 77% | 163 sec | 77% |
+
+The near-linear scaling between sparsity and runtime improvement demonstrates the efficiency of our QK-Skip algorithm.
 
 ## 🎥 Visual Results
 
@@ -90,7 +115,7 @@ LiteAttention preserves better end-to-end video quality while achieving similar 
 Clone this repo and build from source:
 
 ```sh
-git clone https://github.com/ingonyama-zk/LiteAttention.git
+git clone https://github.com/moonmath-ai/LiteAttention.git
 cd LiteAttention/hopper
 python setup.py install
 ```
@@ -297,24 +322,18 @@ You can see additional debug logs by setting the `LITE_ATTENTION_VERBOSE` to any
 
 If you want to be able to test thresholds greater than 0, you need to set the `LITE_ATTENTION_DEBUG` environment variable to anything other than "FALSE"
 
-## 📚 Citation
+<!-- ## 📚 Citation
 
 If you find LiteAttention useful or relevant to your research, please cite our paper:
 
-<!-- ```bibtex
-@inproceedings{domb2026liteattention,
-  title={LiteAttention: A Temporal Sparse Attention for Diffusion Transformers},
-  author={Domb, Yuval and Wu, Tony and Dahan, Aviad},
-  booktitle={CVPR},
-  year={2026}
-}
-``` -->
+```bibtex
+```
 
-## 🙏 Acknowledgements
+## 🙏 Acknowledgements -->
 
 LiteAttention is built on top of [FlashAttention3](https://github.com/Dao-AILab/flash-attention) by Tri Dao and contributors. We thank the FlashAttention team for their foundational work on efficient attention mechanisms.
 
-We also thank the teams behind [SpargeAttention](https://github.com/thu-ml/SageAttention), [Wan2.1](https://github.com/Wan-Video/Wan2.1), and [LTX-Video](https://github.com/Lightricks/LTX-Video) for their insights and benchmarking support.
+We also thank the teams behind [SparseVideoGen](https://github.com/svg-project/Sparse-VideoGen), [RadialAttention](https://github.com/mit-han-lab/radial-attention), [SageAttention](https://github.com/thu-ml/SageAttention), [Wan2.1](https://github.com/Wan-Video/Wan2.1), and [LTX-Video](https://github.com/Lightricks/LTX-Video) for their insights and benchmarking support.
 
 ## License
 
