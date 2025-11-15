@@ -19,9 +19,9 @@ jobs:
     runs-on: [self-hosted, multigpu]
     strategy:
       matrix:
-        target: [LTX]
+        target: [ltx]
         include:
-          - target: LTX
+          - target: ltx
             repo_url: test-org-139/LTX-Video.git # TODO: change to moonmath-ai
             repo_name: LTX-Video
             branch: ci-lite-attention
