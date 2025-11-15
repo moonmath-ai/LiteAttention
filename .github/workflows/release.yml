@@ -25,7 +25,7 @@ jobs:
             repo_url: https://github.com/test-org-139/LTX-Video.git
             repo_name: LTX-Video
             branch: ci-lite-attention
-            prompts_branch: ltx
+            prompts_branch: ltx-short
             prompts_repo: https://github.com/moonmath-ai/ci-prompts-list.git
     
     steps:
