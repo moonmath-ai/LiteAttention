@@ -22,11 +22,11 @@ jobs:
         target: [LTX]
         include:
           - target: LTX
-            repo_url: https://github.com/test-org-139/LTX-Video.git
+            repo_url: test-org-139/LTX-Video.git # TODO: change to moonmath-ai
             repo_name: LTX-Video
             branch: ci-lite-attention
             prompts_branch: ltx-short
-            prompts_repo: https://github.com/moonmath-ai/ci-prompts-list.git
+            prompts_repo: test-org-139/ci-prompts-list.git # TODO: change to moonmath-ai
     
     steps:
       - name: Create GitHub App token
