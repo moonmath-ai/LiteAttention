@@ -1,0 +1,151 @@
+name: Manual Release Draft
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: 'Release version (e.g., v1.0.0)'
+        required: true
+        type: string
+      notes:
+        description: 'Release notes'
+        required: false
+        type: string
+        default: ''
+
+jobs:
+  generate_videos:
+    name: Generate videos for ${{ matrix.target }}
+    runs-on: [self-hosted, multigpu]
+    strategy:
+      matrix:
+        target: [LTX]
+        include:
+          - target: LTX
+            repo_url: https://github.com/test-org-139/LTX-Video.git
+            repo_name: LTX-Video
+            branch: ci-lite-attention
+            prompts_branch: ltx
+            prompts_repo: https://github.com/moonmath-ai/ci-prompts-list.git
+    
+    steps:
+      - name: Create GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.CI_PULL_ID }}
+          private-key: ${{ secrets.CI_PULL_SECRET }}
+          owner: test-org-139 # TODO: change to moonmath-ai
+
+      - name: Checkout LiteAttention Repository
+        uses: actions/checkout@v4
+        with:
+          path: LiteAttention
+      
+      - name: Checkout ${{ matrix.target }} Repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ matrix.repo_url }}
+          ref: ${{ matrix.branch || 'main' }}
+          path: ${{ matrix.repo_name }}
+          submodules: 'recursive'
+          lfs: true
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+          persist-credentials: false
+      
+      - name: Checkout prompts list
+        uses: actions/checkout@v4
+        with:
+          path: ${{ matrix.repo_name }}-prompts
+          repository: ${{ matrix.prompts_repo }}
+          ref: ${{ matrix.prompts_branch }}
+          lfs: true
+          token: ${{ steps.app-token.outputs.token }}
+          persist-credentials: false
+      
+      - name: Build Docker image
+        working-directory: ${{ matrix.repo_name }}
+        run: |
+          docker build --build-context lite=$(pwd)/../LiteAttention -t ${{ matrix.target }}:${{github.sha}} .
+      
+      - name: Prepare paths and directories
+        id: prepare-paths
+        working-directory: ${{ matrix.repo_name }}
+        run: |
+          INPUT_PATH=$(pwd)/../${{ matrix.repo_name }}-prompts
+          OUTPUT_PATH=$HOME/output/${{ matrix.target }}-${{github.sha}}
+          CACHE_DIR=$HOME/.cache/
+          
+          mkdir -p $HOME/output/
+          mkdir -p $OUTPUT_PATH
+          mkdir -p $CACHE_DIR
+          
+          echo "INPUT_PATH=$INPUT_PATH" >> $GITHUB_ENV
+          echo "OUTPUT_PATH=$OUTPUT_PATH" >> $GITHUB_ENV
+          echo "CACHE_DIR=$CACHE_DIR" >> $GITHUB_ENV
+      
+      - name: Run Video Generation in Docker container
+        working-directory: ${{ matrix.repo_name }}
+        run: |
+          docker run --rm --gpus all \
+            -v $INPUT_PATH:/input \
+            -v $OUTPUT_PATH:/output \
+            -v $CACHE_DIR:/root/.cache \
+            ${{ matrix.target }}:${{github.sha }} \
+            python3 inference_ci.py \
+              --input_file /input/prompts.jsonl \
+              --output_path /output \
+              --videos_per_prompt ${{ variables.VIDEOS_PER_PROMPT || 1 }}
+      
+      - name: Upload generated videos
+        uses: actions/upload-artifact@v4
+        with:
+          name: videos-${{ matrix.target }}-${{ github.sha }}
+          path: ${{ env.OUTPUT_PATH }}
+          retention-days: 30
+
+  create_draft_release:
+    name: Create Draft Release with Videos
+    needs: generate_videos
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+      
+      - name: Download All Video Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-videos
+          pattern: videos-*
+      
+      - name: Display Downloaded Videos
+        run: |
+          echo "=== Downloaded Video Artifacts ==="
+          find release-videos -type f
+      
+      - name: Create Draft Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ inputs.release_version }}
+          name: Release ${{ inputs.release_version }}
+          body: |
+            # Release ${{ inputs.release_version }}
+            
+            ${{ inputs.notes }}
+            
+            ## Build Information
+            
+            This release includes generated videos for:
+            - LTX
+            
+            Generated videos are attached as release assets.
+          draft: true
+          prerelease: false
+          files: |
+            release-videos/**/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
