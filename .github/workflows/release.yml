@@ -69,8 +69,7 @@ jobs:
         run: |
           docker build --build-context lite=$(pwd)/../LiteAttention -t ${{ matrix.target }}:${{github.sha}} .
       
-      - name: Prepare paths and directories
-        id: prepare-paths
+      - name: Run Video Generation in Docker container
         working-directory: ${{ matrix.repo_name }}
         run: |
           INPUT_PATH=$(pwd)/../${{ matrix.repo_name }}-prompts
@@ -81,13 +80,6 @@ jobs:
           mkdir -p $OUTPUT_PATH
           mkdir -p $CACHE_DIR
           
-          echo "INPUT_PATH=$INPUT_PATH" >> $GITHUB_ENV
-          echo "OUTPUT_PATH=$OUTPUT_PATH" >> $GITHUB_ENV
-          echo "CACHE_DIR=$CACHE_DIR" >> $GITHUB_ENV
-      
-      - name: Run Video Generation in Docker container
-        working-directory: ${{ matrix.repo_name }}
-        run: |
           docker run --rm --gpus all \
             -v $INPUT_PATH:/input \
             -v $OUTPUT_PATH:/output \
