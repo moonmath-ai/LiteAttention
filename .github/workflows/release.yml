@@ -96,7 +96,7 @@ jobs:
             python3 inference_ci.py \
               --input_file /input/prompts.jsonl \
               --output_path /output \
-              --videos_per_prompt ${{ variables.VIDEOS_PER_PROMPT || 1 }}
+              --videos_per_prompt ${{ vars.VIDEOS_PER_PROMPT || 1 }}
       
       - name: Upload generated videos
         uses: actions/upload-artifact@v4
