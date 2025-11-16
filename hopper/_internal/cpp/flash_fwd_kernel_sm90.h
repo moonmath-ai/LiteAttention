@@ -422,7 +422,7 @@ namespace flash
                 // );
                 // consider: move this to shared memory to reduce register pressure + not needing to worry about which thread been elected
                 // Initialize skip_writer with shared memory buffers
-                DelayedSkipListWriter<CollectiveMainloop::kStages> skip_writer(
+                DelayedSkipListWriter<CollectiveMainloop::kStages, ReverseSkipList, Phase> skip_writer(
                     shared_storage.skip_list_storage.n_blocks_buffer,
                     shared_storage.skip_list_storage.end_range_buffer,
                     shared_storage.skip_list_storage.skip_tests

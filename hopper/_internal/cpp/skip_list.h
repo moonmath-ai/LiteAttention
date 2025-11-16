@@ -126,12 +126,14 @@ namespace flash
     // Helper struct for writing skip lists
     // Encapsulates all the logic for updating skip lists based on skip detection
     // ============================================================================
+    template <bool ReverseMustDoList>
     struct SkipListWriter
     {
         // int *list_ptr;
         int16_t *list_ptr;
         int write_idx = 1;
         bool is_skipping = true;
+        MustDoListReader<ReverseMustDoList> must_do_reader;
 
         // Initialize the writer with calculated offset
         template <typename TileShape_MNK, typename ParamsType>
@@ -150,12 +152,22 @@ namespace flash
                                    (static_cast<uint64_t>(q_i) * num_k_blocks);
             
             list_ptr = &params.qk_skip_mask_args.attn_write_list[mask_offset];
+            must_do_reader.init(params, bidb, bidh, m_block);
         }
 
         // Record a transition in skip state
-        __device__
+        __device__ __forceinline__ 
         void record_transition(bool skip, int n_block)
         {
+            if(must_do_reader && skip){
+                // advance the must_do list
+                if (must_do_reader->end_idx > n_block && must_do_reader->has_more()){ // this is an if and not a while since the n_block index can never skip a must-do range so it cant get too much ahead
+                    must_do_reader->advance();
+                    must_do_reader->load_range();
+                }
+                bool must_do = n_block <= must_do_reader->start_idx && n_block > must_do_reader->end_idx; // check if we are inside a must-do range
+                skip = skip && !must_do;
+            }
             if (skip != is_skipping)
             {
                 list_ptr[write_idx] = n_block;
@@ -240,7 +252,7 @@ namespace flash
     // Buffers operations and replays them after a specified delay
     // This allows the writer to lag behind the reader by DelayAmount iterations
     // ============================================================================
-    template <int DelayAmount>
+    template <int DelayAmount, bool ReverseSkipList, bool Phase>
     struct DelayedSkipListWriter
     {
         static constexpr int BufferSize = DelayAmount * 2;
@@ -251,7 +263,7 @@ namespace flash
         int (*skip_tests)[4];
 
         //should reside in thread registers.
-        SkipListWriter writer;
+        SkipListWriter<ReverseSkipList && !Phase> writer;
         bool replayed_skip;
         int record_idx = -1;
         int replay_idx = DelayAmount - 1;
