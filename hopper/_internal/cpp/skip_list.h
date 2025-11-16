@@ -237,15 +237,9 @@ namespace flash
 
         // Constructor to initialize with shared memory pointers
         __device__
-        // __forceinline__ 
         DelayedSkipListWriter(int* n_blocks, int* end_range, int (*skip)[4])
             : n_blocks_buffer(n_blocks), end_range_buffer(end_range), 
               skip_tests(skip) {}
-
-        // // Default constructor
-        // __device__
-        // // __forceinline__ 
-        // DelayedSkipListWriter() = default;
 
         /*
         DelayAmount = 4, and we iterate over the range [5, 0] example:
@@ -270,7 +264,6 @@ namespace flash
         // Initialize the underlying writer
         template <typename TileShape_MNK, typename ParamsType>
         __device__
-        // __forceinline__ 
         void init(const ParamsType &params, int bidb, int bidh, int m_block)
         {
             writer.template init<TileShape_MNK>(params, bidb, bidh, m_block);
@@ -287,7 +280,6 @@ namespace flash
 
         // consider: calling this when acquiring K for loading.
         __device__
-        // __forceinline__ 
         void record_n_block(int n_block)
         {
             record_idx = (record_idx + 1) % BufferSize;
@@ -296,7 +288,6 @@ namespace flash
         }
 
         __device__
-        // __forceinline__ 
         void record_range_end(int end_idx)
         {
             // we save into previous index!
@@ -309,7 +300,6 @@ namespace flash
         // consider: making these functions private and making replay() public.
 
         __device__
-        // __forceinline__ 
         void replay_transition()
         {
             // calculate the replayed skip result from DelayAmount ago.
@@ -333,7 +323,6 @@ namespace flash
         }
 
         __device__
-        // __forceinline__ 
         void replay_end_range()
         {
             int replayed_end_idx = end_range_buffer[replay_idx];
@@ -344,7 +333,6 @@ namespace flash
         }
 
         __device__
-        // __forceinline__ 
         void replay()
         {
             replay_idx = (replay_idx + 1) % BufferSize;
@@ -357,7 +345,6 @@ namespace flash
         
         // Finalize by flushing all remaining queue entries
         __device__
-        // __forceinline__ 
         void finalize()
         {
             // replay all of the buffer.

@@ -261,9 +261,41 @@ class LiteAttention:
             self._phase = 0
             
         return read_list, write_list
+
+    @staticmethod
+    def _expand_must_do_list(must_do_list, list_shape, query, value):
+        """
+        This function expands the 1d list to a list per head per batch per qi.
+        """
+
+        return torch.tensor([len(must_do_list)] + must_do_list, dtype=torch.int16, device=query.device)
+
+        # head_dim = query.shape[-1]
+        # v_colmajor = value.shape[-3] == head_dim
+        # dtype = query.dtype
+        # device = query.device
+
+        # element_size = dtype.itemsize
+        # q_tile_size, k_tile_size = LiteAttention.get_MN(head_dim, element_size, v_colmajor)
+
+        # must_do_list = [len(must_do_list)] + must_do_list # append the list length at the start
+
+        # # from sequence indices to block indices:
+        # for i in range(1,must_do_list[0]+1):
+        #     if i % 2 == 1:
+        #         must_do_list[i] = (must_do_list[i] + k_tile_size - 1) // k_tile_size  # round up start indices
+        #     else:
+        #         must_do_list[i] = must_do_list[i] // k_tile_size  # round down end indices
+
+        # # print("must_do_list", must_do_list)
+
+        # values = torch.tensor(must_do_list, dtype=torch.int16, device=device)
+        # values = torch.cat([values, torch.zeros(list_shape[3] - values.size(0), dtype=values.dtype, device=values.device)])
+        # expanded = values.repeat(*list_shape[:3], 1).contiguous()
+        # return expanded
     
     def __call__(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, 
-                 scale: Optional[float] = None, return_softmax_lse: bool = False) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+                 scale: Optional[float] = None, return_softmax_lse: bool = False, must_do_list: list = None) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """
         Perform flash attention 3 with optional skip list optimization.
         
@@ -278,6 +310,14 @@ class LiteAttention:
         """
         # Get read and write lists (internal mask management)
         read_list, write_list = self._get_read_write_lists(query, value)
+
+        # handle must-do list - expand the 1d list to a list per head per batch per qi
+        if (must_do_list is not None) and self.enable_skipping:
+            must_do_list_expanded = self._expand_must_do_list(must_do_list, write_list.shape, query, value)
+        else:
+            must_do_list_expanded = self._expand_must_do_list([0,0], write_list.shape, query, value)  # [0,0] is for an empty must-do list
+
+        # print("must_do_list_expanded", must_do_list_expanded.shape)
         
         # Perform flash attention 3 with skip lists
         output = flash_attn_func(
@@ -286,6 +326,7 @@ class LiteAttention:
             v=value,
             softmax_scale=scale,
             attn_read_list=read_list,
+            attn_must_do_list=must_do_list_expanded,
             attn_write_list=write_list,
             thr=self.threshold,
             return_softmax_lse=return_softmax_lse,
@@ -457,10 +498,10 @@ class SeqParallelLiteAttention:
         self.set_threshold(threshold)
 
     def __call__(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, split_idx: int,
-                 scale: Optional[float] = None, return_softmax_lse: bool = False) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+                 scale: Optional[float] = None, return_softmax_lse: bool = False, must_do_list: list = None) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         assert split_idx < self.num_nodes, "split_idx must be less than num_nodes"
         lite_attention = self.lite_attention[split_idx]
-        return lite_attention(query, key, value, scale, return_softmax_lse)
+        return lite_attention(query, key, value, scale, return_softmax_lse, must_do_list)
 
     def reset_skip_state(self):
         for lite_attention in self.lite_attention:
