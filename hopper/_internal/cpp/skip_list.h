@@ -134,6 +134,8 @@ namespace flash
         int write_idx = 1;
         bool is_skipping = true;
         MustDoListReader<ReverseMustDoList> must_do_reader;
+        
+        static constexpr bool Phase = !ReverseMustDoList;
 
         // Initialize the writer with calculated offset
         template <typename TileShape_MNK, typename ParamsType>
@@ -156,17 +158,26 @@ namespace flash
         }
 
         // Record a transition in skip state
-        __device__ __forceinline__ 
+        __device__
         void record_transition(bool skip, int n_block)
         {
             if(must_do_reader && skip){
                 // advance the must_do list
-                if (must_do_reader->end_idx > n_block && must_do_reader->has_more()){ // this is an if and not a while since the n_block index can never skip a must-do range so it cant get too much ahead
-                    must_do_reader->advance();
-                    must_do_reader->load_range();
+                if constexpr (Phase) {
+                    if (must_do_reader.end_idx < n_block && must_do_reader.has_more()) {
+                        must_do_reader.advance();
+                        must_do_reader.load_range();
+                    }
+                    bool must_do = n_block >= must_do_reader.start_idx && n_block < must_do_reader.end_idx;
+                    skip = skip && !must_do;
+                } else {
+                    if (must_do_reader.end_idx > n_block && must_do_reader.has_more()) {
+                        must_do_reader.advance();
+                        must_do_reader.load_range();
+                    }
+                    bool must_do = n_block <= must_do_reader.start_idx && n_block > must_do_reader.end_idx;
+                    skip = skip && !must_do;
                 }
-                bool must_do = n_block <= must_do_reader->start_idx && n_block > must_do_reader->end_idx; // check if we are inside a must-do range
-                skip = skip && !must_do;
             }
             if (skip != is_skipping)
             {
