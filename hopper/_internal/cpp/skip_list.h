@@ -26,9 +26,9 @@ namespace flash
 
         static constexpr int step = Phase ? 1 : -1;
         /*
-        For SkipList reverse with phase=0:
-        [2, 30, -1] -> [2, 0, 31]
         For SkipList reverse with phase=1:
+        [2, 30, -1] -> [2, 0, 31]
+        For SkipList reverse with phase=0:
         [2, 0, 31] -> [2, 30, -1]
         For MustDoList reverse:
         Uses -1 offset
@@ -75,13 +75,8 @@ namespace flash
                 start_idx = flash::warp_uniform(list_ptr[read_idx]);
                 end_idx = flash::warp_uniform(list_ptr[read_idx + 1]);
             } else {
-                if constexpr (IsSkipList) {
-                    start_idx = flash::warp_uniform(list_ptr[read_idx] + step);
-                    end_idx = flash::warp_uniform(list_ptr[read_idx - 1] + step);
-                } else {
-                    start_idx = flash::warp_uniform(list_ptr[read_idx] - 1);
-                    end_idx = flash::warp_uniform(list_ptr[read_idx - 1] - 1);
-                }
+                start_idx = flash::warp_uniform(list_ptr[read_idx] + step);
+                end_idx = flash::warp_uniform(list_ptr[read_idx - 1] + step);
             }
         }
 
@@ -122,7 +117,7 @@ namespace flash
     // Type aliases for backward compatibility
     // ============================================================================
     template <bool ReverseMustDoList>
-    using MustDoListReader = ListReader<false, ReverseMustDoList>;
+    using MustDoListReader = ListReader<false, ReverseMustDoList, !ReverseMustDoList>;
 
     template <bool ReverseSkipList, bool Phase = true>
     using SkipListReader = ListReader<true, ReverseSkipList, Phase>;
