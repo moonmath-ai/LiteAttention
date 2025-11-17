@@ -305,10 +305,13 @@
         }
 
         .video-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: 30px;
-            margin: 40px 0;
+            display: flex;
+            flex-wrap: nowrap;        
+            justify-content: center;  
+            align-items: flex-start;  
+            gap: 20px;                
+            overflow-x: auto;         
+            padding: 10px 0;
         }
 
         /* 4-way video comparison */
@@ -363,6 +366,7 @@
             font-weight: 700;
         }
         .video-item {
+            flex: 0 0 auto;
             text-align: center;
         }
 
