@@ -107,6 +107,8 @@ jobs:
     name: Create Draft Release with Videos
     needs: generate_videos
     runs-on: self-hosted
+    permissions:
+      contents: write
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -125,8 +127,6 @@ jobs:
       - name: Create Draft Release
         id: create_release
         uses: softprops/action-gh-release@v1
-        permissions:
-          contents: write
         with:
           tag_name: ${{ inputs.release_version }}
           name: Release ${{ inputs.release_version }}
