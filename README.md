@@ -318,7 +318,7 @@ Lastly, update the forward function to call the lite_attention instance:
 
 ## 🐛 Debugging
 
-You can see additional debug logs by setting the `LITE_ATTENTION_VERBOSE` to anything other than "FALSE"
+You can see additional debug logs by setting the `LITE_ATTENTION_VERBOSE` environment variable to anything other than "FALSE"
 
 If you want to be able to test thresholds greater than 0, you need to set the `LITE_ATTENTION_DEBUG` environment variable to anything other than "FALSE"
 
