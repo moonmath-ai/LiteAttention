@@ -1,6 +1,6 @@
 # LiteAttention
 
-### [Project Page](https://moonmath-ai.github.io/LiteAttention/) | [arXiv](https://arxiv.org/abs/2511.11062) | [MoonMath.ai](https://moonmath.ai)
+### [Project Page](https://moonmath-ai.github.io/LiteAttention/) | [arXiv](https://arxiv.org/abs/2511.11062)  | [HuggingFace](https://huggingface.co/papers/2511.11062) | [MoonMath.ai](https://moonmath.ai)
 
 We present *LiteAttention*, a temporal sparse attention mechanism that exploits the slow evolution of attention patterns across diffusion timesteps. By identifying non-essential tiles early and propagating skip decisions forward, LiteAttention eliminates redundant attention computations without repeated profiling overheads. Built on FlashAttention3, it achieves **up to 54% attention sparsity** on production video diffusion models **with no degradation in generation quality**.
 
