@@ -257,6 +257,30 @@ class LiteAttention:
         """
         # Get read and write lists (internal mask management)
         read_list, write_list = self._get_read_write_lists(query, value, must_skip_list)
+        
+        print("[LiteAttention.__call__] Arguments:")
+        print("  query:", type(query), getattr(query, 'shape', None))
+        print("  key:", type(key), getattr(key, 'shape', None))
+        print("  value:", type(value), getattr(value, 'shape', None))
+        print("  scale:", scale)
+        print("  return_softmax_lse:", return_softmax_lse)
+        print("  must_do_list:", must_do_list)
+        print("  must_skip_list:", must_skip_list)
+        print("  read_list:", type(read_list), getattr(read_list, 'shape', None))
+        print("  write_list:", type(write_list), getattr(write_list, 'shape', None))
+        print("[LiteAttention instance variables]:")
+        print("  _skip_list:", self._skip_list)
+        print("  _phase:", self._phase)
+        print("  _last_seq_len:", self._last_seq_len)
+        print("  _last_head_dim:", self._last_head_dim)
+        print("  _last_v_colmajor:", self._last_v_colmajor)
+        print("  _last_dtype:", self._last_dtype)
+        print("  _last_device:", self._last_device)
+        print("  _last_percentage:", self._last_percentage)
+        print("  enable_skipping:", self.enable_skipping)
+        print("  max_batch_size:", self.max_batch_size)
+        print("  threshold:", getattr(self, 'threshold', None))
+        print("  _last_num_heads:", getattr(self, '_last_num_heads', None))
 
         # handle must-do list - expand the 1d list to a list per head per batch per qi
         if self.enable_skip_optimization:
