@@ -106,8 +106,7 @@ jobs:
   create_draft_release:
     name: Create Draft Release with Videos
     needs: generate_videos
-    runs-on: ubuntu-latest
-    
+    runs-on: self-hosted
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -141,9 +140,7 @@ jobs:
             
             Generated videos are attached as release assets.
           draft: true
-          prerelease: false
           files: |
             release-videos/**/*
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
 
