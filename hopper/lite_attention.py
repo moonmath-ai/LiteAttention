@@ -283,7 +283,7 @@ class LiteAttention:
         print("  _last_num_heads:", getattr(self, '_last_num_heads', None))
 
         # handle must-do list - expand the 1d list to a list per head per batch per qi
-        if self.enable_skip_optimization:
+        if self.enable_skipping:
             if must_do_list is not None:
                 must_do_list_expanded = self._expand_must_do_list(must_do_list, write_list.shape, query, value)
             else:
