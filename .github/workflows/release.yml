@@ -96,6 +96,11 @@ jobs:
           name: videos-${{ matrix.target }}-${{ github.sha }}
           path: ${{ env.OUTPUT_PATH }}
           retention-days: 30
+      
+      - name: Cleanup Docker image
+        if: always()
+        run: |
+          docker rmi ${{ matrix.target }}:${{ github.sha }} || true
 
   create_draft_release:
     name: Create Draft Release with Videos
