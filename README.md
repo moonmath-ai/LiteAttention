@@ -1,6 +1,6 @@
 # LiteAttention
 
-### [arXiv](https://arxiv.org) | [MoonMath.ai](https://moonmath.ai)
+### [arXiv](https://arxiv.org/abs/2511.11062) | [MoonMath.ai](https://moonmath.ai)
 
 We present *LiteAttention*, a temporal sparse attention mechanism that exploits the slow evolution of attention patterns across diffusion timesteps. By identifying non-essential tiles early and propagating skip decisions forward, LiteAttention eliminates redundant attention computations without repeated profiling overheads. Built on FlashAttention3, it achieves **up to 54% attention sparsity** on production video diffusion models **with no degradation in generation quality**.
 
@@ -322,13 +322,22 @@ You can see additional debug logs by setting the `LITE_ATTENTION_VERBOSE` to any
 
 If you want to be able to test thresholds greater than 0, you need to set the `LITE_ATTENTION_DEBUG` environment variable to anything other than "FALSE"
 
-<!-- ## 📚 Citation
+## 📚 Citation
 
 If you find LiteAttention useful or relevant to your research, please cite our paper:
 
 ```bibtex
+@misc{shmilovich2025liteattentiontemporalsparseattention,
+      title={LiteAttention: A Temporal Sparse Attention for Diffusion Transformers}, 
+      author={Dor Shmilovich and Tony Wu and Aviad Dahan and Yuval Domb},
+      year={2025},
+      eprint={2511.11062},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2511.11062}, 
+}
 ```
--->
+
 ## 🙏 Acknowledgements
 
 LiteAttention is built on top of [FlashAttention3](https://github.com/Dao-AILab/flash-attention) by Tri Dao and contributors. We thank the FlashAttention team for their foundational work on efficient attention mechanisms.
