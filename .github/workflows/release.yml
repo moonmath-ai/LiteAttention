@@ -74,6 +74,7 @@ jobs:
         run: |
           INPUT_PATH=$(pwd)/../${{ matrix.repo_name }}-prompts
           OUTPUT_PATH=$HOME/output/${{ matrix.target }}-${{github.sha}}
+          echo "OUTPUT_PATH=$OUTPUT_PATH" >> $GITHUB_ENV
           CACHE_DIR=$HOME/.cache/
           
           mkdir -p $HOME/output/
