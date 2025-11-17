@@ -602,6 +602,13 @@ class LiteAttention:
         result = [len(converted_list)] + converted_list
         return torch.tensor(result, dtype=torch.int16, device=device)
     
+    # TODO @tarik: implement the must_skip_list
+    # must_skip_list format: [start_0, end_0, start_1, end_1, ...]
+    # start_i - start index of a range we can skip. (inclusive)
+    # end_i - end index of a range we can skip. (exclusive)
+    # IMPORTANT: start_i < end_i < start_(i+1) < end_(i+1) < ... (regular ascending order).
+    # you should modify the skip_list such that we would skip these ranges.
+    # you can look over the implementation in main (notice that the input format is a little different there).
     def __call__(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, 
                  scale: Optional[float] = None, return_softmax_lse: bool = False, must_do_list: list = None, must_skip_list: list = None) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """
