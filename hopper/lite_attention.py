@@ -295,7 +295,7 @@ class LiteAttention:
         # return expanded
     
     def __call__(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, 
-                 scale: Optional[float] = None, return_softmax_lse: bool = False, must_do_list: list = None) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+                 scale: Optional[float] = None, return_softmax_lse: bool = False, must_do_list: list = None, must_skip_list: list = None) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """
         Perform flash attention 3 with optional skip list optimization.
         
@@ -311,11 +311,14 @@ class LiteAttention:
         # Get read and write lists (internal mask management)
         read_list, write_list = self._get_read_write_lists(query, value)
 
-        # handle must-do list - expand the 1d list to a list per head per batch per qi
-        if (must_do_list is not None) and self.enable_skipping:
-            must_do_list_expanded = self._expand_must_do_list(must_do_list, write_list.shape, query, value)
+        if self.enable_skipping:
+            # handle must-do list - expand the 1d list to a list per head per batch per qi
+            if must_do_list is not None:
+                must_do_list_expanded = self._expand_must_do_list(must_do_list, write_list.shape, query, value)
+            else:
+                must_do_list_expanded = self._expand_must_do_list([0,0], write_list.shape, query, value)  # [0,0] is for an empty must-do list
         else:
-            must_do_list_expanded = self._expand_must_do_list([0,0], write_list.shape, query, value)  # [0,0] is for an empty must-do list
+            must_do_list_expanded = None
 
         # print("must_do_list_expanded", must_do_list_expanded.shape)
         
