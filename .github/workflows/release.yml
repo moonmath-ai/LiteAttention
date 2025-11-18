@@ -104,6 +104,7 @@ jobs:
             -v ${{ env.CACHE_DIR }}:/root/.cache \
             surveyor2:${{github.sha }} \
             surveyor2 inputs \
+              --prompts /input/prompts.jsonl \
               --reference-videos /input/ref_videos \
               --generated-videos /generated_videos \
               --output inputs.yaml && \
