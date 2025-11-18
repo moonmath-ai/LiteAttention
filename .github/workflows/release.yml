@@ -64,9 +64,10 @@ jobs:
         run: |
           INPUT_PATH=$(pwd)/../${{ matrix.repo_name }}-prompts
           OUTPUT_PATH=$HOME/output/${{ matrix.target }}-${{github.sha}}
-          echo "OUTPUT_PATH=$OUTPUT_PATH" >> $GITHUB_ENV
           CACHE_DIR=$HOME/.cache/
-          
+          echo "INPUT_PATH=$INPUT_PATH" >> $GITHUB_ENV
+          echo "OUTPUT_PATH=$OUTPUT_PATH" >> $GITHUB_ENV
+          echo "CACHE_DIR=$CACHE_DIR" >> $GITHUB_ENV
           mkdir -p $HOME/output/
           mkdir -p $OUTPUT_PATH
           mkdir -p $CACHE_DIR
@@ -81,6 +82,38 @@ jobs:
               --output_path /output \
               --videos_per_prompt ${{ vars.VIDEOS_PER_PROMPT || 1 }}
       
+      - name: Checkout surveyor2 repository
+        uses: actions/checkout@v4
+        with:
+          repository: test-org-139/surveyor2.git # TODO: change to moonmath-ai
+          ref: main
+          path: surveyor2
+          token: ${{ steps.app-token.outputs.token }}
+          persist-credentials: false
+      
+      - name: Build surveyor2 Docker image
+        working-directory: surveyor2
+        run: |
+          docker build -t surveyor2:${{github.sha}} .
+      
+      - name: Run Surveyor2 in Docker container
+        run: |
+          docker run --rm --gpus all \
+            -v ${{ env.INPUT_PATH }}:/input \
+            -v ${{ env.OUTPUT_PATH }}:/generated_videos \
+            -v ${{ env.CACHE_DIR }}:/root/.cache \
+            surveyor2:${{github.sha }} \
+            surveyor2 inputs \
+              --reference-videos /input/ref_videos \
+              --generated-videos /generated_videos \
+              --output inputs.yaml && \
+            surveyor2 profile \
+              --inputs inputs.yaml \
+              --report-json /generated_videos/report.json \
+              --report-html /generated_videos/report.html && \
+            surveyor2 markdown \
+              --input /generated_videos/report.json \
+              --output /generated_videos/report.md
       - name: Upload generated videos
         uses: actions/upload-artifact@v4
         with:
@@ -88,10 +121,11 @@ jobs:
           path: ${{ env.OUTPUT_PATH }}
           retention-days: 30
       
-      - name: Cleanup Docker image
+      - name: Cleanup Docker images
         if: always()
         run: |
           docker rmi ${{ matrix.target }}:${{ github.sha }} || true
+          docker rmi surveyor2:${{ github.sha }} || true
 
   create_draft_release:
     name: Create Draft Release with Videos
