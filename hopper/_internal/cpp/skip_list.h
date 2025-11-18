@@ -57,7 +57,7 @@ namespace flash
             } else {
                 // MustDoList initialization: single global list
                 list_len = params.qk_skip_mask_args.attn_must_do_list[0];
-                list_ptr = &params.qk_skip_mask_args.attn_must_do_list;
+                list_ptr = params.qk_skip_mask_args.attn_must_do_list;
             }
             
             read_idx = Reverse ? list_len : 1;
@@ -126,7 +126,7 @@ namespace flash
     // Helper struct for writing skip lists
     // Encapsulates all the logic for updating skip lists based on skip detection
     // ============================================================================
-    template <bool ReverseMustDoList>
+    template <bool ReverseMustDoList, bool HasMustDoList>
     struct SkipListWriter
     {
         // int *list_ptr;
@@ -154,29 +154,35 @@ namespace flash
                                    (static_cast<uint64_t>(q_i) * num_k_blocks);
             
             list_ptr = &params.qk_skip_mask_args.attn_write_list[mask_offset];
-            must_do_reader.init(params, bidb, bidh, m_block);
+
+            if constexpr (HasMustDoList) {
+                must_do_reader.template init<TileShape_MNK>(params, bidb, bidh, m_block);
+                // must_do_reader.init(params, bidb, bidh, m_block);
+            }
         }
 
         // Record a transition in skip state
         __device__
         void record_transition(bool skip, int n_block)
         {
-            if(must_do_reader && skip){
-                // advance the must_do list
-                if constexpr (Phase) {
-                    if (must_do_reader.end_idx < n_block && must_do_reader.has_more()) {
-                        must_do_reader.advance();
-                        must_do_reader.load_range();
+            if constexpr (HasMustDoList) {
+                if(skip){
+                    // advance the must_do list
+                    if constexpr (Phase) {
+                        if (must_do_reader.end_idx < n_block && must_do_reader.has_more()) {
+                            must_do_reader.advance();
+                            must_do_reader.load_range();
+                        }
+                        bool must_do = n_block >= must_do_reader.start_idx && n_block < must_do_reader.end_idx;
+                        skip = skip && !must_do;
+                    } else {
+                        if (must_do_reader.end_idx > n_block && must_do_reader.has_more()) {
+                            must_do_reader.advance();
+                            must_do_reader.load_range();
+                        }
+                        bool must_do = n_block <= must_do_reader.start_idx && n_block > must_do_reader.end_idx;
+                        skip = skip && !must_do;
                     }
-                    bool must_do = n_block >= must_do_reader.start_idx && n_block < must_do_reader.end_idx;
-                    skip = skip && !must_do;
-                } else {
-                    if (must_do_reader.end_idx > n_block && must_do_reader.has_more()) {
-                        must_do_reader.advance();
-                        must_do_reader.load_range();
-                    }
-                    bool must_do = n_block <= must_do_reader.start_idx && n_block > must_do_reader.end_idx;
-                    skip = skip && !must_do;
                 }
             }
             if (skip != is_skipping)
@@ -263,7 +269,7 @@ namespace flash
     // Buffers operations and replays them after a specified delay
     // This allows the writer to lag behind the reader by DelayAmount iterations
     // ============================================================================
-    template <int DelayAmount, bool ReverseSkipList, bool Phase>
+    template <int DelayAmount, bool ReverseSkipList, bool Phase, bool HasMustDoList>
     struct DelayedSkipListWriter
     {
         static constexpr int BufferSize = DelayAmount * 2;
@@ -274,7 +280,7 @@ namespace flash
         int (*skip_tests)[4];
 
         //should reside in thread registers.
-        SkipListWriter<ReverseSkipList && !Phase> writer;
+        SkipListWriter<ReverseSkipList && !Phase, HasMustDoList> writer;
         bool replayed_skip;
         int record_idx = -1;
         int replay_idx = DelayAmount - 1;

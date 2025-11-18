@@ -68,6 +68,7 @@ namespace flash
         static constexpr bool Is_skipable = CollectiveMainloop::Is_skipable;
         static constexpr bool ReverseSkipList = CollectiveMainloop::ReverseSkipList;
         static constexpr bool Phase = CollectiveMainloop::Phase;
+        static constexpr bool HasMustDoList = CollectiveMainloop::HasMustDoList;
 
         // Mainloop derived types
         using TileShape_MNK_PV = typename CollectiveMainloop::TileShape_MNK_PV;
@@ -422,7 +423,7 @@ namespace flash
                 // );
                 // consider: move this to shared memory to reduce register pressure + not needing to worry about which thread been elected
                 // Initialize skip_writer with shared memory buffers
-                DelayedSkipListWriter<CollectiveMainloop::kStages, ReverseSkipList, Phase> skip_writer(
+                DelayedSkipListWriter<CollectiveMainloop::kStages, ReverseSkipList, Phase, HasMustDoList> skip_writer(
                     shared_storage.skip_list_storage.n_blocks_buffer,
                     shared_storage.skip_list_storage.end_range_buffer,
                     shared_storage.skip_list_storage.skip_tests

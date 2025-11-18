@@ -64,7 +64,7 @@ namespace flash
     // - V_colmajor_: Whether V matrix is stored in column-major layout
     template <int Stages, class ClusterShape_, class TileShape_MNK_, int kHeadDimV, class Element_, class ElementAccum_, class ArchTag_,
               bool Is_causal_, bool Is_local_, bool Has_softcap_, bool Varlen_, bool PagedKVNonTMA_, bool AppendKV_, bool HasQv_,
-              bool MmaPV_is_RS, bool IntraWGOverlap, bool PackGQA_, bool Split_, bool V_colmajor_, bool Is_skipable_, bool ReverseSkipList_=false, bool Phase_= true>
+              bool MmaPV_is_RS, bool IntraWGOverlap, bool PackGQA_, bool Split_, bool V_colmajor_, bool Is_skipable_, bool ReverseSkipList_=false, bool Phase_= true, bool HasMustDoList_=false>
     struct CollectiveMainloopFwdSm90
     {
 
@@ -104,6 +104,7 @@ namespace flash
         static constexpr bool Is_skipable = Is_skipable_;
         static constexpr bool ReverseSkipList = ReverseSkipList_;
         static constexpr bool Phase = Phase_;
+        static constexpr bool HasMustDoList = HasMustDoList_;
         static_assert(ArchTag::kMinComputeCapability >= 90);
 
         static constexpr cute::GMMA::Major MmaMajorV = !Is_FP8 && !V_colmajor ? GMMA::Major::MN : GMMA::Major::K;

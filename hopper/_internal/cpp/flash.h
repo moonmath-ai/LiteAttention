@@ -185,6 +185,7 @@ struct Flash_fwd_params : public Qkv_params
     bool is_skipable;
     bool reverse_skip_list = false;
     bool phase = false;
+    bool has_must_do_list = false;
     // ~~~~~~~~~~~~~~~~
 };
 

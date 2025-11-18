@@ -968,8 +968,10 @@ mha_fwd(at::Tensor q,   // (b, s_q, h, d) or (total_q, h, d) if there is cu_seql
         int16_t* data_ptr = static_cast<int16_t*>(qk_skip_mask_tensor.data_ptr());
         
         params.qk_skip_mask_args.attn_must_do_list = data_ptr;
+        params.has_must_do_list = true;
     } else {
         params.qk_skip_mask_args.attn_must_do_list = nullptr;
+        params.has_must_do_list = false;
     }
 
     params.total_q = total_q;
