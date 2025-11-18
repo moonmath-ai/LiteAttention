@@ -369,29 +369,13 @@ class LiteAttention:
 
         if must_skip_list is not None:
 
-            k_tile_size = kBlockN
-            
-            # from sequence indices to block indices:
-            for i in range(0, len(must_skip_list), 2):
-                must_skip_list[i] = must_skip_list[i] // k_tile_size  # round down start indices
-                must_skip_list[i + 1] = (must_skip_list[i + 1] + k_tile_size - 1) // k_tile_size  # round up end indices
+            tile_indices = LiteAttention.convert_sequence_indices_to_tile_indices("must_skip_list", must_skip_list, kBlockN)
 
-            # merge intersecting ranges:
-            merged = []
-            s, e = must_skip_list[:2]
-            for a, b in zip(must_skip_list[2::2], must_skip_list[3::2]):
-                if a <= e: e = b
-                else: merged += [s, e]; s, e = a, b
-            must_skip_list = merged + [s, e]
-            
             # convert from skip-ranges to do-ranges:
-            must_skip_list.insert(0, 0)
-            must_skip_list.append(ktiles)
-
-            must_skip_list.insert(0,len(must_skip_list)) # append the list length at the start
-
-            values = torch.tensor(must_skip_list, dtype=torch.int16, device=device)
-            skip_list[0, :, :, :, :len(must_skip_list)] = values
+            tile_indices.insert(0, 0)
+            tile_indices.append(ktiles)
+     
+            skip_list[0, :, :, :, :len(tile_indices)] = [len(tile_indices)] + tile_indices
         else:
             # Initialize first buffer with "compute all tiles" configuration
             # [2, ktiles-1, -1] means: length=2, one range from ktiles-1 down to 0 (via -1)
@@ -578,13 +562,6 @@ class LiteAttention:
         are always computed.
         """
         
-        # Validate input format
-        if len(must_do_list) % 2 != 0:
-            raise ValueError(
-                f"must_do_list must have an even number of elements (pairs of start/end indices). "
-                f"Got {len(must_do_list)} elements: {must_do_list}"
-            )
-        
         # Extract tensor properties needed for tile size calculation
         head_dim = query.shape[-1]
         v_colmajor = value.shape[-3] == head_dim
@@ -594,16 +571,27 @@ class LiteAttention:
         # Get tile dimensions (kBlockM, kBlockN)
         element_size = dtype.itemsize
         _, k_tile_size = LiteAttention.get_MN(head_dim, element_size, v_colmajor)
+        
+        # Prepend the length and convert to tensor
+        result = LiteAttention.convert_sequence_indices_to_tile_indices("must_do_list", must_do_list, k_tile_size)
+        return torch.tensor([len(result)] + result, dtype=torch.int16, device=device)
 
-        # Convert sequence indices to tile indices with validation
+    @staticmethod
+    def convert_sequence_indices_to_tile_indices(list_name: str, sequence_indices: list, k_tile_size: int) -> list:
+        if len(sequence_indices) % 2 != 0:
+                raise ValueError(
+                    f"{list_name} must have an even number of elements (pairs of start/end indices). "
+                    f"Got {len(sequence_indices)} elements: {sequence_indices}"
+                )
+
         converted_list = []
-        for i, seq_idx in enumerate(must_do_list):
+        for i, seq_idx in enumerate(sequence_indices):
             # Validate index is non-negative
             if seq_idx < 0:
                 range_idx = i // 2
                 idx_type = "start" if i % 2 == 0 else "end"
                 raise ValueError(
-                    f"must_do_list range {range_idx}: {idx_type} index must be non-negative. "
+                    f"{list_name} range {range_idx}: {idx_type} index must be non-negative. "
                     f"Got {idx_type}={seq_idx}"
                 )
             
@@ -612,21 +600,26 @@ class LiteAttention:
                 tile_idx = seq_idx // k_tile_size
             else:  # End index (odd position in list, EXCLUSIVE)
                 # Validate range is non-empty (start < end)
-                start_seq = must_do_list[i - 1]
+                start_seq = sequence_indices[i - 1]
                 end_seq = seq_idx
                 if start_seq >= end_seq:
                     range_idx = (i - 1) // 2
                     raise ValueError(
-                        f"must_do_list range {range_idx}: end must be greater than start (exclusive range). "
+                        f"{list_name} range {range_idx}: end must be greater than start (exclusive range). "
                         f"Got [{start_seq}, {end_seq}) which is empty or invalid."
                     )
                 # Ceiling division: tile after the last position
                 tile_idx = LiteAttention.ceil_div(seq_idx, k_tile_size)
             converted_list.append(tile_idx)
-        
-        # Prepend the length and convert to tensor
-        result = [len(converted_list)] + converted_list
-        return torch.tensor(result, dtype=torch.int16, device=device)
+
+        # merge intersecting ranges:
+        merged = []
+        s, e = converted_list[:2]
+        for a, b in zip(converted_list[2::2], converted_list[3::2]):
+            if a <= e: e = b
+            else: merged += [s, e]; s, e = a, b
+
+        return merged + [s, e]
     
     def __call__(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, 
                  scale: Optional[float] = None, return_softmax_lse: bool = False, must_do_list: list = None, must_skip_list: list = None) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
