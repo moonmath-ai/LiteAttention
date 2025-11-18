@@ -612,6 +612,9 @@ class LiteAttention:
                 tile_idx = LiteAttention.ceil_div(seq_idx, k_tile_size)
             converted_list.append(tile_idx)
 
+        if len(converted_list) == 0:
+            return []
+
         # merge intersecting ranges:
         merged = []
         s, e = converted_list[:2]
