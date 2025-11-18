@@ -301,7 +301,7 @@ class LiteAttention:
                 return 128, 128
 
     @staticmethod
-    def init_skip_list(batch, seq_len, heads, head_dim, v_colmajor, dtype, device) -> torch.Tensor:
+    def init_skip_list(batch, seq_len, heads, head_dim, v_colmajor, dtype, device, must_skip_list: list = None) -> torch.Tensor:
         """
         Initialize skip list tensors with default "compute all tiles" configuration.
         
@@ -324,7 +324,7 @@ class LiteAttention:
             v_colmajor (bool): Whether value tensor is column-major layout
             dtype (torch.dtype): Data type of the tensors (fp16, bf16, fp32)
             device (torch.device): Device to allocate tensors on
-        
+            must_skip_list (list, optional): List of sequence ranges to always skip.
         Returns:
             torch.Tensor: Initialized skip list of shape [2, batch, heads, qtiles, ktiles + 1]
                 where qtiles and ktiles are the number of tiles along query and key dimensions.
@@ -366,17 +366,43 @@ class LiteAttention:
         #   [3]: Query tiles dimension
         #   [4]: ktiles + 1 (the +1 stores the list length at index 0)
         skip_list = torch.empty(2, batch, heads, qtiles, ktiles + 1, dtype=torch.int16, device=device)
-        
-        # Initialize first buffer with "compute all tiles" configuration
-        # [2, ktiles-1, -1] means: length=2, one range from ktiles-1 down to 0 (via -1)
-        skip_list[0, :, :, :, 0:3] = torch.tensor([2, ktiles - 1, -1], dtype=torch.int16, device=device)
-        
-        # Note: Second buffer (skip_list[1]) is left uninitialized and will be populated
-        # during the first forward pass
 
+        if must_skip_list is not None:
+
+            k_tile_size = kBlockN
+            
+            # from sequence indices to block indices:
+            for i in range(0, len(must_skip_list), 2):
+                must_skip_list[i] = must_skip_list[i] // k_tile_size  # round down start indices
+                must_skip_list[i + 1] = (must_skip_list[i + 1] + k_tile_size - 1) // k_tile_size  # round up end indices
+
+            # merge intersecting ranges:
+            merged = []
+            s, e = must_skip_list[:2]
+            for a, b in zip(must_skip_list[2::2], must_skip_list[3::2]):
+                if a <= e: e = b
+                else: merged += [s, e]; s, e = a, b
+            must_skip_list = merged + [s, e]
+            
+            # convert from skip-ranges to do-ranges:
+            must_skip_list.insert(0, 0)
+            must_skip_list.append(ktiles)
+
+            must_skip_list.insert(0,len(must_skip_list)) # append the list length at the start
+
+            values = torch.tensor(must_skip_list, dtype=torch.int16, device=device)
+            skip_list[0, :, :, :, :len(must_skip_list)] = values
+        else:
+            # Initialize first buffer with "compute all tiles" configuration
+            # [2, ktiles-1, -1] means: length=2, one range from ktiles-1 down to 0 (via -1)
+            skip_list[0, :, :, :, 0:3] = torch.tensor([2, ktiles - 1, -1], dtype=torch.int16, device=device) 
+
+            # Note: Second buffer (skip_list[1]) is left uninitialized and will be populated
+            # during the first forward pass
+        
         return skip_list
 
-    def _init_skip_list(self, query: torch.Tensor, value: torch.Tensor) -> torch.Tensor:
+    def _init_skip_list(self, query: torch.Tensor, value: torch.Tensor, must_skip_list: list = None) -> torch.Tensor:
         """
         Initialize skip list tensors based on query and value tensor shapes.
         
@@ -386,7 +412,7 @@ class LiteAttention:
         Args:
             query (torch.Tensor): Query tensor of shape [batch, seq_len, heads, head_dim]
             value (torch.Tensor): Value tensor (used to determine memory layout)
-        
+            must_skip_list (list, optional): List of sequence ranges to always skip.
         Returns:
             torch.Tensor: Initialized skip list
             
@@ -403,10 +429,10 @@ class LiteAttention:
         device = query.device
         
         # Allocate for max_batch_size to avoid reallocation on batch size changes
-        return LiteAttention.init_skip_list(self.max_batch_size, seq_len, heads, head_dim, v_colmajor, dtype, device)
+        return LiteAttention.init_skip_list(self.max_batch_size, seq_len, heads, head_dim, v_colmajor, dtype, device, must_skip_list)
     
     
-    def _get_read_write_lists(self, query: torch.Tensor, value: torch.Tensor) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+    def _get_read_write_lists(self, query: torch.Tensor, value: torch.Tensor, must_skip_list: list = None) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
         """
         Get the current read and write skip lists for this attention forward pass.
         
@@ -417,7 +443,7 @@ class LiteAttention:
         Args:
             query (torch.Tensor): Query tensor [batch, seq_len, heads, head_dim]
             value (torch.Tensor): Value tensor (used for layout detection)
-        
+            must_skip_list (list, optional): List of sequence ranges to always skip.
         Returns:
             tuple[Optional[torch.Tensor], Optional[torch.Tensor]]: 
                 - read_list: Skip list from previous pass (what to compute this pass)
@@ -467,7 +493,7 @@ class LiteAttention:
             ):
 
             # initialize the skip list (actually allocate the memory)
-            self._skip_list = self._init_skip_list(query, value)
+            self._skip_list = self._init_skip_list(query, value, must_skip_list)
             # ditermines which part of self._skip_list to use for read_list and write_list
             self._phase = 0
 
@@ -602,13 +628,6 @@ class LiteAttention:
         result = [len(converted_list)] + converted_list
         return torch.tensor(result, dtype=torch.int16, device=device)
     
-    # TODO @tarik: implement the must_skip_list
-    # must_skip_list format: [start_0, end_0, start_1, end_1, ...]
-    # start_i - start index of a range we can skip. (inclusive)
-    # end_i - end index of a range we can skip. (exclusive)
-    # IMPORTANT: start_i < end_i < start_(i+1) < end_(i+1) < ... (regular ascending order).
-    # you should modify the skip_list such that we would skip these ranges.
-    # you can look over the implementation in main (notice that the input format is a little different there).
     def __call__(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, 
                  scale: Optional[float] = None, return_softmax_lse: bool = False, must_do_list: list = None, must_skip_list: list = None) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """
@@ -634,8 +653,12 @@ class LiteAttention:
                 Example: [0, 128, 500, 640] forces positions [0, 128) and [500, 640) to be computed.
                 Indices are automatically converted to tile indices internally.
                 Defaults to None (no forced computation).
-            must_skip_list (list, optional): Reserved for future use. Currently not implemented.
-                Defaults to None.
+            must_skip_list (list, optional): List of sequence ranges to always skip.
+                Format: [seq_start_0, seq_end_0, seq_start_1, seq_end_1, ...]
+                where end indices are EXCLUSIVE (Python-style ranges: [start, end)).
+                Example: [0, 128, 500, 640] skips positions [0, 128) and [500, 640) to be skipped.
+                Indices are automatically converted to tile indices internally.
+                Defaults to None (no forced skipping).
             
         Returns:
             Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
@@ -660,7 +683,7 @@ class LiteAttention:
         >>> output = lite_attn(q, k, v, must_do_list=[0, 128, 500, 640])
         """
         # Get read and write lists (internal mask management)
-        read_list, write_list = self._get_read_write_lists(query, value)
+        read_list, write_list = self._get_read_write_lists(query, value, must_skip_list)
 
         if self.enable_skipping:
             # handle must-do list - expand the 1d list to a list per head per batch per qi
