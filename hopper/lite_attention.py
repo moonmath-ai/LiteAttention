@@ -238,8 +238,7 @@ class LiteAttention:
 
         values = torch.tensor(must_do_list, dtype=torch.int32, device=device)
         values = torch.cat([values, torch.zeros(list_shape[3] - values.size(0), dtype=values.dtype, device=values.device)])
-        expanded = values.repeat(*list_shape[:3], 1).contiguous()
-        return expanded
+        return values
     
     def __call__(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, 
                  scale: Optional[float] = None, return_softmax_lse: bool = False, must_do_list: list = None, must_skip_list: list = None) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
@@ -267,7 +266,7 @@ class LiteAttention:
         else:
             must_do_list_expanded = None
 
-        # print("must_do_list_expanded", must_do_list_expanded.shape)
+        print("must_do_list_expanded", must_do_list_expanded.shape)
         
         # Perform flash attention 3 with skip lists
         output = flash_attn_func(

@@ -952,7 +952,7 @@ mha_fwd(at::Tensor q,   // (b, s_q, h, d) or (total_q, h, d) if there is cu_seql
     if (attn_must_do_list_.has_value()) {
         auto qk_skip_mask_tensor = attn_must_do_list_.value();
         TORCH_CHECK(qk_skip_mask_tensor.dtype() == torch::kInt32, "attn_must_do_list must be int32 tensor");
-        TORCH_CHECK(qk_skip_mask_tensor.dim() == 4, "attn_must_do_list must be 4D tensor with shape [batch, heads, q_blocks, k_blocks]");
+        TORCH_CHECK(qk_skip_mask_tensor.dim() == 1, "attn_must_do_list must be 1D tensor with shape [k_blocks]");
         TORCH_CHECK(qk_skip_mask_tensor.is_contiguous(), "attn_must_do_list must be contiguous");
         
         int* data_ptr = static_cast<int*>(qk_skip_mask_tensor.data_ptr());

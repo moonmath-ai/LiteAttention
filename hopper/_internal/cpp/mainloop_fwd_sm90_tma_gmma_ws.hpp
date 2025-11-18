@@ -69,7 +69,7 @@ namespace flash
                                    (q_i * num_k_blocks);
 
             if (is_must_do_list) {
-                list_ptr = &params.qk_skip_mask_args.attn_must_do_list[mask_offset];    
+                list_ptr = &params.qk_skip_mask_args.attn_must_do_list[0];    
             }
             else {
                 list_ptr = &params.qk_skip_mask_args.attn_read_list[mask_offset];
