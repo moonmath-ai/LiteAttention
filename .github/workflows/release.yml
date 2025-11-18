@@ -125,8 +125,7 @@ jobs:
               --output inputs.yaml && \
             surveyor2 profile \
               --inputs inputs.yaml \
-              --report-json /generated_videos/report.json \
-              --report-html /generated_videos/report.html && \
+              --report-json /generated_videos/report.json && \
             surveyor2 markdown \
               --input /generated_videos/report.json \
               --output /generated_videos/report.md"
