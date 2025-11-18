@@ -26,6 +26,10 @@
         color: #333;
         background: #ffffff;
       }
+      html, body {
+        max-width: 100%;
+        overflow-x: hidden;
+      }
 
       .container {
         max-width: 1100px;
@@ -139,12 +143,13 @@
         align-items: flex-start;
         gap: 24px;
         overflow-x: auto;
-
-        width: 100vw; /* span the viewport */
-        margin-left: calc(50% - 50vw); /* break out of centered container */
-        padding: 0 40px; /* edge padding */
-        box-sizing: border-box;
         scroll-snap-type: x proximity; /* nicer horizontal scroll (optional) */
+
+        /* Stay inside the viewport/container */
+        width: 100%;
+        margin: 0 auto;
+        padding: 0 24px;
+        box-sizing: border-box;
       }
 
       .section-blue .video-item {
@@ -540,6 +545,9 @@
       }
 
       @media (max-width: 768px) {
+        .container {
+          padding: 24px 16px;
+        }
         h1 {
           font-size: 1.8rem;
         }
@@ -560,16 +568,51 @@
           grid-template-columns: 1fr;
         }
 
-        .brick-row.cols-2,
-        .brick-row.cols-3 {
-          grid-template-columns: 1fr;
+        /* Brick rows become horizontal gallery on mobile */
+        .brick-row {
+          display: flex;
+          flex-wrap: nowrap;
+          gap: 12px;
+          overflow-x: auto;
+          -webkit-overflow-scrolling: touch;
+          scroll-snap-type: x proximity;
+          width: 100%;
+          margin-left: 0;
+          padding: 0 16px;
+          box-sizing: border-box;
         }
-        .brick-row.cols-4 {
-          grid-template-columns: 1fr;
+        .brick-row .video-tile {
+          flex: 0 0 auto;
+          width: 80%;
+          max-width: 520px;
+          scroll-snap-align: start;
         }
-        .brick-row.cols-5 {
-          grid-template-columns: 1fr;
+        .brick-row .video-tile video {
+          object-fit: cover;
         }
+
+        /* Table horizontal scroller wrapper, full-bleed like gallery */
+        .h-scroll {
+          width: 100%;
+          margin-left: 0;
+          padding: 0 16px;
+          overflow-x: auto;
+          -webkit-overflow-scrolling: touch;
+          box-sizing: border-box;
+        }
+        .h-scroll table {
+          width: max-content;
+          min-width: 640px;
+        }
+
+        /* Constrain full-bleed gallery in section-blue to container width on mobile */
+        .section-blue .video-grid {
+          width: 100%;
+          margin-left: 0;
+          padding: 0 16px;
+          box-sizing: border-box;
+        }
+
         .spacer {
           display: none;
         }
@@ -881,6 +924,7 @@
         </div>
 
         <h3>Wan2.2-14B Detailed Comparison</h3>
+        <div class="h-scroll">
         <table>
           <thead>
             <tr>
@@ -947,6 +991,7 @@
             </tr>
           </tbody>
         </table>
+        </div>
         <p
           style="
             font-size: 0.85em;
@@ -993,6 +1038,7 @@
           Our ablation studies demonstrate that runtime improvement scales with
           attention sparsity:
         </p>
+        <div class="h-scroll">
         <table>
           <thead>
             <tr>
@@ -1029,6 +1075,7 @@
             </tr>
           </tbody>
         </table>
+        </div>
         <p style="margin-top: 20px">
           The near-linear scaling between sparsity and runtime improvement
           demonstrates the efficiency of our QK-Skip algorithm.
@@ -1200,6 +1247,31 @@ output = attn(query, key, value, scale)</code></pre>
             });
           });
         });
+      })();
+      (function autoPlayBrickVideosOnView() {
+        const videos = Array.from(
+          document.querySelectorAll(".video-bricks .video-tile video")
+        );
+        if (!videos.length) return;
+        // Ensure muted and inline for mobile autoplay
+        videos.forEach((v) => {
+          v.muted = true;
+          v.setAttribute("playsinline", "");
+        });
+        const io = new IntersectionObserver(
+          (entries) => {
+            entries.forEach((entry) => {
+              const v = entry.target;
+              if (entry.isIntersecting) {
+                v.play().catch(() => {});
+              } else {
+                v.pause();
+              }
+            });
+          },
+          { threshold: 0.5 }
+        );
+        videos.forEach((v) => io.observe(v));
       })();
     </script>
   </body>
