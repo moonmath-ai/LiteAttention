@@ -53,34 +53,48 @@ jobs:
           lfs: true
           token: ${{ steps.app-token.outputs.token }}
           persist-credentials: false
-      
-      - name: Build Docker image
-        working-directory: ${{ matrix.repo_name }}
-        run: |
-          docker build --build-context lite=$(pwd)/../LiteAttention -t ${{ matrix.target }}:${{github.sha}} .
-      
-      - name: Run Video Generation in Docker container
+
+      - name: temp step
         working-directory: ${{ matrix.repo_name }}
         run: |
           INPUT_PATH=$(pwd)/../${{ matrix.repo_name }}-prompts
           OUTPUT_PATH=$HOME/output/${{ matrix.target }}-${{github.sha}}
           CACHE_DIR=$HOME/.cache/
-          echo "INPUT_PATH=$INPUT_PATH" >> $GITHUB_ENV
-          echo "OUTPUT_PATH=$OUTPUT_PATH" >> $GITHUB_ENV
-          echo "CACHE_DIR=$CACHE_DIR" >> $GITHUB_ENV
+          echo "INPUT_PATH=$(pwd)/../${{ matrix.repo_name }}-prompts" >> $GITHUB_ENV
+          echo "OUTPUT_PATH=$HOME/output/${{ matrix.target }}-${{github.sha}}" >> $GITHUB_ENV
+          echo "CACHE_DIR=$HOME/.cache/" >> $GITHUB_ENV
           mkdir -p $HOME/output/
           mkdir -p $OUTPUT_PATH
           mkdir -p $CACHE_DIR
+          cp $INPUT_PATH/ref_videos/* $OUTPUT_PATH/
+      
+      # - name: Build Docker image
+      #   working-directory: ${{ matrix.repo_name }}
+      #   run: |
+      #     docker build --build-context lite=$(pwd)/../LiteAttention -t ${{ matrix.target }}:${{github.sha}} .
+      
+      # - name: Run Video Generation in Docker container
+      #   working-directory: ${{ matrix.repo_name }}
+      #   run: |
+      #     INPUT_PATH=$(pwd)/../${{ matrix.repo_name }}-prompts
+      #     OUTPUT_PATH=$HOME/output/${{ matrix.target }}-${{github.sha}}
+      #     CACHE_DIR=$HOME/.cache/
+      #     echo "INPUT_PATH=$INPUT_PATH" >> $GITHUB_ENV
+      #     echo "OUTPUT_PATH=$OUTPUT_PATH" >> $GITHUB_ENV
+      #     echo "CACHE_DIR=$CACHE_DIR" >> $GITHUB_ENV
+      #     mkdir -p $HOME/output/
+      #     mkdir -p $OUTPUT_PATH
+      #     mkdir -p $CACHE_DIR
           
-          docker run --rm --gpus all \
-            -v $INPUT_PATH:/input \
-            -v $OUTPUT_PATH:/output \
-            -v $CACHE_DIR:/root/.cache \
-            ${{ matrix.target }}:${{github.sha }} \
-            python3 inference_ci.py \
-              --input_file /input/prompts.jsonl \
-              --output_path /output \
-              --videos_per_prompt ${{ vars.VIDEOS_PER_PROMPT || 1 }}
+      #     docker run --rm --gpus all \
+      #       -v $INPUT_PATH:/input \
+      #       -v $OUTPUT_PATH:/output \
+      #       -v $CACHE_DIR:/root/.cache \
+      #       ${{ matrix.target }}:${{github.sha }} \
+      #       python3 inference_ci.py \
+      #         --input_file /input/prompts.jsonl \
+      #         --output_path /output \
+      #         --videos_per_prompt ${{ vars.VIDEOS_PER_PROMPT || 1 }}
       
       - name: Checkout surveyor2 repository
         uses: actions/checkout@v4
@@ -103,6 +117,7 @@ jobs:
             -v ${{ env.OUTPUT_PATH }}:/generated_videos \
             -v ${{ env.CACHE_DIR }}:/root/.cache \
             surveyor2:${{github.sha }} \
+            /bin/bash -lc "
             surveyor2 inputs \
               --prompts /input/prompts.jsonl \
               --reference-videos /input/ref_videos \
@@ -114,7 +129,7 @@ jobs:
               --report-html /generated_videos/report.html && \
             surveyor2 markdown \
               --input /generated_videos/report.json \
-              --output /generated_videos/report.md
+              --output /generated_videos/report.md"
       - name: Upload generated videos
         uses: actions/upload-artifact@v4
         with:
