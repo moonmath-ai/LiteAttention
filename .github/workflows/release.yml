@@ -1,17 +1,7 @@
 name: Release
 
 on:
-  workflow_dispatch:
-    inputs:
-      release_version:
-        description: 'Release version (e.g., v1.0.0)'
-        required: true
-        type: string
-      notes:
-        description: 'Release notes'
-        required: false
-        type: string
-        default: ''
+  workflow_dispatch
 
 jobs:
   generate_videos:
@@ -94,7 +84,7 @@ jobs:
       - name: Upload generated videos
         uses: actions/upload-artifact@v4
         with:
-          name: videos-${{ matrix.target }}-${{ github.sha }}
+          name: "${{ matrix.target }}-videos-${{ github.sha }}"
           path: ${{ env.OUTPUT_PATH }}
           retention-days: 30
       
@@ -112,37 +102,37 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       
       - name: Download All Video Artifacts
         uses: actions/download-artifact@v4
         with:
           path: release-videos
-          pattern: videos-*
+          pattern: "*-videos-*"
       
-      - name: Display Downloaded Videos
+      - name: Create example_videos archive
         run: |
-          echo "=== Downloaded Video Artifacts ==="
-          find release-videos -type f
+          mkdir -p example_videos
+          # Move all downloaded artifact folders into example_videos
+          find release-videos -mindepth 1 -maxdepth 1 -type d -exec mv {} example_videos/ \;
+          # Create tar.gz archive
+          tar -czf example_videos.tar.gz example_videos/
+          echo "Archive contents:"
+          tar -tzf example_videos.tar.gz | head -20
       
       - name: Create Draft Release
-        id: create_release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: ${{ inputs.release_version }}
-          name: Release ${{ inputs.release_version }}
-          body: |
-            # Release ${{ inputs.release_version }}
-            
-            ${{ inputs.notes }}
-            
-            ## Build Information
-            
-            This release includes generated videos for:
-            - LTX
-            
-            Generated videos are attached as release assets.
-          draft: true
-          files: |
-            release-videos/**/*
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          LATEST_TAG=$(git describe --tags --abbrev=0)
+          gh release create $LATEST_TAG --generate-notes -d --verify-tag -t "Release $LATEST_TAG"
+      
+      - name: Upload example_videos archive to Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          LATEST_TAG=$(git describe --tags --abbrev=0)
+          gh release upload $LATEST_TAG example_videos.tar.gz
 
 
