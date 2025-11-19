@@ -69,8 +69,9 @@ jobs:
         with:
           python-version: ${{ inputs.python-version }}
 
-      - name: Set CUDA and PyTorch versions
+      - name: Set CUDA and PyTorch versions, make a safe dir
         run: |
+          git config --global --add safe.directory '*'
           echo "MATRIX_CUDA_VERSION=$(echo ${{ inputs.cuda-version }} | awk -F \. {'print $1 $2'})" >> $GITHUB_ENV
           echo "MATRIX_TORCH_VERSION=$(echo ${{ inputs.torch-version }} | awk -F \. {'print $1 "." $2'})" >> $GITHUB_ENV
           echo "WHEEL_CUDA_VERSION=$(echo ${{ inputs.cuda-version }} | awk -F \. {'print $1'})" >> $GITHUB_ENV
