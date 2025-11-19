@@ -48,13 +48,15 @@ jobs:
       - name: Set up environment
         run: |
           apt-get update && apt-get install -y \
-            git \
             lsb-release \
-            sudo \
             wget \
             curl \
             gnupg \
-            ca-certificates
+            ca-certificates \
+            build-essential \
+            pciutils \
+            software-properties-common \
+            sudo
       - name: Checkout
         uses: actions/checkout@v5
         with:
