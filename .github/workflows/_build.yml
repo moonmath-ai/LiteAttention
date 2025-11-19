@@ -61,9 +61,8 @@ jobs:
         with:
           python-version: ${{ inputs.python-version }}
 
-      - name: Set CUDA and PyTorch versions, make a safe dir
+      - name: Set CUDA and PyTorch versions
         run: |
-          git config --global --add safe.directory '*'
           echo "MATRIX_CUDA_VERSION=$(echo ${{ inputs.cuda-version }} | awk -F \. {'print $1 $2'})" >> $GITHUB_ENV
           echo "MATRIX_TORCH_VERSION=$(echo ${{ inputs.torch-version }} | awk -F \. {'print $1 "." $2'})" >> $GITHUB_ENV
           echo "WHEEL_CUDA_VERSION=$(echo ${{ inputs.cuda-version }} | awk -F \. {'print $1'})" >> $GITHUB_ENV
@@ -111,6 +110,7 @@ jobs:
 
       - name: Restore build cache
         uses: actions/cache/restore@v4
+        working-directory: build-wheel/hopper
         with:
           path: build.tar
           key: build-${{ inputs.release-version }}-${{ inputs.python-version }}-${{ inputs.cuda-version }}-${{ inputs.torch-version }}-${{ inputs.cxx11_abi }}-${{ github.run_number }}-${{ github.run_attempt }}
@@ -118,6 +118,7 @@ jobs:
             build-${{ inputs.release-version }}-${{ inputs.python-version }}-${{ inputs.cuda-version }}-${{ inputs.torch-version }}-${{ inputs.cxx11_abi }}-
 
       - name: Unpack build cache
+        working-directory: build-wheel/hopper
         run: |
           echo ::group::Adjust timestamps
           sudo find / -exec touch -t 197001010000 {} + || true
@@ -172,6 +173,7 @@ jobs:
 
       - name: Log build logs after timeout
         if: always() && steps.build_wheel.outputs.build_exit_code == 124
+        working-directory: build-wheel/hopper
         run: |
           ls -al ./
           tar -cvf build.tar . --atime-preserve=replace
@@ -179,6 +181,7 @@ jobs:
       - name: Save build cache timeout
         if: always() && steps.build_wheel.outputs.build_exit_code == 124
         uses: actions/cache/save@v4
+        working-directory: build-wheel/hopper
         with:
           key: build-${{ inputs.release-version }}-${{ inputs.python-version }}-${{ inputs.cuda-version }}-${{ inputs.torch-version }}-${{ inputs.cxx11_abi }}-${{ github.run_number }}-${{ github.run_attempt }}
           path: build.tar
@@ -200,10 +203,11 @@ jobs:
         id: upload_release_asset
         if: inputs.upload-to-release
         uses: actions/upload-release-asset@v1
+        working-directory: build-wheel/hopper
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.get_current_release.outputs.upload_url }}
-          asset_path: ./build-wheel/hopper/dist/${{env.wheel_name}}
+          asset_path: ./dist/${{env.wheel_name}}
           asset_name: ${{env.wheel_name}}
           asset_content_type: application/*
