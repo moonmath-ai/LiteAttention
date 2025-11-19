@@ -16,11 +16,11 @@ def test_must_do_list(q, k, v, head_dim):
     # Set threshold to infinity to skip almost everything by default
     # Note: Direct assignment bypasses validation (set_threshold requires negative values)
     # This is intentional for testing extreme skipping behavior
-    attn.threshold = float(1000)
+    attn.threshold = float("inf")
     
     # Define a must-do range: sequence positions [32, 64) (32 tokens)
     # This ensures that even with infinite threshold, these tiles should be computed
-    must_do_list = [32, 64]
+    must_do_list = [32, 1760]
     
     torch.cuda.synchronize()
     output = attn(q, k, v, must_do_list=must_do_list)
@@ -36,7 +36,7 @@ def test_must_do_list(q, k, v, head_dim):
     # With must_do, it should be significantly > 0 if seq_len is small, or just > 0.
     
     percentage = attn.calc_percentage(result_list)
-    passed = percentage > 0.0
+    passed = percentage > 1.0
     
     print(f"  Must-do list test: {'✅ PASSED' if passed else '❌ FAILED'}")
     if not passed:
