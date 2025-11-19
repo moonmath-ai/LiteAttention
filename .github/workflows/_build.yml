@@ -88,7 +88,7 @@ jobs:
           # method: ${{ (inputs.cuda-version == '11.8.0' || inputs.cuda-version == '12.1.0') && 'network' || 'local' }}
           method: "network"
           # Install full CUDA toolkit to ensure all headers and libraries are available
-          # sub-packages: '["nvcc", "cudart", "cusparse", "cublas", "curand", "cufft"]'
+          sub-packages: '["nvcc", "cudart", "cusparse", "cublas", "curand", "cufft"]'
 
       - name: Install PyTorch ${{ inputs.torch-version }}+cu${{ inputs.cuda-version }}
         run: |
