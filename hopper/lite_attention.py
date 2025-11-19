@@ -575,7 +575,7 @@ class LiteAttention:
         
         # Prepend the length and convert to tensor
         result = LiteAttention.convert_sequence_indices_to_tile_indices("must_do_list", must_do_list, k_tile_size, value.shape[1])
-        return torch.tensor([len(result)] + result, dtype=torch.int16, device=device)
+        return torch.tensor([len(result)] + result, dtype=torch.int16, device=device).contiguous()
 
     @staticmethod
     def convert_sequence_indices_to_tile_indices(list_name: str, sequence_indices: list, k_tile_size: int, seq_len: int) -> list:
