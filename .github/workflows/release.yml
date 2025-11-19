@@ -183,21 +183,21 @@ jobs:
         with:
           fetch-depth: 0
       
-      - name: Download All Video Artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: release-videos
-          pattern: "*-videos-*"
+      # - name: Download All Video Artifacts
+      #   uses: actions/download-artifact@v4
+      #   with:
+      #     path: release-videos
+      #     pattern: "*-videos-*"
       
-      - name: Create example_videos archive
-        run: |
-          mkdir -p example_videos
-          # Move all downloaded artifact folders into example_videos
-          find release-videos -mindepth 1 -maxdepth 1 -type d -exec mv {} example_videos/ \;
-          # Create tar.gz archive
-          tar -czf example_videos.tar.gz example_videos/
-          echo "Archive contents:"
-          tar -tzf example_videos.tar.gz | head -20
+      # - name: Create example_videos archive
+      #   run: |
+      #     mkdir -p example_videos
+      #     # Move all downloaded artifact folders into example_videos
+      #     find release-videos -mindepth 1 -maxdepth 1 -type d -exec mv {} example_videos/ \;
+      #     # Create tar.gz archive
+      #     tar -czf example_videos.tar.gz example_videos/
+      #     echo "Archive contents:"
+      #     tar -tzf example_videos.tar.gz | head -20
       
       - name: Create Draft Release
         env:
@@ -206,12 +206,12 @@ jobs:
         run: |
           gh release create ${{ env.RELEASE_TAG }} --generate-notes -d --verify-tag -t "Release ${{ env.RELEASE_TAG }}"
       
-      - name: Upload example_videos archive to Release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ needs.get_release_tag.outputs.release_tag }}
-        run: |
-          gh release upload ${{ env.RELEASE_TAG }} example_videos.tar.gz
+      # - name: Upload example_videos archive to Release
+      #   env:
+      #     GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      #     RELEASE_TAG: ${{ needs.get_release_tag.outputs.release_tag }}
+      #   run: |
+      #     gh release upload ${{ env.RELEASE_TAG }} example_videos.tar.gz
 
   build_wheels:
     name: Build Wheel
