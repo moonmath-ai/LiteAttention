@@ -45,6 +45,10 @@ jobs:
       options: --gpus all
     name: Build wheel (${{ inputs.release-version }}-${{ inputs.python-version }}-${{ inputs.cuda-version }}-${{ inputs.torch-version }}-${{ inputs.cxx11_abi }})
     steps:
+      - name: Set up environment
+        run: |
+          apt-get update && apt-get install -y \
+            git
       - name: Checkout
         uses: actions/checkout@v5
         with:
