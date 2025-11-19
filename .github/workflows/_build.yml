@@ -110,9 +110,8 @@ jobs:
 
       - name: Restore build cache
         uses: actions/cache/restore@v4
-        working-directory: build-wheel/hopper
         with:
-          path: build.tar
+          path: build-wheel/hopper/build.tar
           key: build-${{ inputs.release-version }}-${{ inputs.python-version }}-${{ inputs.cuda-version }}-${{ inputs.torch-version }}-${{ inputs.cxx11_abi }}-${{ github.run_number }}-${{ github.run_attempt }}
           restore-keys: |
             build-${{ inputs.release-version }}-${{ inputs.python-version }}-${{ inputs.cuda-version }}-${{ inputs.torch-version }}-${{ inputs.cxx11_abi }}-
@@ -181,15 +180,22 @@ jobs:
       - name: Save build cache timeout
         if: always() && steps.build_wheel.outputs.build_exit_code == 124
         uses: actions/cache/save@v4
-        working-directory: build-wheel/hopper
         with:
           key: build-${{ inputs.release-version }}-${{ inputs.python-version }}-${{ inputs.cuda-version }}-${{ inputs.torch-version }}-${{ inputs.cxx11_abi }}-${{ github.run_number }}-${{ github.run_attempt }}
-          path: build.tar
+          path: build-wheel/hopper/build.tar
 
       - name: Log Built Wheels
         working-directory: build-wheel/hopper
         run: |
           ls dist
+
+      - name: Upload wheel as artifact
+        if: steps.build_wheel.outputs.build_exit_code == '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheel-py${{ inputs.python-version }}-cu${{ inputs.cuda-version }}-torch${{ inputs.torch-version }}-cxx11abi${{ inputs.cxx11_abi }}
+          path: build-wheel/hopper/dist/*.whl
+          retention-days: 30
 
       - name: Get Release with tag
         id: get_current_release
@@ -203,11 +209,10 @@ jobs:
         id: upload_release_asset
         if: inputs.upload-to-release
         uses: actions/upload-release-asset@v1
-        working-directory: build-wheel/hopper
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.get_current_release.outputs.upload_url }}
-          asset_path: ./dist/${{env.wheel_name}}
+          asset_path: build-wheel/hopper/dist/${{env.wheel_name}}
           asset_name: ${{env.wheel_name}}
           asset_content_type: application/*
