@@ -5,7 +5,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          path: LiteAttention
       - uses: astral-sh/ruff-action@e7baf99fcc269796ae85308f7bef6b06147c7f08
         with: 
-          paths: "./hopper"
+          paths: "./LiteAttention/hopper"
           args: "format --check --diff"
