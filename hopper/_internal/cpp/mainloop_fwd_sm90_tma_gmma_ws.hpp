@@ -107,6 +107,10 @@ namespace flash
         static constexpr bool HasMustDoList = HasMustDoList_;
         static_assert(ArchTag::kMinComputeCapability >= 90);
 
+        static_assert(!HasMustDoList || Is_skipable, "MustDoList is only supported when skipping is enabled");
+        static_assert(!ReverseSkipList || Is_skipable, "ReverseSkipList is only supported when skipping is enabled");
+        // static_assert(!Phase || !ReverseSkipList, "Phase is only supported when ReverseSkipList is enabled");
+
         static constexpr cute::GMMA::Major MmaMajorV = !Is_FP8 && !V_colmajor ? GMMA::Major::MN : GMMA::Major::K;
         static constexpr cute::GMMA::Major TmaMajorV = !V_colmajor ? GMMA::Major::MN : GMMA::Major::K;
 
@@ -1532,6 +1536,9 @@ namespace flash
                     }else{
                         new_n_block = n_block;
                     }
+                    // if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && threadIdx.x == 0){
+                    //     printf("new_n_block: %d\n", new_n_block);
+                    // }
 
                     bool has_more = true;
                     if constexpr (Is_skipable){
