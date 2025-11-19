@@ -45,19 +45,6 @@ jobs:
       options: --gpus all
     name: Build wheel (${{ inputs.release-version }}-${{ inputs.python-version }}-${{ inputs.cuda-version }}-${{ inputs.torch-version }}-${{ inputs.cxx11_abi }})
     steps:
-      - name: Set up environment
-        run: |
-          apt-get update && apt-get install -y \
-            git \
-            lsb-release \
-            wget \
-            curl \
-            gnupg \
-            ca-certificates \
-            build-essential \
-            pciutils \
-            software-properties-common \
-            sudo
       - name: Checkout
         uses: actions/checkout@v5
         with:
@@ -76,19 +63,6 @@ jobs:
           echo "MATRIX_TORCH_VERSION=$(echo ${{ inputs.torch-version }} | awk -F \. {'print $1 "." $2'})" >> $GITHUB_ENV
           echo "WHEEL_CUDA_VERSION=$(echo ${{ inputs.cuda-version }} | awk -F \. {'print $1'})" >> $GITHUB_ENV
           echo "MATRIX_PYTHON_VERSION=$(echo ${{ inputs.python-version }} | awk -F \. {'print $1 $2'})" >> $GITHUB_ENV
-
-      - name: Install CUDA ${{ inputs.cuda-version }}
-        if: ${{ inputs.cuda-version != 'cpu' }}
-        uses: Jimver/cuda-toolkit@v0.2.29
-        id: cuda-toolkit
-        with:
-          cuda: ${{ inputs.cuda-version }}
-          linux-local-args: '["--toolkit"]'
-          # default method is "local", and we're hitting some error with caching for CUDA 11.8 and 12.1
-          # method: ${{ (inputs.cuda-version == '11.8.0' || inputs.cuda-version == '12.1.0') && 'network' || 'local' }}
-          method: "network"
-          # Install full CUDA toolkit to ensure all headers and libraries are available
-          sub-packages: '["nvcc", "cudart", "cusparse", "cublas", "curand", "cufft"]'
 
       - name: Install PyTorch ${{ inputs.torch-version }}+cu${{ inputs.cuda-version }}
         run: |
