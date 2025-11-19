@@ -15,28 +15,46 @@ on:
         type: boolean
 
 jobs:
-#   generate_videos:
-#     name: Generate videos for ${{ matrix.target }}
-#     runs-on: [self-hosted, multigpu]
-#     strategy:
-#       matrix:
-#         target: [ltx]
-#         include:
-#           - target: ltx
-#             repo_url: test-org-139/LTX-Video.git # TODO: change to moonmath-ai
-#             repo_name: LTX-Video
-#             branch: ci-lite-attention
-#             prompts_branch: ltx-short
-#             prompts_repo: test-org-139/ci-prompts-list.git # TODO: change to moonmath-ai
+  get_release_tag:
+    name: Get Release Tag
+    runs-on: [self-hosted, Linux]
+    outputs:
+      release_tag: ${{ steps.get_tag.outputs.tag }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Get latest tag
+        id: get_tag
+        run: |
+          LATEST_TAG=$(git describe --tags --abbrev=0)
+          echo "tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+          echo "Latest tag: $LATEST_TAG"
+
+  generate_videos:
+    name: Generate videos for ${{ matrix.target }}
+    runs-on: [self-hosted, multigpu]
+    strategy:
+      matrix:
+        target: [ltx]
+        include:
+          - target: ltx
+            repo_url: test-org-139/LTX-Video.git # TODO: change to moonmath-ai
+            repo_name: LTX-Video
+            branch: ci-lite-attention
+            prompts_branch: ltx-short
+            prompts_repo: test-org-139/ci-prompts-list.git # TODO: change to moonmath-ai
     
-#     steps:
-#       - name: Create GitHub App token
-#         id: app-token
-#         uses: actions/create-github-app-token@v2
-#         with:
-#           app-id: ${{ secrets.CI_PULL_ID }}
-#           private-key: ${{ secrets.CI_PULL_SECRET }}
-#           owner: test-org-139 # TODO: change to moonmath-ai
+    steps:
+      - name: Create GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.CI_PULL_ID }}
+          private-key: ${{ secrets.CI_PULL_SECRET }}
+          owner: test-org-139 # TODO: change to moonmath-ai
 
 #       - name: Checkout LiteAttention Repository
 #         uses: actions/checkout@v4
@@ -155,7 +173,7 @@ jobs:
 
   create_draft_release:
     name: Create Draft Release with Videos
-    needs: generate_videos
+    needs: [get_release_tag, generate_videos]
     runs-on: self-hosted
     permissions:
       contents: write
@@ -184,21 +202,20 @@ jobs:
       - name: Create Draft Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.get_release_tag.outputs.release_tag }}
         run: |
-          LATEST_TAG=$(git describe --tags --abbrev=0)
-          echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
-          gh release create $LATEST_TAG --generate-notes -d --verify-tag -t "Release $LATEST_TAG"
+          gh release create ${{ env.RELEASE_TAG }} --generate-notes -d --verify-tag -t "Release ${{ env.RELEASE_TAG }}"
       
       - name: Upload example_videos archive to Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.get_release_tag.outputs.release_tag }}
         run: |
-          LATEST_TAG=$(git describe --tags --abbrev=0)
-          gh release upload ${{ env.LATEST_TAG }} example_videos.tar.gz
+          gh release upload ${{ env.RELEASE_TAG }} example_videos.tar.gz
 
   build_wheels:
     name: Build Wheel
-    needs: create_draft_release
+    needs: [get_release_tag, create_draft_release]
     if: ${{ inputs.build_wheels }}
     strategy:
       fail-fast: false
@@ -233,7 +250,7 @@ jobs:
       cuda-version: ${{ matrix.cuda-version }}
       torch-version: ${{ matrix.torch-version }}
       cxx11_abi: ${{ matrix.cxx11_abi }}
-      release-version: ${{ env.LATEST_TAG }}
+      release-version: ${{ needs.get_release_tag.outputs.release_tag }}
       upload-to-release: true
 
   publish_package:
