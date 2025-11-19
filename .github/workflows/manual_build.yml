@@ -3,14 +3,14 @@ name: Manual Build
 on:
   workflow_dispatch:
     inputs:
-      docker-image:
-        description: "Docker image to use"
+      os-version:
+        description: "OS version"
         required: true
-        default: "ubuntu:22.04"
+        default: "devel-ubuntu22.04"
         type: choice
         options:
           - "devel-ubuntu22.04"
-          - "devel-ubuntu24.04"
+          - "devel-ubuntu24.04" 
       python-version:
         description: "Python version"
         required: true
@@ -56,7 +56,7 @@ jobs:
     name: Build Wheel (Manual)
     uses: ./.github/workflows/_build.yml
     with:
-      docker-image: nvidia/cuda:${{ inputs.cuda-version }}-${{ inputs.ubuntu-version }}
+      docker-image: nvidia/cuda:${{ inputs.cuda-version }}-${{ inputs.os-version }}
       python-version: ${{ inputs.python-version }}
       cuda-version: ${{ inputs.cuda-version }}
       torch-version: ${{ inputs.torch-version }}
