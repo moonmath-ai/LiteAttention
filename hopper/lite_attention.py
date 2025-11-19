@@ -404,7 +404,8 @@ class LiteAttention:
             The skip list is allocated with max_batch_size (not actual batch size) to
             avoid reallocation when batch size varies across forward passes.
         """
-        batch, seq_len, heads, head_dim = query.shape
+        # batch, seq_len, heads, head_dim = query.shape
+        batch, seq_len, heads, head_dim = value.shape
         assert batch <= self.max_batch_size, "batch size must be less than or equal to max_batch_size (modify max_batch_size in LiteAttention constructor)"
         
         # Determine if value tensor is column-major (affects tile size selection)
@@ -573,11 +574,11 @@ class LiteAttention:
         _, k_tile_size = LiteAttention.get_MN(head_dim, element_size, v_colmajor)
         
         # Prepend the length and convert to tensor
-        result = LiteAttention.convert_sequence_indices_to_tile_indices("must_do_list", must_do_list, k_tile_size)
+        result = LiteAttention.convert_sequence_indices_to_tile_indices("must_do_list", must_do_list, k_tile_size, value.shape[1])
         return torch.tensor([len(result)] + result, dtype=torch.int16, device=device)
 
     @staticmethod
-    def convert_sequence_indices_to_tile_indices(list_name: str, sequence_indices: list, k_tile_size: int) -> list:
+    def convert_sequence_indices_to_tile_indices(list_name: str, sequence_indices: list, k_tile_size: int, seq_len: int) -> list:
         if len(sequence_indices) % 2 != 0:
                 raise ValueError(
                     f"{list_name} must have an even number of elements (pairs of start/end indices). "
@@ -608,6 +609,13 @@ class LiteAttention:
                         f"{list_name} range {range_idx}: end must be greater than start (exclusive range). "
                         f"Got [{start_seq}, {end_seq}) which is empty or invalid."
                     )
+
+                # validate end index is less than ktile_num
+                if end_seq >= seq_len:
+                    raise ValueError(
+                        f"{end_seq} is greater than or equal to {seq_len}."
+                    )
+
                 # Ceiling division: tile after the last position
                 tile_idx = LiteAttention.ceil_div(seq_idx, k_tile_size)
             converted_list.append(tile_idx)
@@ -688,6 +696,8 @@ class LiteAttention:
             must_do_list_expanded = None
 
         # print("must_do_list_expanded", must_do_list_expanded.shape)
+
+        print("must_do_list_expanded", must_do_list_expanded)
         
         # Perform flash attention 3 with skip lists
         output = flash_attn_func(
