@@ -56,74 +56,74 @@ jobs:
           private-key: ${{ secrets.CI_PULL_SECRET }}
           owner: test-org-139 # TODO: change to moonmath-ai
 
-#       - name: Checkout LiteAttention Repository
-#         uses: actions/checkout@v4
-#         with:
-#           path: LiteAttention
+      - name: Checkout LiteAttention Repository
+        uses: actions/checkout@v4
+        with:
+          path: LiteAttention
       
-#       - name: Checkout ${{ matrix.target }} Repository
-#         uses: actions/checkout@v4
-#         with:
-#           repository: ${{ matrix.repo_url }}
-#           ref: ${{ matrix.branch || 'main' }}
-#           path: ${{ matrix.repo_name }}
-#           submodules: 'recursive'
-#           lfs: true
-#           fetch-depth: 0
-#           token: ${{ steps.app-token.outputs.token }}
-#           persist-credentials: false
+      - name: Checkout ${{ matrix.target }} Repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ matrix.repo_url }}
+          ref: ${{ matrix.branch || 'main' }}
+          path: ${{ matrix.repo_name }}
+          submodules: 'recursive'
+          lfs: true
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+          persist-credentials: false
       
-#       - name: Checkout prompts list
-#         uses: actions/checkout@v4
-#         with:
-#           path: ${{ matrix.repo_name }}-prompts
-#           repository: ${{ matrix.prompts_repo }}
-#           ref: ${{ matrix.prompts_branch }}
-#           lfs: true
-#           token: ${{ steps.app-token.outputs.token }}
-#           persist-credentials: false
+      - name: Checkout prompts list
+        uses: actions/checkout@v4
+        with:
+          path: ${{ matrix.repo_name }}-prompts
+          repository: ${{ matrix.prompts_repo }}
+          ref: ${{ matrix.prompts_branch }}
+          lfs: true
+          token: ${{ steps.app-token.outputs.token }}
+          persist-credentials: false
 
-#       - name: temp step
-#         working-directory: ${{ matrix.repo_name }}
-#         run: |
-#           INPUT_PATH=$(pwd)/../${{ matrix.repo_name }}-prompts
-#           OUTPUT_PATH=$HOME/output/${{ matrix.target }}-${{github.sha}}
-#           CACHE_DIR=$HOME/.cache/
-#           echo "INPUT_PATH=$(pwd)/../${{ matrix.repo_name }}-prompts" >> $GITHUB_ENV
-#           echo "OUTPUT_PATH=$HOME/output/${{ matrix.target }}-${{github.sha}}" >> $GITHUB_ENV
-#           echo "CACHE_DIR=$HOME/.cache/" >> $GITHUB_ENV
-#           mkdir -p $HOME/output/
-#           mkdir -p $OUTPUT_PATH
-#           mkdir -p $CACHE_DIR
-#           cp $INPUT_PATH/ref_videos/* $OUTPUT_PATH/
+      - name: temp step
+        working-directory: ${{ matrix.repo_name }}
+        run: |
+          INPUT_PATH=$(pwd)/../${{ matrix.repo_name }}-prompts
+          OUTPUT_PATH=$HOME/output/${{ matrix.target }}-${{github.sha}}
+          CACHE_DIR=$HOME/.cache/
+          echo "INPUT_PATH=$(pwd)/../${{ matrix.repo_name }}-prompts" >> $GITHUB_ENV
+          echo "OUTPUT_PATH=$HOME/output/${{ matrix.target }}-${{github.sha}}" >> $GITHUB_ENV
+          echo "CACHE_DIR=$HOME/.cache/" >> $GITHUB_ENV
+          mkdir -p $HOME/output/
+          mkdir -p $OUTPUT_PATH
+          mkdir -p $CACHE_DIR
+          cp $INPUT_PATH/ref_videos/* $OUTPUT_PATH/
       
-#       # - name: Build Docker image
-#       #   working-directory: ${{ matrix.repo_name }}
-#       #   run: |
-#       #     docker build --build-context lite=$(pwd)/../LiteAttention -t ${{ matrix.target }}:${{github.sha}} .
+      # - name: Build Docker image
+      #   working-directory: ${{ matrix.repo_name }}
+      #   run: |
+      #     docker build --build-context lite=$(pwd)/../LiteAttention -t ${{ matrix.target }}:${{github.sha}} .
       
-#       # - name: Run Video Generation in Docker container
-#       #   working-directory: ${{ matrix.repo_name }}
-#       #   run: |
-#       #     INPUT_PATH=$(pwd)/../${{ matrix.repo_name }}-prompts
-#       #     OUTPUT_PATH=$HOME/output/${{ matrix.target }}-${{github.sha}}
-#       #     CACHE_DIR=$HOME/.cache/
-#       #     echo "INPUT_PATH=$INPUT_PATH" >> $GITHUB_ENV
-#       #     echo "OUTPUT_PATH=$OUTPUT_PATH" >> $GITHUB_ENV
-#       #     echo "CACHE_DIR=$CACHE_DIR" >> $GITHUB_ENV
-#       #     mkdir -p $HOME/output/
-#       #     mkdir -p $OUTPUT_PATH
-#       #     mkdir -p $CACHE_DIR
+      # - name: Run Video Generation in Docker container
+      #   working-directory: ${{ matrix.repo_name }}
+      #   run: |
+      #     INPUT_PATH=$(pwd)/../${{ matrix.repo_name }}-prompts
+      #     OUTPUT_PATH=$HOME/output/${{ matrix.target }}-${{github.sha}}
+      #     CACHE_DIR=$HOME/.cache/
+      #     echo "INPUT_PATH=$INPUT_PATH" >> $GITHUB_ENV
+      #     echo "OUTPUT_PATH=$OUTPUT_PATH" >> $GITHUB_ENV
+      #     echo "CACHE_DIR=$CACHE_DIR" >> $GITHUB_ENV
+      #     mkdir -p $HOME/output/
+      #     mkdir -p $OUTPUT_PATH
+      #     mkdir -p $CACHE_DIR
           
-#       #     docker run --rm --gpus all \
-#       #       -v $INPUT_PATH:/input \
-#       #       -v $OUTPUT_PATH:/output \
-#       #       -v $CACHE_DIR:/root/.cache \
-#       #       ${{ matrix.target }}:${{github.sha }} \
-#       #       python3 inference_ci.py \
-#       #         --input_file /input/prompts.jsonl \
-#       #         --output_path /output \
-#       #         --videos_per_prompt ${{ vars.VIDEOS_PER_PROMPT || 1 }}
+      #     docker run --rm --gpus all \
+      #       -v $INPUT_PATH:/input \
+      #       -v $OUTPUT_PATH:/output \
+      #       -v $CACHE_DIR:/root/.cache \
+      #       ${{ matrix.target }}:${{github.sha }} \
+      #       python3 inference_ci.py \
+      #         --input_file /input/prompts.jsonl \
+      #         --output_path /output \
+      #         --videos_per_prompt ${{ vars.VIDEOS_PER_PROMPT || 1 }}
       
 #       - name: Checkout surveyor2 repository
 #         uses: actions/checkout@v4
@@ -158,12 +158,12 @@ jobs:
 #             surveyor2 markdown \
 #               --input /generated_videos/report.json \
 #               --output /generated_videos/report.md"
-#       - name: Upload generated videos
-#         uses: actions/upload-artifact@v4
-#         with:
-#           name: "${{ matrix.target }}-videos-${{ github.sha }}"
-#           path: ${{ env.OUTPUT_PATH }}
-#           retention-days: 30
+      - name: Upload generated videos
+        uses: actions/upload-artifact@v4
+        with:
+          name: "${{ matrix.target }}-videos-${{ github.sha }}"
+          path: ${{ env.OUTPUT_PATH }}
+          retention-days: 30
       
 #       - name: Cleanup Docker images
 #         if: always()
@@ -183,21 +183,21 @@ jobs:
         with:
           fetch-depth: 0
       
-      # - name: Download All Video Artifacts
-      #   uses: actions/download-artifact@v4
-      #   with:
-      #     path: release-videos
-      #     pattern: "*-videos-*"
+      - name: Download All Video Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-videos
+          pattern: "*-videos-*"
       
-      # - name: Create example_videos archive
-      #   run: |
-      #     mkdir -p example_videos
-      #     # Move all downloaded artifact folders into example_videos
-      #     find release-videos -mindepth 1 -maxdepth 1 -type d -exec mv {} example_videos/ \;
-      #     # Create tar.gz archive
-      #     tar -czf example_videos.tar.gz example_videos/
-      #     echo "Archive contents:"
-      #     tar -tzf example_videos.tar.gz | head -20
+      - name: Create example_videos archive
+        run: |
+          mkdir -p example_videos
+          # Move all downloaded artifact folders into example_videos
+          find release-videos -mindepth 1 -maxdepth 1 -type d -exec mv {} example_videos/ \;
+          # Create tar.gz archive
+          tar -czf example_videos.tar.gz example_videos/
+          echo "Archive contents:"
+          tar -tzf example_videos.tar.gz | head -20
       
       - name: Create Draft Release
         env:
@@ -206,17 +206,19 @@ jobs:
         run: |
           gh release create ${{ env.RELEASE_TAG }} --generate-notes -d --verify-tag -t "Release ${{ env.RELEASE_TAG }}"
       
-      # - name: Upload example_videos archive to Release
-      #   env:
-      #     GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      #     RELEASE_TAG: ${{ needs.get_release_tag.outputs.release_tag }}
-      #   run: |
-      #     gh release upload ${{ env.RELEASE_TAG }} example_videos.tar.gz
+      - name: Upload example_videos archive to Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.get_release_tag.outputs.release_tag }}
+        run: |
+          gh release upload ${{ env.RELEASE_TAG }} example_videos.tar.gz
 
   build_wheels:
     name: Build Wheel
     needs: [get_release_tag, create_draft_release]
-    if: ${{ inputs.build_wheels }}
+    if: ${{ inputs.build_wheel }}
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
