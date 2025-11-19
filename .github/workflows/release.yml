@@ -14,7 +14,7 @@ on:
         default: true
         type: boolean
 
-# jobs:
+jobs:
 #   generate_videos:
 #     name: Generate videos for ${{ matrix.target }}
 #     runs-on: [self-hosted, multigpu]
