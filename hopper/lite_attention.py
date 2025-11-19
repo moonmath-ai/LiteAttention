@@ -802,7 +802,18 @@ class LiteAttention:
         self.enable_skipping = enable
         # Note: Skip state is preserved to allow toggling without reinitialization
     
-    def visualize_skips(self, query: torch.Tensor, key: torch.Tensor, heads_list: torch.Tensor, scale: float, save_path: str, max_res: int = 520, name_prefix: str = "", do_softmax: bool = True):
+    def visualize_skips(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        heads_list: torch.Tensor,
+        scale: float,
+        save_path: str,
+        max_res: int = 520,
+        name_prefix: str = "",
+        do_softmax: bool = True,
+        dims: Optional[Tuple[Tuple[int, int, int], Tuple[int, int, int]]] = None
+        ):
         """
         Visualize which tiles are being computed vs skipped in the attention matrix.
         
@@ -889,6 +900,11 @@ class LiteAttention:
                     attn_softmaxed = torch.softmax(QK, dim=-1)
                 else:
                     attn_softmaxed = QK
+
+                if dims is not None:
+                    prev_shape = attn_softmaxed.shape
+                    attn_softmaxed = attn_softmaxed.view(*dims[0]).permute(*dims[1]).contiguous().view(prev_shape)
+
                 attn_down = F.adaptive_max_pool2d(
                     attn_softmaxed,  # (1, 1, seq_len_q, seq_len_k)
                     output_size=(max_res, max_res)
@@ -912,24 +928,25 @@ class LiteAttention:
                 for x in x_positions:
                     plt.axvline(x=x-0.5, color='black', linewidth=0.2, alpha=0.7)
 
+                if dims is None:
+                    # plot the skip list
+                    for i, row_skip_list in enumerate(current_skip_list[0, 0]):
+                        # print(row_skip_list.shape)
+                        l_row = row_skip_list[0]
+                        # end0, start1, end1, start2, ...
+                        # width_ranges = (row_skip_list[1 : l_row + 1] + 1) * grid_width
+                        width_ranges = (row_skip_list[1 : l_row + 1] + step) * grid_width
+                        # height
+                        row_height = i * grid_height
 
-                for i, row_skip_list in enumerate(current_skip_list[0, 0]):
-                    # print(row_skip_list.shape)
-                    l_row = row_skip_list[0]
-                    # end0, start1, end1, start2, ...
-                    # width_ranges = (row_skip_list[1 : l_row + 1] + 1) * grid_width
-                    width_ranges = (row_skip_list[1 : l_row + 1] + step) * grid_width
-                    # height
-                    row_height = i * grid_height
-
-                    width_ranges = width_ranges.view(-1, 2).cpu()
-                    # for end, start in width_ranges:
-                    for r1, r2 in width_ranges:
-                        start = min(r1, r2)
-                        end = max(r1, r2)
-                        # rect = plt.Rectangle((start, row_height), end + grid_width - start, grid_height, facecolor='white', edgecolor='none', linewidth=0.4, alpha=0.3)
-                        rect = plt.Rectangle((start, row_height), end - start, grid_height, facecolor='white', edgecolor='none', linewidth=0.4, alpha=0.3)
-                        plt.gca().add_patch(rect)
+                        width_ranges = width_ranges.view(-1, 2).cpu()
+                        # for end, start in width_ranges:
+                        for r1, r2 in width_ranges:
+                            start = min(r1, r2)
+                            end = max(r1, r2)
+                            # rect = plt.Rectangle((start, row_height), end + grid_width - start, grid_height, facecolor='white', edgecolor='none', linewidth=0.4, alpha=0.3)
+                            rect = plt.Rectangle((start, row_height), end - start, grid_height, facecolor='white', edgecolor='none', linewidth=0.4, alpha=0.3)
+                            plt.gca().add_patch(rect)
                 
                 plt.axis("off")
                 plt.tight_layout()
