@@ -47,7 +47,13 @@ jobs:
     steps:
       - name: Set up environment
         run: |
-          apt-get update && apt-get install -y git
+          apt-get update && apt-get install -y \
+            git \
+            lsb-release \
+            wget \
+            curl \
+            gnupg \
+            ca-certificates
       - name: Checkout
         uses: actions/checkout@v5
         with:
