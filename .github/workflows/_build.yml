@@ -54,6 +54,7 @@ jobs:
         with:
           ref: ${{ inputs.release-version }}
           submodules: recursive
+          path: build-wheel
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -135,7 +136,7 @@ jobs:
 
       - name: Build wheel
         id: build_wheel
-        working-directory: hopper
+        working-directory: build-wheel/hopper
         run: |
           # We want setuptools >= 49.6.0 otherwise we can't compile the extension if system CUDA version is 11.7 and pytorch cuda version is 11.6
           # https://github.com/pytorch/pytorch/blob/664058fa83f1d8eede5d66418abff6e20bd76ca8/torch/utils/cpp_extension.py#L810
@@ -183,7 +184,7 @@ jobs:
           path: build.tar
 
       - name: Log Built Wheels
-        working-directory: hopper
+        working-directory: build-wheel/hopper
         run: |
           ls dist
 
@@ -203,6 +204,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.get_current_release.outputs.upload_url }}
-          asset_path: ./hopper/dist/${{env.wheel_name}}
+          asset_path: ./build-wheel/hopper/dist/${{env.wheel_name}}
           asset_name: ${{env.wheel_name}}
           asset_content_type: application/*
