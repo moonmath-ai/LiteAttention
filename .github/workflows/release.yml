@@ -189,10 +189,11 @@ jobs:
       - name: Download All Video Artifacts
         uses: actions/download-artifact@v4
         with:
-          path: release-videos
+          path: LiteAttention/release-videos
           pattern: "*-videos-*"
       
       - name: Create example_videos archive
+        working-directory: LiteAttention/release-videos
         run: |
           mkdir -p example_videos
           # Move all downloaded artifact folders into example_videos
@@ -211,7 +212,7 @@ jobs:
           gh release create ${{ env.RELEASE_TAG }} --generate-notes -d --verify-tag -t "Release ${{ env.RELEASE_TAG }}"
       
       - name: Upload example_videos archive to Release
-        working-directory: LiteAttention
+        working-directory: LiteAttention/release-videos
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ needs.get_release_tag.outputs.release_tag }}
