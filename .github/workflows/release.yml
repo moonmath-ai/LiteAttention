@@ -193,7 +193,7 @@ jobs:
           pattern: "*-videos-*"
       
       - name: Create example_videos archive
-        working-directory: LiteAttention/release-videos
+        working-directory: LiteAttention
         run: |
           mkdir -p example_videos
           # Move all downloaded artifact folders into example_videos
