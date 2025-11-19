@@ -39,7 +39,7 @@ defaults:
 
 jobs:
   build-wheel:
-    runs-on: [self-hosted, Linux]
+    runs-on: self-hosted
     container:
       image: ${{ inputs.docker-image }}
       options: --gpus all
