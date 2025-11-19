@@ -212,7 +212,7 @@ jobs:
           gh release create ${{ env.RELEASE_TAG }} --generate-notes -d --verify-tag -t "Release ${{ env.RELEASE_TAG }}"
       
       - name: Upload example_videos archive to Release
-        working-directory: LiteAttention/release-videos
+        working-directory: LiteAttention
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ needs.get_release_tag.outputs.release_tag }}
