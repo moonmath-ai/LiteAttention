@@ -42,7 +42,7 @@ jobs:
     runs-on: self-hosted
     container:
       image: ${{ inputs.docker-image }}
-      options: --gpus all --user ${{ github.runner_uid }}:${{ github.runner_gid }}
+      options: --gpus all
     name: Build wheel (${{ inputs.release-version }}-${{ inputs.python-version }}-${{ inputs.cuda-version }}-${{ inputs.torch-version }}-${{ inputs.cxx11_abi }})
     steps:
       - name: Set up environment

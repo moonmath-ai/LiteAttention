@@ -253,7 +253,7 @@ jobs:
             python-version: "3.13"
     uses: ./.github/workflows/_build.yml
     with:
-      docker-image: nvidia/cuda:${{ inputs.cuda-version }}-${{ inputs.os-version }}
+      docker-image: nvidia/cuda:${{ matrix.cuda-version }}-${{ matrix.os-version }}
       python-version: ${{ matrix.python-version }}
       cuda-version: ${{ matrix.cuda-version }}
       torch-version: ${{ matrix.torch-version }}
