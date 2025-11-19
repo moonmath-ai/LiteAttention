@@ -26,7 +26,8 @@ from torch.utils.cpp_extension import BuildExtension, CppExtension, CUDAExtensio
 
 
 # with open("../README.md", "r", encoding="utf-8") as fh:
-with open("../README.md", "r", encoding="utf-8") as fh:
+readme_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "README.md")
+with open(os.path.abspath(readme_path), "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
 
