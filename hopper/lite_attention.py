@@ -611,9 +611,9 @@ class LiteAttention:
                     )
 
                 # validate end index is less than ktile_num
-                if end_seq >= seq_len:
+                if end_seq > seq_len:
                     raise ValueError(
-                        f"{end_seq} is greater than or equal to {seq_len}."
+                        f"{end_seq} is greater than {seq_len}."
                     )
 
                 # Ceiling division: tile after the last position
