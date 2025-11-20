@@ -703,6 +703,7 @@ mha_fwd(at::Tensor q,   // (b, s_q, h, d) or (total_q, h, d) if there is cu_seql
         // std::optional<at::Tensor> qk_skip_mask_args_,
         std::optional<at::Tensor> attn_read_list_,
         std::optional<at::Tensor> attn_must_do_list_,
+        std::optional<at::Tensor> attn_must_do_list_,
         std::optional<at::Tensor> attn_write_list_,
         double thr,
         bool reverse_skip_list = false,

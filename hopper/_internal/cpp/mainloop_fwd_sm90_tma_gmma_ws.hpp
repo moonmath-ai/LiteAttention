@@ -1069,7 +1069,8 @@ namespace flash
             }
 
             int n_block_prev = n_block;
-
+            
+            // load blocks in skippable kernel case
             if constexpr (Is_skipable){
                 // finish the first range
                 // ++n_block;
