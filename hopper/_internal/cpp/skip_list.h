@@ -53,13 +53,12 @@ namespace flash
                                        (static_cast<uint64_t>(q_i) * num_k_blocks);
                 
                 list_ptr = &params.qk_skip_mask_args.attn_read_list[mask_offset];
-                list_len = list_ptr[0];
             } else {
                 // MustDoList initialization: single global list
-                list_len = params.qk_skip_mask_args.attn_must_do_list[0];
-                list_ptr = params.qk_skip_mask_args.attn_must_do_list;
+                list_ptr = &params.qk_skip_mask_args.attn_must_do_list[0];
             }
-            
+
+            list_len = list_ptr[0];
             read_idx = Reverse ? list_len : 1;
 
             // we ignore the edge case which list_len == 0 because even in this case
@@ -111,6 +110,28 @@ namespace flash
                 return flash::warp_uniform(list_ptr[1]);
             }
         }
+
+        __device__
+        bool is_n_block_in_range(int n_block) const
+        {
+            if constexpr (!Reverse) {
+                return flash::warp_uniform(n_block >= start_idx && n_block < end_idx);
+            } else {
+                return flash::warp_uniform(n_block <= start_idx && n_block > end_idx);
+            }
+        }
+
+        __device__
+        bool find_range(int n_block)
+        {
+            bool found = is_n_block_in_range(n_block);
+            while (has_more() && !found) {
+                load_range();
+                advance();
+                found = is_n_block_in_range(n_block);
+            }
+            return found;
+        }
     };
 
     // ============================================================================
@@ -133,7 +154,6 @@ namespace flash
         int16_t *list_ptr;
         int write_idx = 1;
         bool is_skipping = true;
-        MustDoListReader<ReverseMustDoList> must_do_reader;
         
         static constexpr bool Phase = !ReverseMustDoList;
 
@@ -154,37 +174,12 @@ namespace flash
                                    (static_cast<uint64_t>(q_i) * num_k_blocks);
             
             list_ptr = &params.qk_skip_mask_args.attn_write_list[mask_offset];
-
-            if constexpr (HasMustDoList) {
-                must_do_reader.template init<TileShape_MNK>(params, bidb, bidh, m_block);
-                // must_do_reader.init(params, bidb, bidh, m_block);
-            }
         }
 
         // Record a transition in skip state
         __device__
         void record_transition(bool skip, int n_block)
         {
-            if constexpr (HasMustDoList) {
-                if(skip){
-                    // advance the must_do list
-                    if constexpr (Phase) {
-                        if (must_do_reader.end_idx < n_block && must_do_reader.has_more()) {
-                            must_do_reader.advance();
-                            must_do_reader.load_range();
-                        }
-                        bool must_do = n_block >= must_do_reader.start_idx && n_block < must_do_reader.end_idx;
-                        skip = skip && !must_do;
-                    } else {
-                        if (must_do_reader.end_idx > n_block && must_do_reader.has_more()) {
-                            must_do_reader.advance();
-                            must_do_reader.load_range();
-                        }
-                        bool must_do = n_block <= must_do_reader.start_idx && n_block > must_do_reader.end_idx;
-                        skip = skip && !must_do;
-                    }
-                }
-            }
             if (skip != is_skipping)
             {
                 list_ptr[write_idx] = n_block;
@@ -280,7 +275,8 @@ namespace flash
         int (*skip_tests)[4];
 
         //should reside in thread registers.
-        SkipListWriter<ReverseSkipList && !Phase, HasMustDoList> writer;
+        // SkipListWriter<ReverseSkipList && !Phase, HasMustDoList> writer;
+        SkipListWriter<(Phase == false), HasMustDoList> writer;
         bool replayed_skip;
         int record_idx = -1;
         int replay_idx = DelayAmount - 1;
@@ -329,12 +325,21 @@ namespace flash
         }
 
         // consider: calling this when acquiring K for loading.
+        // is_must_do: if true, this n_block is in the MustDoList and should not be skipped
         __device__
-        void record_n_block(int n_block)
+        void record_n_block(int n_block, bool is_must_do = false)
         {
             record_idx = (record_idx + 1) % BufferSize;
             // record the current n_block for replay in DelayAmount iterations from now.
             n_blocks_buffer[record_idx] = n_block;
+            
+            // If this n_block is in the MustDoList, initialize skip_tests to 0 (force computation)
+            // Otherwise, initialize to 1 (allow skipping)
+            int init_value = is_must_do ? 0 : 1;
+            skip_tests[record_idx][0] = init_value;
+            skip_tests[record_idx][1] = init_value;
+            skip_tests[record_idx][2] = init_value;
+            skip_tests[record_idx][3] = init_value;
         }
 
         __device__
@@ -365,11 +370,7 @@ namespace flash
             // replay record_transition with the values from DelayAmount ago.
             writer.record_transition(replayed_skip, replayed_n_block);
 
-            // reset the skip tests for reuse by the consumers.
-            skip_tests[replay_idx][0] = 1;
-            skip_tests[replay_idx][1] = 1;
-            skip_tests[replay_idx][2] = 1;
-            skip_tests[replay_idx][3] = 1;
+            // Note: skip_tests reset is now done in record_n_block() when recording the next value
         }
 
         __device__

@@ -699,6 +699,10 @@ namespace flash
 
             // SkipListReader<ReverseSkipList, Phase> skip_reader;
             auto &skip_reader = shared_storage.skip_list_storage.reader;
+            
+            // MustDoListReader: only used by producer (thread 0) to determine which blocks must be computed
+            MustDoListReader<ReverseSkipList> must_do_reader;
+            
             if constexpr (Is_skipable)
             {
                 skip_reader.template init<TileShape_MNK>(params, bidb, bidh, m_block);
@@ -706,6 +710,11 @@ namespace flash
                 shared_storage.skip_list_storage.last_n_block[0] = skip_reader.last_n_block();
                 __threadfence_block();
                 // skip_writer.template init<TileShape_MNK>(params, bidb, bidh, m_block);
+                if constexpr (HasMustDoList)
+                {
+                    // must_do_reader.template init<TileShape_MNK>(params, 0, 0, skip_reader.start_idx);
+                    must_do_reader.template init<TileShape_MNK>(params, 0, 0, 0);
+                }
             }
 
             Tensor sQ = make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_q.data()), SmemLayoutQ{});
@@ -858,7 +867,7 @@ namespace flash
                 }
             }
 
-            auto load_K = [&](int const n_block, auto const &smem_pipe_write, auto need_seqlenk_masking_type, auto &skip_writer)
+            auto load_K = [&](int const n_block, auto const &smem_pipe_write, auto need_seqlenk_masking_type, auto &skip_writer, bool is_must_do = false)
             {
                 pipeline_k.producer_acquire(smem_pipe_write);
                 if constexpr (Is_skipable){ 
@@ -866,7 +875,7 @@ namespace flash
                     if constexpr (NeedInitSkipWriter){
                         skip_writer.template init<TileShape_MNK>(params, bidb, bidh, m_block);
                     }
-                    skip_writer.record_n_block(n_block); 
+                    skip_writer.record_n_block(n_block, is_must_do); 
                     __threadfence_block();
                 }
                 if constexpr (!PagedKVNonTMA)
@@ -931,8 +940,12 @@ namespace flash
             };
 
             int n_block;
+            bool is_must_do = false;
             if constexpr (Is_skipable){
                 n_block = skip_reader.start_idx;
+                if constexpr (HasMustDoList){
+                    is_must_do = must_do_reader.find_range(n_block);
+                }
             }
             else{
                 n_block = n_block_max - 1;
@@ -961,7 +974,7 @@ namespace flash
                 // we put it here so only 1 thread would write this value
                 // shared_storage.skip_list_storage.last_n_block[0] = skip_reader.last_n_block();
                 // __threadfence_block();
-                load_K(n_block, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/, skip_writer);
+                load_K(n_block, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/, skip_writer, is_must_do);
                 // if (thread_idx == 0) { printf("Producer: main load, after load K, index = %d\n", smem_pipe_write.index());}
             }
 
@@ -1016,7 +1029,7 @@ namespace flash
             // if (thread_idx == 0) { printf("Producer: main load, after barrier_O\n");}
 
             // Lambda to load K and V for a given n_block
-            auto load_KV_for_block = [&](int n_block, int n_block_prev, PipelineState& smem_pipe_write, PipelineState& smem_pipe_write_v, auto &skip_writer)
+            auto load_KV_for_block = [&](int n_block, int n_block_prev, PipelineState& smem_pipe_write, PipelineState& smem_pipe_write_v, auto &skip_writer, bool is_must_do = false)
             {
                 if (should_load_KV)
                 {
@@ -1032,7 +1045,7 @@ namespace flash
                     {
                         load_V(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/, skip_writer);
                     }
-                    load_K(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/, skip_writer);
+                    load_K(n_block, smem_pipe_write, cute::false_type{} /*Seqlenk_mask*/, skip_writer, is_must_do);
                     if constexpr (!Transpose_V)
                     {
                         if constexpr (IntraWGOverlap)
@@ -1067,18 +1080,24 @@ namespace flash
                     if constexpr (Phase){
                         for (; n_block < skip_reader.end_idx; n_block += skip_reader.step)
                         {
+                            if constexpr (HasMustDoList){
+                                is_must_do = must_do_reader.find_range(n_block);
+                            }
                             PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
                             ++smem_pipe_write;
-                            load_KV_for_block(n_block, n_block_prev, smem_pipe_write, smem_pipe_write_v, skip_writer);
+                            load_KV_for_block(n_block, n_block_prev, smem_pipe_write, smem_pipe_write_v, skip_writer, is_must_do);
                             n_block_prev = n_block;
                             if constexpr (Transpose_V){ copy_Vt_to_V(smem_pipe_write_v); }
                         }
                     }else{
                         for (; n_block > skip_reader.end_idx; n_block += skip_reader.step)
                         {
+                            if constexpr (HasMustDoList){
+                                is_must_do = must_do_reader.find_range(n_block);
+                            }
                             PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
                             ++smem_pipe_write;
-                            load_KV_for_block(n_block, n_block_prev, smem_pipe_write, smem_pipe_write_v, skip_writer);
+                            load_KV_for_block(n_block, n_block_prev, smem_pipe_write, smem_pipe_write_v, skip_writer, is_must_do);
                             n_block_prev = n_block;
                             if constexpr (Transpose_V){ copy_Vt_to_V(smem_pipe_write_v); }
                         }
