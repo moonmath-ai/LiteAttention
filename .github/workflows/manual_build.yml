@@ -37,9 +37,10 @@ on:
       cuda-version:
         description: "CUDA version"
         required: true
-        default: "12.9.1"
+        default: "12.8.1"
         type: choice
         options:
+          - "12.8.1"
           - "12.9.1"
           - "13.0.2"
       cxx11_abi:

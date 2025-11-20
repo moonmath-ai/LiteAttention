@@ -49,6 +49,15 @@ jobs:
         run: |
           apt-get update && apt-get install -y \
             git
+          (type -p wget >/dev/null || (sudo apt update && sudo apt install wget -y)) \
+          && sudo mkdir -p -m 755 /etc/apt/keyrings \
+          && out=$(mktemp) && wget -nv -O$out https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+          && cat $out | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null \
+          && sudo chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+          && sudo mkdir -p -m 755 /etc/apt/sources.list.d \
+          && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
+          && sudo apt update \
+          && sudo apt install gh -y
       - name: Checkout
         uses: actions/checkout@v5
         with:
@@ -74,15 +83,9 @@ jobs:
           # With python 3.13 and torch 2.5.1, unless we update typing-extensions, we get error
           # AttributeError: attribute '__default__' of 'typing.ParamSpec' objects is not writable
           pip install typing-extensions==4.12.2
-          # We want to figure out the CUDA version to download pytorch
-          # e.g. we can have system CUDA version being 11.7 but if torch==1.12 then we need to download the wheel from cu116
-          # see https://github.com/pytorch/pytorch/blob/main/RELEASE.md#release-compatibility-matrix
-          # This code is ugly, maybe there's a better way to do this.
-          export TORCH_CUDA_VERSION=$(python -c "from os import environ as env; \
-            minv = {'2.5': 118, '2.6': 118, '2.7': 118, '2.8': 126, '2.9': 126}[env['MATRIX_TORCH_VERSION']]; \
-            maxv = {'2.5': 124, '2.6': 126, '2.7': 128, '2.8': 129, '2.9': 130}[env['MATRIX_TORCH_VERSION']]; \
-            print(minv if int(env['MATRIX_CUDA_VERSION']) < 120 else maxv)" \
-          )
+          # Use the CUDA version that's already installed on the system
+          # Download PyTorch wheel built for the same CUDA version
+          export TORCH_CUDA_VERSION=$MATRIX_CUDA_VERSION
           # detect if we're on ARM
           if [ "$(uname -m)" = "aarch64" ] || [ "$(uname -m)" = "arm64" ]; then
               PLAT=linux_aarch64
@@ -197,22 +200,11 @@ jobs:
           path: build-wheel/hopper/dist/*.whl
           retention-days: 30
 
-      - name: Get Release with tag
-        id: get_current_release
-        uses: joutvhu/get-release@v1
-        with:
-          tag_name: ${{ inputs.release-version }}
+      - name: Upload wheel to Release
+        if: inputs.upload-to-release && steps.build_wheel.outputs.build_exit_code == '0'
+        working-directory: build-wheel/hopper
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload Release Asset
-        id: upload_release_asset
-        if: inputs.upload-to-release
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.get_current_release.outputs.upload_url }}
-          asset_path: build-wheel/hopper/dist/${{env.wheel_name}}
-          asset_name: ${{env.wheel_name}}
-          asset_content_type: application/*
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release-version }}
+        run: |
+          gh release upload ${{ env.RELEASE_TAG }} dist/${{env.wheel_name}} --clobber
