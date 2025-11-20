@@ -51,6 +51,16 @@ on:
         options:
           - "FALSE"
           - "TRUE"
+      upload-to-release:
+        description: "Upload wheel to release"
+        required: true
+        default: false
+        type: boolean
+      release-version:
+        description: "Release version"
+        required: true
+        default: "v0.1.0"
+        type: string
 
 jobs:
   build_wheel:
@@ -62,5 +72,6 @@ jobs:
       cuda-version: ${{ inputs.cuda-version }}
       torch-version: ${{ inputs.torch-version }}
       cxx11_abi: ${{ inputs.cxx11_abi }}
-      upload-to-release: false
+      upload-to-release: ${{ inputs.upload-to-release }}
+      release-version: ${{ inputs.release-version }}
 
