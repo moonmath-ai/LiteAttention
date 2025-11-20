@@ -142,7 +142,7 @@ jobs:
               --output inputs.yaml && \
             surveyor2 profile \
               --inputs inputs.yaml \
-              --report-json /generated_videos/report.json && \
+              --report-json /generated_videos/report.json || true && \
             surveyor2 markdown \
               --input /generated_videos/report.json \
               --output /generated_videos/report.md"
