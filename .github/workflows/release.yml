@@ -203,7 +203,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ needs.get_release_tag.outputs.release_tag }}
         run: |
-          gh release upload ${{ env.RELEASE_TAG }} example_videos.tar.gz
+          gh release upload ${{ env.RELEASE_TAG }} example_videos.tar.gz --clobber
 
   build_wheels:
     name: Build Wheel
