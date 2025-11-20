@@ -111,32 +111,6 @@ jobs:
           python -c "import torch; print('CUDA:', torch.version.cuda)"
           python -c "from torch.utils import cpp_extension; print (cpp_extension.CUDA_HOME)"
 
-      - name: Restore build cache
-        uses: actions/cache/restore@v4
-        with:
-          path: build-wheel/hopper/build.tar
-          key: build-${{ inputs.release-version }}-${{ inputs.python-version }}-${{ inputs.cuda-version }}-${{ inputs.torch-version }}-${{ inputs.cxx11_abi }}-${{ github.run_number }}-${{ github.run_attempt }}
-          restore-keys: |
-            build-${{ inputs.release-version }}-${{ inputs.python-version }}-${{ inputs.cuda-version }}-${{ inputs.torch-version }}-${{ inputs.cxx11_abi }}-
-
-      - name: Unpack build cache
-        working-directory: build-wheel/hopper
-        run: |
-          echo ::group::Adjust timestamps
-          find / -exec touch -t 197001010000 {} + || true
-          echo ::endgroup::
-
-          if [ -f build.tar ]; then
-            find . -mindepth 1 -maxdepth 1 ! -name 'build.tar' -exec rm -rf {} +
-            tar -xpvf build.tar -C .
-          else
-            echo "No build.tar found, skipping"
-          fi
-
-          ls -al ./
-          ls -al build/ || true
-          ls -al csrc/ || true
-
       - name: Build wheel
         id: build_wheel
         working-directory: build-wheel/hopper
@@ -179,13 +153,6 @@ jobs:
         run: |
           ls -al ./
           tar -cvf build.tar . --atime-preserve=replace
-
-      - name: Save build cache timeout
-        if: always() && steps.build_wheel.outputs.build_exit_code == 124
-        uses: actions/cache/save@v4
-        with:
-          key: build-${{ inputs.release-version }}-${{ inputs.python-version }}-${{ inputs.cuda-version }}-${{ inputs.torch-version }}-${{ inputs.cxx11_abi }}-${{ github.run_number }}-${{ github.run_attempt }}
-          path: build-wheel/hopper/build.tar
 
       - name: Log Built Wheels
         working-directory: build-wheel/hopper
