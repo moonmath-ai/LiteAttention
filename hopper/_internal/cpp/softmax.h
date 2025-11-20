@@ -11,6 +11,7 @@
 #include <cutlass/numeric_types.h>
 
 #include "utils.h"
+#include "skip_list.h"
 
 namespace flash
 {
@@ -131,16 +132,23 @@ namespace flash
         float const softmax_scale_log2; // (log2(e) * 1/sqrt(128)) * q_dequant * k_dequant
         // int const warp_idx_in_warpgroup = (threadIdx.x / 32) % 4;
         int const warp_idx_in_warpgroup = __shfl_sync(0xffffffff, (threadIdx.x / 32) % 4, 0);
-        // bool const is_warp_leader = (threadIdx.x % 32) == 0;
-        bool const is_warp_leader = cute::elect_one_sync();
+        bool const is_warp_leader = (threadIdx.x % 32) == 0;
+        // bool const is_warp_leader = cute::elect_one_sync();
+        // int const row_mask;
+        // int const local_row_idx;
+        int const seqlen_q;
+        int const thread_idx;
 
-        CUTLASS_DEVICE Softmax(float const softmax_scale_log2_) : softmax_scale_log2(softmax_scale_log2_) {};
+        // CUTLASS_DEVICE Softmax(float const softmax_scale_log2_, int const row_mask_, int const local_row_idx_) : softmax_scale_log2(softmax_scale_log2_), row_mask(row_mask_), local_row_idx(local_row_idx_) {};
+        CUTLASS_DEVICE Softmax(float const softmax_scale_log2_, int const seqlen_q_, int const thread_idx_) 
+            : softmax_scale_log2(softmax_scale_log2_), seqlen_q(seqlen_q_), thread_idx(thread_idx_) {};
 
-        template <bool const Is_first, bool const Check_inf = false, bool const softmax_cond_assign = false, typename Tensor0>
+        template <int kBlockM, typename TiledMma, bool const Is_first, bool const Check_inf = false, typename Tensor0>
         __forceinline__ __device__ TensorT max_get_scale_detect_qk_skip(
             Tensor0 &acc_s,
             const float thr,
-            int skip_tests[4])
+            auto &skip_reader,
+            const int m_block)
         {
             // Reshape acc_s from ((2, 2, V), MMA_M, MMA_N) to (nrow=(2, MMA_M), ncol=(2, V, MMA_N))
             Tensor scores = make_tensor(acc_s.data(), flash::convert_layout_acc_rowcol(acc_s.layout()));
@@ -150,7 +158,10 @@ namespace flash
             {
                 flash::template reduce_max</*zero_init=*/true>(scores, row_max);
                 cute::fill(scores_scale, 1.f);
-                if (is_warp_leader){ skip_tests[warp_idx_in_warpgroup] = false; }
+                if (is_warp_leader)
+                {
+                    skip_reader.update_skip(false, warp_idx_in_warpgroup);
+                }
             }
             else
             {
@@ -172,10 +183,28 @@ namespace flash
                 // thread_reduce_<true>(scores_max_local, row_max, MaxOp<float>());
                 // flash::template reduce_max</*zero_init=*/false>(scores, row_max);
 
+                // Compute row bounds following the same pattern as mask.h
+                // Create identity tensor and partition it to get row coordinates
+                auto thread_mma = TiledMma{}.get_thread_slice(thread_idx);
+                auto thread0_mma = TiledMma{}.get_thread_slice(_0{});
+                Tensor cS = cute::make_identity_tensor(Shape<Int<kBlockM>, Int<kBlockM>>{});  // Dummy shape, only need row info
+                Tensor tScS = thread_mma.partition_C(cS);
+                Tensor t0ScS = thread0_mma.partition_C(cS);
+                Tensor tScS_rowcol = make_tensor(tScS.data(), flash::convert_layout_acc_rowcol(tScS.layout()));
+                Tensor t0ScS_rowcol = make_tensor(t0ScS.data(), flash::convert_layout_acc_rowcol(t0ScS.layout()));
+                
+                // Compute thread_row_offset and seqlenq_row_limit following mask.h pattern
+                int const thread_row_offset = get<0>(tScS_rowcol(_0{}, _0{}));
+                int const seqlenq_row_limit = seqlen_q - m_block * kBlockM - thread_row_offset;
+                
                 bool do_qk = false;
 #pragma unroll
                 for (int mi = 0; mi < size(row_max); ++mi)
                 {
+                    // Check if this row is out of bounds, following mask.h pattern
+                    // Use t0ScS_rowcol to get compile-time known row indices
+                    const bool row_not_out_of_bounds = !(int(get<0>(t0ScS_rowcol(mi, _0{}))) >= seqlenq_row_limit);
+                    
                     // update row max
                     row_max(mi) = max(row_max(mi), scores_max_local(mi));
                     // float cur = !Check_inf
@@ -190,31 +219,22 @@ namespace flash
                     float prev = scores_max_prev(mi);
                     scores_scale(mi) = exp2f((prev - cur) * softmax_scale_log2);
                     row_sum(mi) *= scores_scale(mi);
-                    // do_qk |= (((cur - prev) * softmax_scale_log2) > thr);
-                    do_qk |= (((scores_max_local(mi) - prev) * softmax_scale_log2) > thr);
 
-                    // do_qk |= scores_max_local(mi) * thr > prev;
+                    // do_qk |= (((scores_max_local(mi) - prev) * softmax_scale_log2) > thr) & row_not_out_of_bounds;
 
-                    // do_qk |= (prev - scores_max_local(mi)) * thr < prev;
-                    // do_qk |= (cur - scores_max_local(mi)) * thr < cur;
+                    // do_qk |= ((scores_max_local(mi) * thr) >= prev) & row_not_out_of_bounds;
 
-                    // prev * thr - scores_max_local(mi) * thr < prev;
-                    // prev * thr - prev < scores_max_local(mi) * thr;
-                    // prev * (thr - 1.0f) < scores_max_local(mi) * thr;
-                    // prev * ((thr - 1.0f)/ thr) < scores_max_local(mi);
+                    // bool cond1 = (scores_max_local(mi) - prev + abs(scores_max_local(mi)) * 0.5f >= 0); // if the current max is at least 1.5 times the previous max
+                    bool cond1 = true;
+                    bool cond2 = ((scores_max_local(mi) - prev) * softmax_scale_log2) > thr; // if the current max is more than thr times the previous max
+                    do_qk |= cond1 & cond2 & row_not_out_of_bounds; // if both conditions are true and the row is not out of bounds, then set do_qk to true
                 }
 
+                // (warp = 32) * 4 = warpgroup, 2 * warpgroup
                 const bool skip = !__any_sync(0xffffffffu, do_qk);
                 if (is_warp_leader)
                 {
-                    if constexpr (softmax_cond_assign)
-                    {
-                        skip_tests[warp_idx_in_warpgroup] &= skip;
-                    }
-                    else
-                    {
-                        skip_tests[warp_idx_in_warpgroup] = skip;
-                    }
+                    skip_reader.update_skip(skip, warp_idx_in_warpgroup);
                 }
             }
 

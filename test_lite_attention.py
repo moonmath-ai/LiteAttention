@@ -1,85 +1,184 @@
 import torch
 from lite_attention import LiteAttention
 
-torch.manual_seed(0)
-torch.cuda.manual_seed(0)
 
-for head_dim in [32, 64, 96, 128, 192, 256]:
-    q = torch.randn(2, 5000, 32, head_dim, device="cuda", dtype=torch.bfloat16)
-    k = torch.randn(2, 5000, 32, head_dim, device="cuda", dtype=torch.bfloat16)
-    v = torch.randn(2, 5000, 32, head_dim, device="cuda", dtype=torch.bfloat16)
-    # skip all test
+def generate_test_tensors(batch, seq_len, heads, head_dim):
+    """Generate random Q, K, V tensors for testing."""
+    q = torch.randn(batch, seq_len, heads, head_dim, device="cuda", dtype=torch.bfloat16)
+    k = torch.randn(batch, seq_len, heads, head_dim, device="cuda", dtype=torch.bfloat16)
+    v = torch.randn(batch, seq_len, heads, head_dim, device="cuda", dtype=torch.bfloat16)
+    return q, k, v
+
+
+def run_attention_warmup(attn, q, k, v, num_iters=1):
+    """Run attention forward pass multiple times to warm up."""
+    for _ in range(num_iters):
+        torch.cuda.synchronize()
+        output = attn(q, k, v)
+        torch.cuda.synchronize()
+    return output
+
+def print_skip_percentage(attn, q):
+    """Print the skip percentage for the given query."""
+    skip_percentage = attn.calc_percentage(attn._skip_list[attn._phase, :q.shape[0]])
+    print(f"    Skip percentage: {skip_percentage:.2%}")
+
+def check_first_element_is_last_block(skip_list):
+    """
+    Check that the first element in the skip list is the last block (ktiles - 1).
+    
+    Args:
+        skip_list: Skip list tensor of shape [batch, heads, qtiles, ktiles]
+    
+    Returns:
+        bool: True if all first elements equal the last block index, False otherwise.
+    """
+    last_n_block = skip_list.shape[-1] - 2
+    is_n_block = skip_list[..., 1] == last_n_block
+    is_all_n_blocks = is_n_block.all()
+    if not is_all_n_blocks:
+        print(f"     ⚠️  First Element is not ktiles - 1!, it's: {skip_list[..., 1]} != {last_n_block}")
+    return is_all_n_blocks
+
+def check_skip_list_length_valid(skip_list):
+    """
+    Check that the list length isn't bigger than ktiles + 1.
+    
+    Args:
+        skip_list: Skip list tensor of shape [batch, heads, qtiles, ktiles]
+    
+    Returns:
+        bool: True if all list lengths are valid, False otherwise.
+    """
+    passed = (skip_list.shape[-1] > skip_list[..., 0]).all()
+    if not passed:
+        print(f"      ⚠️  List length is bigger than the length of the skip list: {skip_list[..., 0]} <= {skip_list.shape[-1]}")
+    return passed
+
+def check_no_empty_or_negative_ranges(skip_list):
+    """
+    Check that we don't have empty or negative ranges in the skip list.
+    
+    Args:
+        skip_list: Skip list tensor of shape [batch, heads, qtiles, ktiles]
+    
+    Returns:
+        bool: True if no empty or negative ranges exist, False otherwise.
+    """
+    # Check that all ranges are positive (start < end)
+    # [start0 - end0, end0 - start1, start1 - end1, end1 - start2, ..., start_n - end_n]
+    diff = (skip_list[..., 1:-1] - skip_list[..., 2:]) > 0
+    arange = torch.arange(diff.shape[-1], device=skip_list.device).view(1, 1, 1, -1) >= skip_list[..., 0:1] - 1
+    # Only check ranges that are within the valid list length
+    passed_individually = (arange + diff) > 0
+    passed_individually = passed_individually.all(-1)
+    passed = passed_individually.all()
+    if not passed:
+        print(f"     ⚠️  Empty or negative ranges found!")
+        not_passed = skip_list[~passed_individually]
+        max_len = (not_passed[..., 0].flatten().max() + 1).item()
+        print(f"    Failed items: {not_passed[..., :max_len]}")
+    return passed
+
+def test_skip_all(q, k, v, head_dim):
+    """
+    Test that when threshold is inf, all tiles are skipped except one range.
+    Expected: skip_list should contain exactly 2 entries (one range of length 1).
+    """
     attn = LiteAttention()
     attn.threshold = float('inf')
-    # attn.threshold = float(0.0)
-    torch.cuda.synchronize()
-    output = attn(q, k, v)
-    torch.cuda.synchronize()
-    passed = (attn._skip_list[1, ..., 0] <= 2).all()
-    print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
-    print("head_dim: ", head_dim)
-    print("skip all test:", passed)
+    
+    # Warm up
+    run_attention_warmup(attn, q, k, v)
+    
+    skip_list = attn._skip_list[attn._phase, :q.shape[0]]  # [batch, heads, qtiles, ktiles]
+    
+    # Test that skip lists include only 1 range (skip_list[..., 0] == 2 means 1 range)
+    passed = (skip_list[..., 0] == 2).all()
     if not passed:
-        print(output.shape)
-        print(attn._skip_list.shape)
-        print(attn._skip_list[1, 0, 0, 0, :])
+        print("      ⚠️  Skip list length is not 2")
+    
+    # Test that the only range has length 1
+    diff = (skip_list[..., 1] - skip_list[..., 2]).abs()
+    mpassed = (diff == 1)
+    passed &= mpassed.all()
 
-    # test must do
-    attn = LiteAttention()
-    attn.threshold = float('inf') # skip all
-    torch.cuda.synchronize()
-    must_do_list = [k.shape[1]-1,0]  # must not skip anything
-    print("must_do_list", must_do_list)
-    output = attn(q, k, v, must_do_list = must_do_list)
-    torch.cuda.synchronize()
-    passed = (attn._skip_list[1] == attn._skip_list[0]).all()  # check that nothing was skipped
-    print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
-    print("head_dim: ", head_dim)
-    print("skip all test:", passed)
+    # Test that the only block we don't skip is the last one
+    passed &= check_first_element_is_last_block(skip_list)
+    
+    print(f"  Skip all test: {'✅ PASSED' if passed else '❌ FAILED'}")
     if not passed:
-        print(output.shape)
-        print(attn._skip_list.shape)
-        print(attn._skip_list[1, 0, 0, 0, :])
-    print("must do test:", passed)
+        print(f"    Skip list shape: {skip_list.shape}")
+        print_skip_percentage(attn, q)
+        mdiff = diff[~mpassed]
+        print(f"    Mismatched diffs: {mdiff}, shape: {mdiff.shape}")
+        print(f"    Sample skip_list[0, 1, :, 1:3]:\n{skip_list[0, 1, :, 1:3]}")
+    
+    return passed
 
-    # skip nothing test
+
+def test_skip_nothing(q, k, v, head_dim):
+    """
+    Test that when threshold is -inf, no tiles are skipped.
+    Expected: skip lists should remain consistent between read and write phases.
+    """
     attn = LiteAttention()
     attn.threshold = float('-inf')
-    torch.cuda.synchronize()
-    # output = attn(q, k, v, must_skip_list = [1000,500])
-    output = attn(q, k, v)
-    torch.cuda.synchronize()
-    passed = (attn._skip_list[1] == attn._skip_list[0]).all()
-    # print(attn._skip_list[1])
-    print("skip nothing test:", passed)
     
-    # Test softmax_lse correctness (with skip optimization disabled)
-    attn = LiteAttention()
-    attn.threshold = 0.0
-    # # intentionally run twice to test how much the skip effects the lse
-    # for i in range(2):
-    for i in range(1):
-        torch.cuda.synchronize()
-        output_lite, lse_lite = attn(q, k, v, return_softmax_lse=True)
-        torch.cuda.synchronize()
+    # Warm up
+    run_attention_warmup(attn, q, k, v)
     
-    # Compute reference softmax_lse using PyTorch
-    # Shape: q, k, v are [batch, seq_len, num_heads, head_dim]
+    read_list = attn._skip_list[attn._phase, :q.shape[0]]  # [batch, heads, qtiles, ktiles]
+    write_list = attn._skip_list[1 - attn._phase, :q.shape[0]]  # [batch, heads, qtiles, ktiles]
+    
+    # Check if read and write lists match
+    test_tensor = torch.tensor([2, read_list.shape[-1] - 2, -1], device=read_list.device, dtype=read_list.dtype)[None, None, None,]
+    diff = (read_list[..., :3] == test_tensor).all(-1)
+    passed = diff.all()
+    
+    # Test that the only block we don't skip is the last one
+    passed &= check_first_element_is_last_block(read_list)
+    
+    print(f"  Skip nothing test: {'✅ PASSED' if passed else '❌ FAILED'}")
+    if not passed:
+        print_skip_percentage(attn, q)
+        print(f"    Mismatched read_list:\n{read_list[~diff][..., :5]}")
+    
+    return passed
+
+
+def compute_reference_lse(q, k, v, head_dim):
+    """Compute reference softmax log-sum-exp using PyTorch."""
     scale = 1.0 / (head_dim ** 0.5)
-    # Rearrange to [batch, num_heads, seq_len, head_dim] for bmm
-    q_ref = q.transpose(1, 2).float()  # [batch, num_heads, seq_len, head_dim]
-    k_ref = k.transpose(1, 2).float()  # [batch, num_heads, seq_len, head_dim]
-    v_ref = v.transpose(1, 2).float()  # [batch, num_heads, seq_len, head_dim]
+    
+    # Rearrange to [batch, num_heads, seq_len, head_dim]
+    q_ref = q.transpose(1, 2).float()
+    k_ref = k.transpose(1, 2).float()
     
     # Compute attention scores: [batch, num_heads, seq_len, seq_len]
     scores = torch.matmul(q_ref, k_ref.transpose(-2, -1)) * scale
     
-    # Compute log-sum-exp along the last dimension (over keys)
-    # logsumexp = log(sum(exp(scores), dim=-1))
+    # Compute log-sum-exp along the last dimension
     lse_ref = torch.logsumexp(scores, dim=-1)  # [batch, num_heads, seq_len]
     
-    # Rearrange lse_lite to match reference shape
-    # lse_lite shape is typically [batch, num_heads, seq_len]
+    return lse_ref
+
+
+def test_softmax_lse_correctness(q, k, v, head_dim, tolerance=0.001):
+    """
+    Test that softmax_lse output matches PyTorch reference implementation.
+    """
+    attn = LiteAttention()
+    attn.threshold = 0.0
+    
+    torch.cuda.synchronize()
+    output_lite, lse_lite = attn(q, k, v, return_softmax_lse=True)
+    torch.cuda.synchronize()
+    
+    # Compute reference LSE
+    lse_ref = compute_reference_lse(q, k, v, head_dim)
+    
+    # Adjust lse_lite shape if needed
     lse_lite_transposed = lse_lite
     if lse_lite.dim() == 4 and lse_lite.shape[-1] == 1:
         lse_lite_transposed = lse_lite.squeeze(-1)
@@ -88,6 +187,130 @@ for head_dim in [32, 64, 96, 128, 192, 256]:
     lse_diff = torch.abs(lse_ref - lse_lite_transposed.float())
     max_diff = lse_diff.max().item()
     mean_diff = lse_diff.mean().item()
-    lse_passed = max_diff < 0.1  # Allow small numerical differences
-    print(f"softmax_lse correctness test: {'PASSED' if lse_passed else 'FAILED'}")
-    print(f"  max diff: {max_diff:.6f}, mean diff: {mean_diff:.6f}")
+    passed = max_diff < tolerance
+    
+    print(f"  Softmax LSE test: {'✅ PASSED' if passed else '❌ FAILED'}")
+    print(f"    Max diff: {max_diff:.6f}, Mean diff: {mean_diff:.6f}")
+    
+    return passed
+
+def consistency_test(q, k, v, head_dim, num_iters=10):
+    """Test that the skip list is consistent between reads and writes."""
+    attn = LiteAttention()
+    attn.threshold = float(0.0)
+
+    previous_skip_list = None
+    skip_list = None
+    percentage = float('inf')
+    for i in range(num_iters):
+        q, k, v = generate_test_tensors(batch=q.shape[0], seq_len=q.shape[1], heads=q.shape[2], head_dim=q.shape[3])
+        torch.cuda.synchronize()
+        output = attn(q, k, v)
+        torch.cuda.synchronize()
+
+        previous_skip_list = skip_list
+        skip_list = attn._skip_list[attn._phase, :q.shape[0]]
+
+        # check new percentage is not bigger than the previous one
+        new_percentage = attn.calc_percentage(skip_list)
+        if new_percentage > percentage:
+            print(f"  Consistency test: {'✅ PASSED' if False else '❌ FAILED'}")
+            print(f"    Failed on iteration {i}")
+            print(f"    New percentage is bigger than the previous one: {new_percentage:.2%} > {percentage:.2%}")
+            return False
+        percentage = new_percentage
+        
+        # Check that the first element in the skip list is the last block
+        if not check_first_element_is_last_block(skip_list):
+            print(f"  Consistency test: {'✅ PASSED' if False else '❌ FAILED'}")
+            print(f"    Failed on iteration {i}")
+            return False
+        
+        # Check that the list length isn't bigger than ktiles + 1
+        if not check_skip_list_length_valid(skip_list):
+            print(f"  Consistency test: {'✅ PASSED' if False else '❌ FAILED'}")
+            print(f"    Failed on iteration {i}")
+            return False
+
+        # Check that we don't have empty or negative ranges
+        if not check_no_empty_or_negative_ranges(skip_list):
+            print(f"  Consistency test: {'✅ PASSED' if False else '❌ FAILED'}")
+            print(f"    Failed on iteration {i}")
+            return False
+    
+    print(f"  Consistency test: {'✅ PASSED' if True else '❌ FAILED'}")
+    return True
+
+
+def stress_test(q, k, v, head_dim, num_iters=10):
+    """Stress test the attention mechanism."""
+    attn = LiteAttention()
+    attn.threshold = float(0.0)
+
+    torch.cuda.synchronize()
+    output = attn(q, k, v)
+    torch.cuda.synchronize()
+
+    n = 11
+    percentage = attn.calc_percentage(attn._skip_list[attn._phase, :q.shape[0]])
+    
+    passed = True
+
+    for i in range(num_iters):
+        torch.cuda.synchronize()
+        output = attn(q, k, v)
+        torch.cuda.synchronize()
+        new_percentage = attn.calc_percentage(attn._skip_list[attn._phase, :q.shape[0]])
+        
+        # Test that the only block we don't skip is the last one
+        skip_list = attn._skip_list[attn._phase, :q.shape[0]]
+        passed &= check_first_element_is_last_block(skip_list)
+        
+        if new_percentage != percentage:
+            print(f"  Skip list: {attn._skip_list[attn._phase, 0,0,0,:n]}, ktiles: {attn._skip_list.shape[-1] - 1}")
+            print(f"  percentage changed from {percentage:.2%} to {new_percentage:.2%} at iteration {i}")
+            print(f"  Stress test completed: {'✅ PASSED' if False else '❌ FAILED'}")
+            return
+
+    print_skip_percentage(attn, q)
+    print(f"  Stress test completed: {'✅ PASSED' if passed else '❌ FAILED'}")
+    
+
+def run_tests_for_head_dim(head_dim, batch=2, seq_len=18200, heads=32):
+    """Run all tests for a specific head dimension."""
+    print(f"\n{'='*60}")
+    print(f"Testing head_dim: {head_dim}")
+    print(f"{'='*60}")
+    
+    # Generate test data
+    q, k, v = generate_test_tensors(batch, seq_len, heads, head_dim)
+    
+    # Run tests
+    stress_test(q, k, v, head_dim)
+    test_skip_all(q, k, v, head_dim)
+    test_skip_nothing(q, k, v, head_dim)
+    q, k, v = generate_test_tensors(batch=batch, seq_len=min(6000, seq_len), heads=heads, head_dim=head_dim)
+    test_softmax_lse_correctness(q, k, v, head_dim)
+
+    consistency_test(q, k, v, head_dim)
+
+
+def main():
+    """Main test runner."""
+    # Set random seeds for reproducibility
+    torch.manual_seed(0)
+    torch.cuda.manual_seed(0)
+    
+    # Test different head dimensions
+    head_dims = [32, 64, 96, 128, 192, 256]
+    
+    for head_dim in head_dims:
+        run_tests_for_head_dim(head_dim)
+    
+    print(f"\n{'='*60}")
+    print("All tests completed!")
+    print(f"{'='*60}\n")
+
+
+if __name__ == "__main__":
+    main()
