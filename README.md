@@ -117,13 +117,13 @@ Clone this repo and build from source:
 ```sh
 git clone https://github.com/moonmath-ai/LiteAttention.git
 cd LiteAttention/hopper
-python setup.py install
+pip install .
 ```
 
 If your machine has less than 96GB of RAM and lots of CPU cores, `ninja` might run too many parallel compilation jobs that could exhaust the amount of RAM. To limit the number of parallel compilation jobs, you can set the environment variable `MAX_JOBS`:
 
 ```sh
-MAX_JOBS=4 pip install flash-attn --no-build-isolation
+MAX_JOBS=4 pip install .
 ```
 
 ## 🚀 Usage
