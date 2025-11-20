@@ -696,8 +696,6 @@ class LiteAttention:
             must_do_list_expanded = None
 
         # print("must_do_list_expanded", must_do_list_expanded.shape)
-
-        print("must_do_list_expanded", must_do_list_expanded)
         
         # Perform flash attention 3 with skip lists
         output = flash_attn_func(
