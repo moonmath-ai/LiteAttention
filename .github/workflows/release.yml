@@ -1,0 +1,279 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_wheel:
+        description: "Build wheels"
+        required: true
+        default: true
+        type: boolean
+      publish_package:
+        description: "Publish package"
+        required: true
+        default: true
+        type: boolean
+
+jobs:
+  get_release_tag:
+    name: Get Release Tag
+    runs-on: [self-hosted, Linux]
+    outputs:
+      release_tag: ${{ steps.get_tag.outputs.tag }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          path: LiteAttention
+      
+      - name: Get latest tag
+        id: get_tag
+        working-directory: LiteAttention
+        run: |
+          LATEST_TAG=$(git describe --tags --abbrev=0)
+          echo "tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+          echo "Latest tag: $LATEST_TAG"
+
+  generate_videos:
+    name: Generate videos for ${{ matrix.target }}
+    runs-on: [self-hosted, multigpu]
+    strategy:
+      matrix:
+        target: [ltx]
+        include:
+          - target: ltx
+            repo_url: moonmath-ai/LTX-Video.git
+            repo_name: LTX-Video
+            branch: ci-lite-attention
+            prompts_branch: ltx
+            prompts_repo: moonmath-ai/ci-prompts-list.git
+    
+    steps:
+      - name: Create GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.CI_PULL_ID }}
+          private-key: ${{ secrets.CI_PULL_SECRET }}
+          owner: moonmath-ai
+
+      - name: Checkout LiteAttention Repository
+        uses: actions/checkout@v4
+        with:
+          path: LiteAttention
+      
+      - name: Checkout ${{ matrix.target }} Repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ matrix.repo_url }}
+          ref: ${{ matrix.branch || 'main' }}
+          path: ${{ matrix.repo_name }}
+          submodules: 'recursive'
+          lfs: true
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+          persist-credentials: false
+      
+      - name: Checkout prompts list
+        uses: actions/checkout@v4
+        with:
+          path: ${{ matrix.repo_name }}-prompts
+          repository: ${{ matrix.prompts_repo }}
+          ref: ${{ matrix.prompts_branch }}
+          lfs: true
+          token: ${{ steps.app-token.outputs.token }}
+          persist-credentials: false
+      
+      - name: Build Docker image
+        working-directory: ${{ matrix.repo_name }}
+        run: |
+          docker build --build-context lite=$(pwd)/../LiteAttention -t ${{ matrix.target }}:${{github.sha}} .
+      
+      - name: Run Video Generation in Docker container
+        working-directory: ${{ matrix.repo_name }}
+        run: |
+          INPUT_PATH=$(pwd)/../${{ matrix.repo_name }}-prompts
+          OUTPUT_PATH=$HOME/output/${{ matrix.target }}-${{github.sha}}
+          CACHE_DIR=$HOME/.cache/
+          echo "INPUT_PATH=$INPUT_PATH" >> $GITHUB_ENV
+          echo "OUTPUT_PATH=$OUTPUT_PATH" >> $GITHUB_ENV
+          echo "CACHE_DIR=$CACHE_DIR" >> $GITHUB_ENV
+          mkdir -p $HOME/output/
+          mkdir -p $OUTPUT_PATH
+          mkdir -p $CACHE_DIR
+          
+          docker run --rm --gpus all \
+            -v $INPUT_PATH:/input \
+            -v $OUTPUT_PATH:/output \
+            -v $CACHE_DIR:/root/.cache \
+            ${{ matrix.target }}:${{github.sha }} \
+            python3 inference_ci.py \
+              --input_file /input/prompts.jsonl \
+              --output_path /output \
+              --videos_per_prompt ${{ vars.VIDEOS_PER_PROMPT || 1 }}
+      
+      - name: Checkout surveyor2 repository
+        uses: actions/checkout@v4
+        with:
+          repository: moonmath-ai/surveyor2.git
+          ref: main
+          path: surveyor2
+          token: ${{ steps.app-token.outputs.token }}
+          persist-credentials: false
+      
+      - name: Build surveyor2 Docker image
+        working-directory: surveyor2
+        run: |
+          docker build -t surveyor2:${{github.sha}} .
+      
+      - name: Run Surveyor2 in Docker container
+        run: |
+          docker run --rm --gpus all \
+            -v ${{ env.INPUT_PATH }}:/input \
+            -v ${{ env.OUTPUT_PATH }}:/generated_videos \
+            -v ${{ env.CACHE_DIR }}:/root/.cache \
+            surveyor2:${{github.sha }} \
+            /bin/bash -lc "
+            surveyor2 inputs \
+              --prompts /input/prompts.jsonl \
+              --reference-videos /input/ref_videos \
+              --generated-videos /generated_videos \
+              --output inputs.yaml && \
+            surveyor2 profile \
+              --inputs inputs.yaml \
+              --report-json /generated_videos/report.json || true && \
+            surveyor2 markdown \
+              --input /generated_videos/report.json \
+              --output /generated_videos/report.md"
+      - name: Upload generated videos
+        uses: actions/upload-artifact@v4
+        with:
+          name: "${{ matrix.target }}-videos-${{ github.sha }}"
+          path: ${{ env.OUTPUT_PATH }}
+          retention-days: 30
+      
+      - name: Cleanup Docker images
+        if: always()
+        run: |
+          docker rmi ${{ matrix.target }}:${{ github.sha }} || true
+          docker rmi surveyor2:${{ github.sha }} || true
+
+  create_draft_release:
+    name: Create Draft Release with Videos
+    needs: [get_release_tag, generate_videos]
+    runs-on: self-hosted
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          path: LiteAttention
+      
+      - name: Download All Video Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: LiteAttention/release-videos
+          pattern: "*-videos-*"
+      
+      - name: Create example_videos archive
+        working-directory: LiteAttention
+        run: |
+          mkdir -p example_videos
+          # Move all downloaded artifact folders into example_videos
+          find release-videos -mindepth 1 -maxdepth 1 -type d -exec mv {} example_videos/ \;
+          # Create tar.gz archive
+          tar -czf example_videos.tar.gz example_videos/
+          echo "Archive contents:"
+          tar -tzf example_videos.tar.gz | head -20
+      
+      - name: Create Draft Release
+        working-directory: LiteAttention
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.get_release_tag.outputs.release_tag }}
+        run: |
+          gh release create ${{ env.RELEASE_TAG }} --generate-notes -d --verify-tag -t "Release ${{ env.RELEASE_TAG }}"
+      
+      - name: Upload example_videos archive to Release
+        working-directory: LiteAttention
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.get_release_tag.outputs.release_tag }}
+        run: |
+          gh release upload ${{ env.RELEASE_TAG }} example_videos.tar.gz --clobber
+
+  build_wheels:
+    name: Build Wheel
+    needs: [get_release_tag, create_draft_release]
+    if: ${{ inputs.build_wheel }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        # Using ubuntu-22.04 instead of 24.04 for more compatibility (glibc). Ideally we'd use the
+        # manylinux docker image, but I haven't figured out how to install CUDA on manylinux.
+        os-version: [devel-ubuntu22.04]
+        python-version: ["3.10"]
+        torch-version: ["2.7.1", "2.8.0", "2.9.1"]
+        cuda-version: ["12.8.1"]
+        # We need separate wheels that either uses C++11 ABI (-D_GLIBCXX_USE_CXX11_ABI) or not.
+        # Pytorch wheels currently don't use it, but nvcr images have Pytorch compiled with C++11 ABI.
+        # Without this we get import error (undefined symbol: _ZN3c105ErrorC2ENS_14SourceLocationESs)
+        # when building without C++11 ABI and using it on nvcr images.
+        cxx11_abi: ["FALSE"]
+        # include:
+        #     - torch-version: "2.9.1"
+        #       cuda-version: "13.0.2"
+        #       python-version: "3.14" 
+        #     - torch-version: "2.10.0.dev20251108"
+        #       cuda-version: "13.0.2"
+        # exclude:
+        #   # see https://github.com/pytorch/pytorch/blob/main/RELEASE.md#release-compatibility-matrix
+        #   # Pytorch < 2.5 does not support Python 3.13
+        #   - torch-version: "2.4.0"
+        #     python-version: "3.13"
+    uses: ./.github/workflows/_build.yml
+    with:
+      docker-image: nvidia/cuda:${{ matrix.cuda-version }}-${{ matrix.os-version }}
+      python-version: ${{ matrix.python-version }}
+      cuda-version: ${{ matrix.cuda-version }}
+      torch-version: ${{ matrix.torch-version }}
+      cxx11_abi: ${{ matrix.cxx11_abi }}
+      release-version: ${{ needs.get_release_tag.outputs.release_tag }}
+      upload-to-release: true
+
+  publish_package:
+    name: Publish package
+    needs: [build_wheels]
+    if: ${{ inputs.publish_package }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: LiteAttention
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+      - name: Install dependencies
+        run: |
+          pip install ninja packaging wheel twine
+          # Install latest setuptools with support for pypi metadata 2.2 (improved compat w/ uv)
+          pip install setuptools==75.8.0
+          # We don't want to download anything CUDA-related here
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - name: Build core package
+        working-directory: LiteAttention/hopper
+        env:
+          FLASH_ATTENTION_SKIP_CUDA_BUILD: "TRUE"
+        run: |
+          python setup.py sdist --dist-dir=dist
+      - name: Deploy
+        env:
+          TWINE_USERNAME: "__token__"
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          python -m twine upload dist/*

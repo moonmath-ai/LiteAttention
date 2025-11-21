@@ -1,0 +1,77 @@
+name: Manual Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      os-version:
+        description: "OS version"
+        required: true
+        default: "devel-ubuntu22.04"
+        type: choice
+        options:
+          - "devel-ubuntu22.04"
+          - "devel-ubuntu24.04" 
+      python-version:
+        description: "Python version"
+        required: true
+        default: "3.11"
+        type: choice
+        options:
+          - "3.10"
+          - "3.11"
+          - "3.12"
+          - "3.13"
+          - "3.14"
+      torch-version:
+        description: "PyTorch version"
+        required: true
+        default: "2.9.1"
+        type: choice
+        options:
+          - "2.5.1"
+          - "2.6.0"
+          - "2.7.1"
+          - "2.8.0"
+          - "2.9.1"
+          - "2.10.0.dev20251108"
+      cuda-version:
+        description: "CUDA version"
+        required: true
+        default: "12.8.1"
+        type: choice
+        options:
+          - "12.8.1"
+          - "12.9.1"
+          - "13.0.2"
+      cxx11_abi:
+        description: "C++11 ABI"
+        required: true
+        default: "FALSE"
+        type: choice
+        options:
+          - "FALSE"
+          - "TRUE"
+      upload-to-release:
+        description: "Upload wheel to release"
+        required: true
+        default: false
+        type: boolean
+      release-version:
+        description: "Release version"
+        required: true
+        default: "v0.1.0"
+        type: string
+
+jobs:
+  build_wheel:
+    name: Build Wheel (Manual)
+    uses: ./.github/workflows/_build.yml
+    with:
+      docker-image: nvidia/cuda:${{ inputs.cuda-version }}-${{ inputs.os-version }}
+      python-version: ${{ inputs.python-version }}
+      cuda-version: ${{ inputs.cuda-version }}
+      torch-version: ${{ inputs.torch-version }}
+      cxx11_abi: ${{ inputs.cxx11_abi }}
+      upload-to-release: ${{ inputs.upload-to-release }}
+      release-version: ${{ inputs.release-version }}
+
