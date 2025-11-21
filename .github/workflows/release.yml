@@ -22,7 +22,7 @@ jobs:
       release_tag: ${{ steps.get_tag.outputs.tag }}
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           fetch-depth: 0
           path: LiteAttention
@@ -52,19 +52,19 @@ jobs:
     steps:
       - name: Create GitHub App token
         id: app-token
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@67018539274d69449ef7c02e8e71183d1719ab42
         with:
           app-id: ${{ secrets.CI_PULL_ID }}
           private-key: ${{ secrets.CI_PULL_SECRET }}
           owner: moonmath-ai
 
       - name: Checkout LiteAttention Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           path: LiteAttention
       
       - name: Checkout ${{ matrix.target }} Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           repository: ${{ matrix.repo_url }}
           ref: ${{ matrix.branch || 'main' }}
@@ -76,7 +76,7 @@ jobs:
           persist-credentials: false
       
       - name: Checkout prompts list
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           path: ${{ matrix.repo_name }}-prompts
           repository: ${{ matrix.prompts_repo }}
@@ -114,7 +114,7 @@ jobs:
               --videos_per_prompt ${{ vars.VIDEOS_PER_PROMPT || 1 }}
       
       - name: Checkout surveyor2 repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           repository: moonmath-ai/surveyor2.git
           ref: main
@@ -147,7 +147,7 @@ jobs:
               --input /generated_videos/report.json \
               --output /generated_videos/report.md"
       - name: Upload generated videos
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: "${{ matrix.target }}-videos-${{ github.sha }}"
           path: ${{ env.OUTPUT_PATH }}
@@ -167,13 +167,13 @@ jobs:
       contents: write
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           fetch-depth: 0
           path: LiteAttention
       
       - name: Download All Video Artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           path: LiteAttention/release-videos
           pattern: "*-videos-*"
