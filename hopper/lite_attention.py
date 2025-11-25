@@ -111,7 +111,7 @@ class LiteAttention:
                 return 128, 128
 
     @staticmethod
-    def init_skip_list(batch, seq_len, heads, head_dim, v_colmajor, dtype, device, must_skip_list = None) -> torch.Tensor:
+    def init_skip_list(batch, seq_len, heads, head_dim, v_colmajor, dtype, device, must_skip_list = None, max_len = 0) -> torch.Tensor:
         """Initialize skip list tensors based on query shape."""
 
         # the number of bytes needed to represent dtype (size(dtype) if it where C code)
@@ -121,7 +121,11 @@ class LiteAttention:
         qtiles = LiteAttention.ceil_div(seq_len, kTileM)
         ktiles = LiteAttention.ceil_div(seq_len, kTileN)
         
-        skip_list = torch.zeros(2, batch, heads, qtiles, ktiles + 1, dtype=torch.int32, device=device)
+        if max_len == 0:
+            max_len = ktiles
+        else:
+            assert max_len > 0 and max_len % 2 == 0, "skip list max length should be an even number that is greater than 0"
+        skip_list = torch.zeros(2, batch, heads, qtiles, max_len + 1, dtype=torch.int32, device=device)
         
         if must_skip_list is not None:
 
@@ -152,17 +156,17 @@ class LiteAttention:
         
         return skip_list
 
-    def _init_skip_list(self, query: torch.Tensor, value: torch.Tensor, must_skip_list: list = None) -> torch.Tensor:
+    def _init_skip_list(self, query: torch.Tensor, value: torch.Tensor, must_skip_list: list = None, skip_list_max_len: int = 0) -> torch.Tensor:
         """Initialize skip list tensors based on query shape."""
         batch, seq_len, heads, head_dim = query.shape
         assert batch <= self.max_batch_size, "batch size must be less than or equal to max_batch_size (modify max_batch_size in LiteAttention constructor)"
         v_colmajor = value.shape[-3] == head_dim
         dtype = query.dtype
         device = query.device
-        return LiteAttention.init_skip_list(self.max_batch_size, seq_len, heads, head_dim, v_colmajor, dtype, device, must_skip_list)
+        return LiteAttention.init_skip_list(self.max_batch_size, seq_len, heads, head_dim, v_colmajor, dtype, device, must_skip_list, skip_list_max_len)
     
     
-    def _get_read_write_lists(self, query: torch.Tensor, value: torch.Tensor, must_skip_list: list = None) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+    def _get_read_write_lists(self, query: torch.Tensor, value: torch.Tensor, must_skip_list: list = None, skip_list_max_len: int = 0) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
         """Get the current read and write lists for this attention step."""
         if not self.enable_skipping:
             return None, None
@@ -186,7 +190,7 @@ class LiteAttention:
             self._last_num_heads != current_num_heads
             ):
 
-            self._skip_list = self._init_skip_list(query, value, must_skip_list)
+            self._skip_list = self._init_skip_list(query, value, must_skip_list, skip_list_max_len)
             self._phase = 0
 
             self._last_seq_len = current_seq_len
@@ -241,7 +245,7 @@ class LiteAttention:
         return values
     
     def __call__(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, 
-                 scale: Optional[float] = None, return_softmax_lse: bool = False, must_do_list: list = None, must_skip_list: list = None) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+                 scale: Optional[float] = None, return_softmax_lse: bool = False, must_do_list: list = None, must_skip_list: list = None, skip_list_max_len: int = 0) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """
         Perform flash attention 3 with optional skip list optimization.
         
@@ -255,7 +259,7 @@ class LiteAttention:
             torch.Tensor: Attention output of shape (batch, seq_len, heads * head_dim)
         """
         # Get read and write lists (internal mask management)
-        read_list, write_list = self._get_read_write_lists(query, value, must_skip_list)
+        read_list, write_list = self._get_read_write_lists(query, value, must_skip_list, skip_list_max_len)
 
         # handle must-do list - expand the 1d list to a list per head per batch per qi
         if self.enable_skip_optimization:
@@ -277,6 +281,7 @@ class LiteAttention:
             attn_read_list=read_list,
             attn_must_do_list=must_do_list_expanded,
             attn_write_list=write_list,
+            skip_list_max_len=skip_list_max_len,
             thr=self.threshold,
             return_softmax_lse=return_softmax_lse
         )

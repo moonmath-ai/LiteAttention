@@ -55,6 +55,7 @@ def _flash_attn_forward(
         attn_read_list=None,
         attn_must_do_list=None,
         attn_write_list=None,
+        skip_list_max_len=0,
         thr=-3.0,
     ):
     q, k, k_new, v_new = [maybe_contiguous(x) for x in (q, k, k_new, v_new)]
@@ -107,6 +108,7 @@ def _flash_attn_forward(
         attn_read_list,
         attn_must_do_list,
         attn_write_list,
+        skip_list_max_len,
         thr=thr,
     )
     return out, softmax_lse, *rest
@@ -182,6 +184,7 @@ class FlashAttnQKVPackedFunc(torch.autograd.Function):
         attn_read_list=None,
         attn_must_do_list=None,
         attn_write_list=None,
+        skip_list_max_len=0,
         thr=-3.0,
     ):
         if softmax_scale is None:
@@ -218,6 +221,7 @@ class FlashAttnQKVPackedFunc(torch.autograd.Function):
             attn_read_list=attn_read_list,
             attn_must_do_list=attn_must_do_list,
             attn_write_list=attn_write_list,
+            skip_list_max_len=skip_list_max_len,
             thr=thr,
         )
         # ctx.save_for_backward(q, k, v, out_padded, softmax_lse)
@@ -294,6 +298,7 @@ class FlashAttnFunc(torch.autograd.Function):
         attn_read_list=None,
         attn_must_do_list=None,
         attn_write_list=None,
+        skip_list_max_len=0,
         thr=-3.0,
         return_softmax_lse=False,
     ):
@@ -325,6 +330,7 @@ class FlashAttnFunc(torch.autograd.Function):
             attn_read_list=attn_read_list,
             attn_must_do_list=attn_must_do_list,
             attn_write_list=attn_write_list,
+            skip_list_max_len=skip_list_max_len,
             thr=thr,
         )
         # ctx.save_for_backward(q, k, v, out_padded, softmax_lse)
@@ -401,6 +407,7 @@ class FlashAttnVarlenFunc(torch.autograd.Function):
         attn_read_list=None,
         attn_must_do_list=None,
         attn_write_list=None,
+        skip_list_max_len=0,
         thr=-3.0,
     ):
         if softmax_scale is None:
@@ -435,6 +442,7 @@ class FlashAttnVarlenFunc(torch.autograd.Function):
             attn_read_list=attn_read_list,
             attn_must_do_list=attn_must_do_list,
             attn_write_list=attn_write_list,
+            skip_list_max_len=skip_list_max_len,
             thr=thr,
         )
         # ctx.save_for_backward(q, k, v, out_padded, softmax_lse, cu_seqlens_q, cu_seqlens_k, seqused_q, seqused_k)
@@ -563,6 +571,7 @@ def flash_attn_func(
     attn_read_list=None,
     attn_must_do_list=None,
     attn_write_list=None,
+    skip_list_max_len=0,
     thr=-3.0,
     return_softmax_lse=False,
 ):
@@ -630,6 +639,7 @@ def flash_attn_func(
         attn_read_list,
         attn_must_do_list,
         attn_write_list,
+        skip_list_max_len,
         thr,
         return_softmax_lse,
     )
@@ -720,6 +730,7 @@ def flash_attn_with_kvcache(
     attn_read_list=None,
     attn_must_do_list=None,
     attn_write_list=None,
+    skip_list_max_len=0,
     thr=-3.0,
 ):
     """
@@ -852,6 +863,7 @@ def flash_attn_with_kvcache(
         attn_read_list=attn_read_list,
         attn_must_do_list=attn_must_do_list,
         attn_write_list=attn_write_list,
+        skip_list_max_len=skip_list_max_len,
         thr=thr,
     )
     # return (out, softmax_lse) if return_softmax_lse else out

@@ -704,6 +704,7 @@ mha_fwd(at::Tensor q,   // (b, s_q, h, d) or (total_q, h, d) if there is cu_seql
         std::optional<at::Tensor> attn_read_list_,
         std::optional<at::Tensor> attn_must_do_list_,
         std::optional<at::Tensor> attn_write_list_,
+        int64_t skip_list_max_len,
         double thr
         ) {
 
@@ -927,10 +928,12 @@ mha_fwd(at::Tensor q,   // (b, s_q, h, d) or (total_q, h, d) if there is cu_seql
         int* data_ptr = static_cast<int*>(qk_skip_mask_tensor.data_ptr());
         
         params.qk_skip_mask_args.attn_read_list = data_ptr;
+        params.qk_skip_mask_args.skip_list_max_len = skip_list_max_len;
         params.qk_skip_mask_args.thr = (float) thr;
         params.is_skipable = true;
     } else {
         params.qk_skip_mask_args.attn_read_list = nullptr;
+        params.qk_skip_mask_args.skip_list_max_len = 0;
         params.qk_skip_mask_args.thr = (float) thr;
         params.is_skipable = false;
     }
@@ -1759,6 +1762,7 @@ TORCH_LIBRARY(lite_attention, m) {
         "Tensor? attn_read_list = None,"
         "Tensor? attn_must_do_list = None,"
         "Tensor? attn_write_list = None,"
+        "int skip_list_max_len = 0,"
         "float thr = -3.0) -> (Tensor(out!), Tensor, Tensor, Tensor)"
     );
     m.def("bwd("

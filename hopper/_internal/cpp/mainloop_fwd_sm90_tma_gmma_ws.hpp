@@ -62,7 +62,9 @@ namespace flash
             
             int const num_heads = get<2>(params.shape_Q);
             uint64_t const num_q_blocks = cute::ceil_div(get<0>(params.shape_Q), kBlockM);
-            uint64_t const num_k_blocks = cute::ceil_div(get<0>(params.shape_K), kBlockN) + 1;
+            uint64_t num_k_blocks = cute::ceil_div(get<0>(params.shape_K), kBlockN) + 1;
+            int max_len = params.qk_skip_mask_args.skip_list_max_len;
+            if (max_len) num_k_blocks = max_len + 1;
             const uint32_t q_i = ((uint32_t)m_block);
             uint64_t mask_offset = (bidb * num_heads * num_q_blocks * num_k_blocks) + 
                                    (bidh * num_q_blocks * num_k_blocks) + 
@@ -95,6 +97,7 @@ namespace flash
         __device__ __forceinline__ 
         void load_range()
         {
+            // if (read_idx+1 >= 5) {return;}
             start_idx = list_ptr[read_idx];
             end_idx = list_ptr[read_idx + 1];
         }
@@ -124,6 +127,7 @@ namespace flash
         int write_idx = 1;
         bool is_skipping = true;
         bool is_saving_thread;
+        int max_len;
 
         // Initialize the writer with calculated offset
         template <typename TileShape_MNK, typename ParamsType>
@@ -135,7 +139,10 @@ namespace flash
             
             int const num_heads = get<2>(params.shape_Q);
             uint64_t const num_q_blocks = cute::ceil_div(get<0>(params.shape_Q), kBlockM);
-            uint64_t const num_k_blocks = cute::ceil_div(get<0>(params.shape_K), kBlockN) + 1;
+            uint64_t num_k_blocks = cute::ceil_div(get<0>(params.shape_K), kBlockN) + 1;
+            max_len = params.qk_skip_mask_args.skip_list_max_len;
+            if (max_len) num_k_blocks = max_len + 1;
+            else max_len = num_k_blocks;
             const uint32_t q_i = ((uint32_t)m_block);
             uint64_t mask_offset = (bidb * num_heads * num_q_blocks * num_k_blocks) + 
                                    (bidh * num_q_blocks * num_k_blocks) + 
@@ -1802,7 +1809,7 @@ namespace flash
                     // if constexpr (IsSkipWriter) skip_writer.finalize();
 
                     bool skip = false;
-                    if constexpr (IsSkipWriter) skip_writer.record_transition(skip, n_block);
+                    if constexpr (IsSkipWriter) if (skip_writer.write_idx < skip_writer.max_len) skip_writer.record_transition(skip, n_block);
                     // ++n_block;
                     --n_block;
                     do
@@ -1810,10 +1817,10 @@ namespace flash
                         for (; n_block >= skip_reader.end_idx; n_block--)
                         {
                             skip = fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/);
-                            if constexpr (IsSkipWriter) skip_writer.record_transition(skip, n_block, &must_do_reader);
+                            if constexpr (IsSkipWriter) if (skip_writer.write_idx < skip_writer.max_len) skip_writer.record_transition(skip, n_block, &must_do_reader);
                         }
 
-                        if constexpr (IsSkipWriter) skip_writer.record_range_end(skip, skip_reader.end_idx);
+                        if constexpr (IsSkipWriter) if (skip_writer.write_idx < skip_writer.max_len) skip_writer.record_range_end(skip, skip_reader.end_idx);
 
                         skip_reader.advance();
                         if (!skip_reader.has_more()) break;
@@ -2042,7 +2049,7 @@ namespace flash
                     // }
                     // if constexpr (IsSkipWriter) skip_writer.finalize();
 
-                    if constexpr (IsSkipWriter) skip_writer.record_transition(skip, n_block, &must_do_reader);
+                    if constexpr (IsSkipWriter) if (skip_writer.write_idx < skip_writer.max_len) skip_writer.record_transition(skip, n_block, &must_do_reader);
                     --n_block;
                     do
                     {
@@ -2050,10 +2057,10 @@ namespace flash
                         for (; n_block >= skip_reader.end_idx; n_block--)
                         {
                             skip = fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/, cute::false_type{} /*is_first_iter*/);
-                            if constexpr (IsSkipWriter) skip_writer.record_transition(skip, n_block, &must_do_reader);
+                            if constexpr (IsSkipWriter) if (skip_writer.write_idx < skip_writer.max_len) skip_writer.record_transition(skip, n_block, &must_do_reader);
                         }
 
-                        if constexpr (IsSkipWriter) skip_writer.record_range_end(skip, skip_reader.end_idx);
+                        if constexpr (IsSkipWriter) if (skip_writer.write_idx < skip_writer.max_len) skip_writer.record_range_end(skip, skip_reader.end_idx);
 
                         skip_reader.advance();
                         if (!skip_reader.has_more()) break;
