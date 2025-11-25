@@ -97,7 +97,6 @@ namespace flash
         __device__ __forceinline__ 
         void load_range()
         {
-            // if (read_idx+1 >= 5) {return;}
             start_idx = list_ptr[read_idx];
             end_idx = list_ptr[read_idx + 1];
         }
