@@ -877,10 +877,13 @@ class LiteAttention:
         else:
             step = 0
 
-        for b in range(batch):
-            for h in heads_list:
-                batch_head_dir = os.path.join(save_path, f"batch_{b}", f"head_{h}")
-                os.makedirs(batch_head_dir, exist_ok=True)
+        # Create single output directory
+        os.makedirs(save_path, exist_ok=True)
+        
+        # for b in range(batch):
+        #     for h in heads_list:
+        #         batch_head_dir = os.path.join(save_path, f"batch_{b}", f"head_{h}")
+        #         os.makedirs(batch_head_dir, exist_ok=True)
 
         kBlockM, kBlockN = LiteAttention.get_MN(key.shape[-1], key.dtype.itemsize)
         # Add grid overlay
@@ -928,8 +931,18 @@ class LiteAttention:
 
                 plt.figure(figsize=(6, 6))
                 attn_cpu = attn_map.detach().float().cpu()
-                plt.imshow(attn_cpu, cmap='viridis', interpolation='nearest')
-                plt.title(f"Batch {b} | Head {h} | Percentage {perecentage * 100:.2f}% | Do Softmax: {do_softmax}")
+                # When do_softmax is True, values are already in [0, 1] range, so we disable auto-normalization
+                if do_softmax:
+                    plt.imshow(attn_cpu, cmap='viridis', interpolation='nearest', vmin=0, vmax=1)
+                else:
+                    plt.imshow(attn_cpu, cmap='viridis', interpolation='nearest')
+                
+                # Build title with name_prefix if provided
+                title_parts = []
+                if name_prefix:
+                    title_parts.append(name_prefix)
+                title_parts.extend([f"Batch {b}", f"Head {h}", f"Percentage {perecentage * 100:.2f}%", f"Do Softmax: {do_softmax}"])
+                plt.title(" | ".join(title_parts))
                 
                 # Add horizontal grid lines
                 for y in y_positions:
@@ -962,9 +975,17 @@ class LiteAttention:
                 plt.axis("off")
                 plt.tight_layout()
 
-                batch_head_dir = os.path.join(save_path, f"batch_{b}", f"head_{h}")
-                filename = f"{name_prefix}.png" if name_prefix else "visualization.png"
-                file_path = os.path.join(batch_head_dir, filename)
+                # Build filename with name_prefix, batch, and head
+                if name_prefix:
+                    filename = f"{name_prefix}_batch_{b}_head_{h}.png"
+                else:
+                    filename = f"batch_{b}_head_{h}.png"
+                file_path = os.path.join(save_path, filename)
+                
+                # batch_head_dir = os.path.join(save_path, f"batch_{b}", f"head_{h}")
+                # filename = f"{name_prefix}.png" if name_prefix else "visualization.png"
+                # file_path = os.path.join(batch_head_dir, filename)
+                
                 plt.savefig(file_path, dpi=150)
                 plt.close()
 
