@@ -242,7 +242,13 @@ class LiteAttention:
         return expanded
     
     def __call__(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, 
-                 scale: Optional[float] = None, return_softmax_lse: bool = False, must_do_list: list = None, must_skip_list: list = None) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+                 scale: Optional[float] = None, return_softmax_lse: bool = False, 
+                 must_do_list: list = None, must_skip_list: list = None,
+                 # Advanced features (only used when enable_skipping=False)
+                 causal: bool = False,
+                 window_size: Tuple[int, int] = (-1, -1),
+                 num_splits: int = 1,
+                 pack_gqa: Optional[bool] = None) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """
         Perform flash attention 3 with optional skip list optimization.
         
@@ -251,6 +257,14 @@ class LiteAttention:
             key (torch.Tensor): Key tensor of shape (batch, seq_len, heads, head_dim)  
             value (torch.Tensor): Value tensor of shape (batch, seq_len, heads, head_dim)
             scale (float, optional): Attention scale factor. If None, uses 1/sqrt(head_dim)
+
+            Advanced features (only used when enable_skipping=False):
+            ----------------------------------------------------------
+            causal (bool, optional): Enable causal masking. Defaults to False.
+            window_size (Tuple[int, int], optional): Local attention window (left, right).
+                Use (-1, -1) to disable. Defaults to (-1, -1).
+            num_splits (int, optional): Number of splits for split-K algorithm. Defaults to 1.
+            pack_gqa (bool, optional): Enable packed GQA optimization. Defaults to None (auto).
             
         Returns:
             torch.Tensor: Attention output of shape (batch, seq_len, heads * head_dim)
@@ -268,6 +282,13 @@ class LiteAttention:
             must_do_list_expanded = None
 
         # print("must_do_list_expanded", must_do_list_expanded.shape)
+
+        # Disable advanced features when skip optimization is enabled
+        if self.enable_skipping:
+            causal = False
+            window_size = (-1, -1)
+            num_splits = 1
+            pack_gqa = None
         
         # Perform flash attention 3 with skip lists
         output = flash_attn_func(
@@ -275,6 +296,10 @@ class LiteAttention:
             k=key, 
             v=value,
             softmax_scale=scale,
+            causal=causal,
+            window_size=window_size,
+            num_splits=num_splits,
+            pack_gqa=pack_gqa,
             attn_read_list=read_list,
             attn_must_do_list=must_do_list_expanded,
             attn_write_list=write_list,
