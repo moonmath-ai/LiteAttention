@@ -23,6 +23,7 @@ def print_skip_percentage(attn, q):
     skip_percentage = attn.calc_percentage(attn._skip_list[attn._phase, :q.shape[0]])
     print(f"    Skip percentage: {skip_percentage:.2%}")
 
+# not valid in the new skip list format!!!
 def check_first_element_is_last_block(skip_list):
     """
     Check that the first element in the skip list is the last block (ktiles - 1).
@@ -67,7 +68,11 @@ def check_no_empty_or_negative_ranges(skip_list):
     """
     # Check that all ranges are positive (start < end)
     # [start0 - end0, end0 - start1, start1 - end1, end1 - start2, ..., start_n - end_n]
-    diff = (skip_list[..., 1:-1] - skip_list[..., 2:]) > 0
+    diff = (skip_list[..., 1:-1] - skip_list[..., 2:])
+    # correct the sign according to the first difference
+    sign = torch.sign(diff.flatten()[0])
+    diff = (diff * sign) > 0
+
     arange = torch.arange(diff.shape[-1], device=skip_list.device).view(1, 1, 1, -1) >= skip_list[..., 0:1] - 1
     # Only check ranges that are within the valid list length
     passed_individually = (arange + diff) > 0
@@ -103,8 +108,8 @@ def test_skip_all(q, k, v, head_dim):
     mpassed = (diff == 1)
     passed &= mpassed.all()
 
-    # Test that the only block we don't skip is the last one
-    passed &= check_first_element_is_last_block(skip_list)
+    # # Test that the only block we don't skip is the last one
+    # passed &= check_first_element_is_last_block(skip_list)
     
     print(f"  Skip all test: {'✅ PASSED' if passed else '❌ FAILED'}")
     if not passed:
@@ -124,20 +129,26 @@ def test_skip_nothing(q, k, v, head_dim):
     """
     attn = LiteAttention()
     attn.threshold = float('-inf')
+    read_list_original, _ = attn._get_read_write_lists(q, v)
+    read_list_original = read_list_original.clone()
+    attn._phase = 0
     
     # Warm up
     run_attention_warmup(attn, q, k, v)
     
-    read_list = attn._skip_list[attn._phase, :q.shape[0]]  # [batch, heads, qtiles, ktiles]
-    write_list = attn._skip_list[1 - attn._phase, :q.shape[0]]  # [batch, heads, qtiles, ktiles]
+    # read_list = attn._skip_list[attn._phase, :q.shape[0]]  # [batch, heads, qtiles, ktiles]
+    read_list = attn.read_list  # [batch, heads, qtiles, ktiles+1]
+    # write_list = attn._skip_list[1 - attn._phase, :q.shape[0]]  # [batch, heads, qtiles, ktiles]
+    # write_list = attn.write_list  # [batch, heads, qtiles, ktiles+1]
     
     # Check if read and write lists match
-    test_tensor = torch.tensor([2, read_list.shape[-1] - 2, -1], device=read_list.device, dtype=read_list.dtype)[None, None, None,]
-    diff = (read_list[..., :3] == test_tensor).all(-1)
+    # test_tensor = torch.tensor([2, read_list.shape[-1] - 2, -1], device=read_list.device, dtype=read_list.dtype)[None, None, None,]
+    # diff = (read_list[..., :3] == test_tensor).all(-1)
+    diff = (read_list[..., :3] == read_list_original[..., :3]).all(-1)
     passed = diff.all()
     
-    # Test that the only block we don't skip is the last one
-    passed &= check_first_element_is_last_block(read_list)
+    # # Test that the only block we don't skip is the last one
+    # passed &= check_first_element_is_last_block(read_list)
     
     print(f"  Skip nothing test: {'✅ PASSED' if passed else '❌ FAILED'}")
     if not passed:
@@ -209,7 +220,8 @@ def consistency_test(q, k, v, head_dim, num_iters=10):
         torch.cuda.synchronize()
 
         previous_skip_list = skip_list
-        skip_list = attn._skip_list[attn._phase, :q.shape[0]]
+        # skip_list = attn._skip_list[attn._phase, :q.shape[0]]
+        skip_list = attn.read_list
 
         # check new percentage is not bigger than the previous one
         new_percentage = attn.calc_percentage(skip_list)
@@ -220,11 +232,11 @@ def consistency_test(q, k, v, head_dim, num_iters=10):
             return False
         percentage = new_percentage
         
-        # Check that the first element in the skip list is the last block
-        if not check_first_element_is_last_block(skip_list):
-            print(f"  Consistency test: {'✅ PASSED' if False else '❌ FAILED'}")
-            print(f"    Failed on iteration {i}")
-            return False
+        # # Check that the first element in the skip list is the last block
+        # if not check_first_element_is_last_block(skip_list):
+        #     print(f"  Consistency test: {'✅ PASSED' if False else '❌ FAILED'}")
+        #     print(f"    Failed on iteration {i}")
+        #     return False
         
         # Check that the list length isn't bigger than ktiles + 1
         if not check_skip_list_length_valid(skip_list):
@@ -252,7 +264,8 @@ def stress_test(q, k, v, head_dim, num_iters=10):
     torch.cuda.synchronize()
 
     n = 11
-    percentage = attn.calc_percentage(attn._skip_list[attn._phase, :q.shape[0]])
+    # percentage = attn.calc_percentage(attn._skip_list[attn._phase, :q.shape[0]])
+    percentage = attn.calc_percentage(attn.read_list)
     
     passed = True
 
@@ -260,11 +273,12 @@ def stress_test(q, k, v, head_dim, num_iters=10):
         torch.cuda.synchronize()
         output = attn(q, k, v)
         torch.cuda.synchronize()
-        new_percentage = attn.calc_percentage(attn._skip_list[attn._phase, :q.shape[0]])
+        # new_percentage = attn.calc_percentage(attn._skip_list[attn._phase, :q.shape[0]])
+        new_percentage = attn.calc_percentage(attn.read_list)
         
-        # Test that the only block we don't skip is the last one
-        skip_list = attn._skip_list[attn._phase, :q.shape[0]]
-        passed &= check_first_element_is_last_block(skip_list)
+        # # Test that the only block we don't skip is the last one
+        # skip_list = attn._skip_list[attn._phase, :q.shape[0]]
+        # passed &= check_first_element_is_last_block(skip_list)
         
         if new_percentage != percentage:
             print(f"  Skip list: {attn._skip_list[attn._phase, 0,0,0,:n]}, ktiles: {attn._skip_list.shape[-1] - 1}")
