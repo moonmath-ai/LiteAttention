@@ -137,6 +137,100 @@ public:
 
 ///////////////////////////////////////////////////////////////////////////////
 
+template<int kBlock=128>
+class DoubleTileScheduler {
+
+public:
+
+    using SharedStorage = int;
+
+    // Device side kernel params
+    struct Params {
+        int const num_blocks, num_head, num_batch;
+        int const qhead_per_khead;
+        int const seqlen;
+    };
+
+    static Params
+    to_underlying_arguments(TileSchedulerArguments const& args) {
+        return {args.num_blocks, args.num_head, args.num_batch,
+                args.qhead_per_khead, args.seqlen};
+    }
+
+    static dim3
+    get_grid_shape(Params const& params, int num_sm) {
+        // Each CUDA block processes two consecutive tiles
+        // Grid dimensions: (num_blocks/2, num_head, num_batch)
+        return {uint32_t((params.num_blocks + 1) / 2), uint32_t(params.num_head), uint32_t(params.num_batch)};
+    }
+
+    struct WorkTileInfo {
+        int block_idx = 0;
+        int bidh = 0;
+        int bidb = 0;
+
+        CUTLASS_DEVICE
+        bool
+        is_valid(Params const& params) const {
+            return bidb >= 0;
+        }
+
+        CUTLASS_DEVICE
+        cute::tuple<int32_t, int32_t, int32_t, int32_t>
+        get_block_coord(Params const& params) const {
+            return {block_idx, bidh, bidb, 0};
+        }
+
+    };
+
+    CUTLASS_DEVICE
+    DoubleTileScheduler(SharedStorage* const smem_scheduler) { }
+
+    template<bool IsProducerWarp=false>
+    CUTLASS_DEVICE
+    WorkTileInfo
+    get_initial_work(Params const& params) const {
+        // Each CUDA block (blockIdx.x) processes two consecutive tiles
+        // First tile is at block_idx = blockIdx.x * 2
+        int block_idx = int(blockIdx.x) * 2;
+        WorkTileInfo work_info {block_idx, int(blockIdx.y), int(blockIdx.z)};
+        
+        // Check if first tile is valid
+        bool is_valid_tile = (block_idx * kBlock < params.seqlen);
+        work_info.bidb = is_valid_tile ? work_info.bidb : -1;
+        
+        return work_info;
+    }
+
+    CUTLASS_DEVICE
+    void
+    init_consumer() const {}
+
+    CUTLASS_DEVICE
+    void
+    prefetch_next_work(Params const& params, WorkTileInfo& current_work) const {}
+
+    template<bool IsProducerWarp=false>
+    CUTLASS_DEVICE
+    WorkTileInfo
+    get_next_work(Params const& params, WorkTileInfo const& current_work) const {
+        // Return the next consecutive tile (block_idx + 1)
+        int next_block_idx = current_work.block_idx + 1;
+        
+        // Check if the next block is valid
+        bool is_valid_tile = (next_block_idx < params.num_blocks) && 
+                            (next_block_idx * kBlock < params.seqlen);
+        
+        WorkTileInfo next_work {next_block_idx, current_work.bidh, current_work.bidb};
+        next_work.bidb = is_valid_tile ? next_work.bidb : -1;
+        
+        return next_work;
+    }
+
+};
+
+///////////////////////////////////////////////////////////////////////////////
+
 template<bool Split=false>
 class StaticPersistentTileScheduler {
 
