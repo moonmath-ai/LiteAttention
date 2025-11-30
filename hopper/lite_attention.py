@@ -299,7 +299,7 @@ class LiteAttention:
                 return 128, 128
 
     @staticmethod
-    def init_skip_list(batch, seq_len, heads, head_dim, v_colmajor, dtype, device, must_skip_list: list = None) -> torch.Tensor:
+    def init_skip_list(batch, seq_len, heads, head_dim, v_colmajor, dtype, device, must_skip_list: list = None, reverse_skip_list: bool = True) -> torch.Tensor:
         """
         Initialize skip list tensors with default "compute all tiles" configuration.
         
@@ -366,14 +366,14 @@ class LiteAttention:
         skip_list = torch.empty(2, batch, heads, qtiles, ktiles + 1, dtype=torch.int16, device=device)
 
         if must_skip_list is not None:
+            tile_indices = LiteAttention.convert_sequence_indices_to_tile_indices("must_skip_list", must_skip_list, kBlockN, seq_len)
 
-            tile_indices = LiteAttention.convert_sequence_indices_to_tile_indices("must_skip_list", must_skip_list, kBlockN)
+            # convert from skip-ranges to do-ranges for read list
+            tile_indices.pop(0) if tile_indices[0] == 0 else tile_indices.insert(0, 0)
+            tile_indices.pop() if tile_indices[-1] == ktiles else tile_indices.append(ktiles)
 
-            # convert from skip-ranges to do-ranges:
-            tile_indices.insert(0, 0)
-            tile_indices.append(ktiles)
-     
-            skip_list[0, :, :, :, :len(tile_indices)] = [len(tile_indices)] + tile_indices
+            tile_indices = [len(tile_indices)] + list(reversed(tile_indices))
+            skip_list[0, :, :, :, :len(tile_indices)] = torch.tensor(tile_indices, dtype=torch.int16, device=device)
         else:
             # Initialize first buffer with "compute all tiles" configuration
             # [2, ktiles-1, -1] means: length=2, one range from ktiles-1 down to 0 (via -1)
@@ -412,7 +412,7 @@ class LiteAttention:
         device = query.device
         
         # Allocate for max_batch_size to avoid reallocation on batch size changes
-        return LiteAttention.init_skip_list(self.max_batch_size, seq_len, heads, head_dim, v_colmajor, dtype, device, must_skip_list)
+        return LiteAttention.init_skip_list(self.max_batch_size, seq_len, heads, head_dim, v_colmajor, dtype, device, must_skip_list, self.reverse_skip_list)
     
     
     def _get_read_write_lists(self, query: torch.Tensor, value: torch.Tensor, must_skip_list: list = None) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
