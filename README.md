@@ -103,6 +103,7 @@ The near-linear scaling between sparsity and runtime improvement demonstrates th
 - H100 / H200 GPU
 - CUDA >= 12.8
 - CUDA toolkit
+- C++ 20
 - PyTorch 2.2 and above
 - `packaging` Python package (`pip install packaging`)
 - `ninja` Python package (`pip install ninja`) *
