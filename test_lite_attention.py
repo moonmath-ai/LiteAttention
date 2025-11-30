@@ -20,8 +20,8 @@ def run_attention_warmup(attn, q, k, v, num_iters=1):
 
 def print_skip_percentage(attn, q):
     """Print the skip percentage for the given query."""
-    skip_percentage = attn.calc_percentage(attn._skip_list[attn._phase, :q.shape[0]])
-    print(f"    Skip percentage: {skip_percentage:.2%}")
+    skip_percentage = attn.calc_percentage(attn.read_list)
+    print(f"    Skip percentage: {skip_percentage:.2%}", f"raw percentage: {skip_percentage}")
 
 # not valid in the new skip list format!!!
 def check_first_element_is_last_block(skip_list):
@@ -134,7 +134,7 @@ def test_skip_nothing(q, k, v, head_dim):
     attn._phase = 0
     
     # Warm up
-    run_attention_warmup(attn, q, k, v)
+    run_attention_warmup(attn, q, k, v, 2)
     
     # read_list = attn._skip_list[attn._phase, :q.shape[0]]  # [batch, heads, qtiles, ktiles]
     read_list = attn.read_list  # [batch, heads, qtiles, ktiles+1]
@@ -142,18 +142,19 @@ def test_skip_nothing(q, k, v, head_dim):
     # write_list = attn.write_list  # [batch, heads, qtiles, ktiles+1]
     
     # Check if read and write lists match
-    # test_tensor = torch.tensor([2, read_list.shape[-1] - 2, -1], device=read_list.device, dtype=read_list.dtype)[None, None, None,]
-    # diff = (read_list[..., :3] == test_tensor).all(-1)
-    diff = (read_list[..., :3] == read_list_original[..., :3]).all(-1)
+    one_range = read_list[..., 0] == 2
+    diff_min = read_list[..., 1 : 3].min(dim=-1).values == read_list_original[..., 1 : 3].min(dim=-1).values
+    diff_max = read_list[..., 1 : 3].max(dim=-1).values == read_list_original[..., 1 : 3].max(dim=-1).values
+    assert diff_min.shape == diff_max.shape == one_range.shape
+    diff = one_range & diff_min & diff_max
     passed = diff.all()
-    
-    # # Test that the only block we don't skip is the last one
-    # passed &= check_first_element_is_last_block(read_list)
-    
     print(f"  Skip nothing test: {'✅ PASSED' if passed else '❌ FAILED'}")
     if not passed:
+        mismatch_percent = (~diff).sum().item() / diff.numel() * 100
+        print(f"    Mismatch percentage: {mismatch_percent:.2f}%")
         print_skip_percentage(attn, q)
-        print(f"    Mismatched read_list:\n{read_list[~diff][..., :5]}")
+        print(f"    Mismatched read_list:\n{read_list[~diff][..., :3]}")
+        print(f"    Mismatched read_list_original:\n{read_list_original[~diff][..., :3]}")
     
     return passed
 
@@ -259,13 +260,13 @@ def stress_test(q, k, v, head_dim, num_iters=10):
     attn = LiteAttention()
     attn.threshold = float(0.0)
 
-    torch.cuda.synchronize()
-    output = attn(q, k, v)
-    torch.cuda.synchronize()
+    output = run_attention_warmup(attn, q, k, v, 2) # only after 2 iters we stabalize do to bi-direction
+
 
     n = 11
-    # percentage = attn.calc_percentage(attn._skip_list[attn._phase, :q.shape[0]])
     percentage = attn.calc_percentage(attn.read_list)
+    read_list_original = attn.read_list.clone()
+    percentage_per_head = attn.calc_percentage_per_head(attn.read_list)
     
     passed = True
 
@@ -273,17 +274,17 @@ def stress_test(q, k, v, head_dim, num_iters=10):
         torch.cuda.synchronize()
         output = attn(q, k, v)
         torch.cuda.synchronize()
-        # new_percentage = attn.calc_percentage(attn._skip_list[attn._phase, :q.shape[0]])
         new_percentage = attn.calc_percentage(attn.read_list)
-        
-        # # Test that the only block we don't skip is the last one
-        # skip_list = attn._skip_list[attn._phase, :q.shape[0]]
-        # passed &= check_first_element_is_last_block(skip_list)
+        new_percentage_per_head = attn.calc_percentage_per_head(attn.read_list)
         
         if new_percentage != percentage:
             print(f"  Skip list: {attn._skip_list[attn._phase, 0,0,0,:n]}, ktiles: {attn._skip_list.shape[-1] - 1}")
-            print(f"  percentage changed from {percentage:.2%} to {new_percentage:.2%} at iteration {i}")
+            # print(f"  percentage changed from {percentage:.2%} to {new_percentage:.2%} at iteration {i}")
+            print(f"  percentage changed from {percentage} to {new_percentage} at iteration {i}")
             print(f"  Stress test completed: {'✅ PASSED' if False else '❌ FAILED'}")
+            diff = new_percentage_per_head != percentage_per_head
+            print(f"  read_list: {attn.read_list[diff]}")
+            print(f"  original read_list: {read_list_original[diff]}")
             return
 
     print_skip_percentage(attn, q)
