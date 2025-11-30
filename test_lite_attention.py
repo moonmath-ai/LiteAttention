@@ -283,8 +283,11 @@ def stress_test(q, k, v, head_dim, num_iters=10):
             print(f"  percentage changed from {percentage} to {new_percentage} at iteration {i}")
             print(f"  Stress test completed: {'✅ PASSED' if False else '❌ FAILED'}")
             diff = new_percentage_per_head != percentage_per_head
-            print(f"  read_list: {attn.read_list[diff]}")
-            print(f"  original read_list: {read_list_original[diff]}")
+            diff_read = attn.read_list[diff]
+            diff_read_original = read_list_original[diff]
+            length = max(diff_read[..., 0].max().item(), diff_read_original[..., 0].max().item())
+            print(f"  read_list: {diff_read[..., :length]}")
+            print(f"  original : {diff_read_original[..., :length]}")
             return
 
     print_skip_percentage(attn, q)
