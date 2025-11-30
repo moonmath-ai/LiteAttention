@@ -417,13 +417,13 @@ def run_tests_for_head_dim(head_dim, batch=2, seq_len=18200, heads=32):
     q, k, v = generate_test_tensors(batch, seq_len, heads, head_dim)
     
     # Run tests
-    # stress_test(q, k, v, head_dim)
-    # test_skip_all(q, k, v, head_dim)
-    # test_skip_nothing(q, k, v, head_dim)
-    # test_must_skip_list(q, k, v, head_dim)
+    stress_test(q, k, v, head_dim)
+    test_skip_all(q, k, v, head_dim)
+    test_skip_nothing(q, k, v, head_dim)
+    test_must_skip_list(q, k, v, head_dim)
     test_must_do_list(q, k, v, head_dim)
-    # q, k, v = generate_test_tensors(batch=batch, seq_len=min(6000, seq_len), heads=heads, head_dim=head_dim)
-    # test_softmax_lse_correctness(q, k, v, head_dim)
+    q, k, v = generate_test_tensors(batch=batch, seq_len=min(6000, seq_len), heads=heads, head_dim=head_dim)
+    test_softmax_lse_correctness(q, k, v, head_dim)
 
     # consistency_test(q, k, v, head_dim)
 
@@ -435,7 +435,7 @@ def main():
     torch.cuda.manual_seed(0)
     
     # Test different head dimensions
-    head_dims = [32] #, 64, 96, 128, 192, 256]
+    head_dims = [32, 64, 96, 128, 192, 256]
     
     for head_dim in head_dims:
         run_tests_for_head_dim(head_dim)
