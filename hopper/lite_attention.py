@@ -76,10 +76,8 @@ must_do_list = [0, 128, 500, 640]  # Compute sequence positions [0, 128) and [50
 """
 
 import torch
-import torch.nn.functional as F
 import os
 from typing import Optional, Tuple, Union
-import matplotlib.pyplot as plt
 
 from ._internal.flash_attn_interface import flash_attn_func
 
@@ -863,6 +861,9 @@ class LiteAttention:
         This method reads from the current skip list, so it should be called after
         at least one forward pass has been executed.
         """
+        import matplotlib.pyplot as plt
+        import torch.nn.functional as F
+
         # os.makedirs(save_path, exist_ok=True)
         # Create subdirectories for each batch and attention head
         batch = query.shape[0]
@@ -924,12 +925,12 @@ class LiteAttention:
                 attn_map = attn_down[0, 0]  # (max_res, max_res)
                 
                 current_skip_list = skip_list[b, h][None, None, ...]
-                perecentage = self.calc_percentage(current_skip_list)
+                percentage = self.calc_percentage(current_skip_list)
 
                 plt.figure(figsize=(6, 6))
                 attn_cpu = attn_map.detach().float().cpu()
                 plt.imshow(attn_cpu, cmap='viridis', interpolation='nearest')
-                plt.title(f"Batch {b} | Head {h} | Percentage {perecentage * 100:.2f}% | Do Softmax: {do_softmax}")
+                plt.title(f"Batch {b} | Head {h} | Percentage {percentage * 100:.2f}% | Do Softmax: {do_softmax}")
                 
                 # Add horizontal grid lines
                 for y in y_positions:
