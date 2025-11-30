@@ -96,7 +96,7 @@ namespace flash
         static_assert(NumMmaWarpGroups == 1 || NumMmaWarpGroups == 2 || NumMmaWarpGroups == 3);
 
         // when using skip optimizations we need 16 registers for the producer
-        static constexpr uint32_t SkipOptimizationRegisterRequirement = Is_skipable ? 8 : 0;
+        static constexpr uint32_t SkipOptimizationRegisterRequirement = (Is_skipable && (NumMmaWarpGroups < 3)) ? 8 : 0;
 
         /// Register requirement for Load and Math WGs
         // If we use cp.async to load K and V, we need more registers for the producer WG.
