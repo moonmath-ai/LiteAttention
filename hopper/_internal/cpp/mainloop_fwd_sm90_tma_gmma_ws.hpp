@@ -1499,7 +1499,7 @@ namespace flash
                 {
                     if constexpr (Is_skipable){
                         return softmax.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, /*Is_first=*/true, true>(
-                            tSrS, params.qk_skip_mask_args.thr, skip_reader, m_block
+                            tSrS, params.qk_skip_mask_args.thr, params.qk_skip_mask_args.thr2, skip_reader, m_block
                         );
                     }
                     else{
@@ -1593,7 +1593,7 @@ namespace flash
                     if constexpr (Is_skipable){
                         cute::copy(
                             softmax.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, /*Is_first=*/false, Check_inf>(
-                                tSrS, params.qk_skip_mask_args.thr, skip_reader, m_block),
+                                tSrS, params.qk_skip_mask_args.thr, params.qk_skip_mask_args.thr2, skip_reader, m_block),
                             scores_scale);
                     }else{
                         cute::copy(softmax.template max_get_scale</*Is_first=*/false, Check_inf>(tSrS), scores_scale);
@@ -1770,7 +1770,7 @@ namespace flash
                     Tensor scores_scale = [&]
                     {
                         if constexpr (Is_skipable){
-                            return softmax.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, Is_first_iter, Check_inf>(tSrS, params.qk_skip_mask_args.thr, skip_reader, m_block);
+                            return softmax.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, Is_first_iter, Check_inf>(tSrS, params.qk_skip_mask_args.thr, params.qk_skip_mask_args.thr2, skip_reader, m_block);
                         }
                         else{
                             return softmax.template max_get_scale<Is_first_iter, Check_inf>(tSrS);

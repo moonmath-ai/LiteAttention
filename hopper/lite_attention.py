@@ -134,7 +134,7 @@ class LiteAttention:
         >>> output = lite_attn(query, key, value)
     """
     
-    def __init__(self, enable_skipping: bool = True, threshold: float = -10.0, max_batch_size: int = 2, reverse_skip_list: bool = True):
+    def __init__(self, enable_skipping: bool = True, threshold: float = -10.0, thr2: float = 0.8, max_batch_size: int = 2, reverse_skip_list: bool = True):
         # Internal skip list management
         self._skip_list = None  # Shape: [2, max_batch_size, heads, qtiles, ktiles+1]
         self._phase = 0  # Alternates between 0 and 1 for double-buffering
@@ -155,6 +155,7 @@ class LiteAttention:
         # Public configuration
         self.enable_skipping = enable_skipping
         self.set_threshold(threshold)
+        self.thr2 = thr2
         self.max_batch_size = max_batch_size
 
 
@@ -707,6 +708,7 @@ class LiteAttention:
             attn_must_do_list=must_do_list_expanded,
             attn_write_list=write_list,
             thr=self.threshold,
+            thr2=self.thr2,
             return_softmax_lse=return_softmax_lse,
             reverse_skip_list=self.reverse_skip_list,
             # self._phase == 1 because we changed it in _get_read_write_lists!
@@ -932,7 +934,7 @@ class LiteAttention:
                 plt.figure(figsize=(6, 6))
                 attn_cpu = attn_map.detach().float().cpu()
                 # When do_softmax is True, values are already in [0, 1] range, so we disable auto-normalization
-                if do_softmax:
+                if do_softmax and False:
                     plt.imshow(attn_cpu, cmap='viridis', interpolation='nearest', vmin=0, vmax=1)
                 else:
                     plt.imshow(attn_cpu, cmap='viridis', interpolation='nearest')

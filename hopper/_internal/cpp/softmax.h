@@ -147,6 +147,7 @@ namespace flash
         __forceinline__ __device__ TensorT max_get_scale_detect_qk_skip(
             Tensor0 &acc_s,
             const float thr,
+            const float thr2,
             auto &skip_reader,
             const int m_block)
         {
@@ -225,9 +226,11 @@ namespace flash
                     // do_qk |= ((scores_max_local(mi) * thr) >= prev) & row_not_out_of_bounds;
 
                     // bool cond1 = (scores_max_local(mi) - prev + abs(scores_max_local(mi)) * 0.5f >= 0); // if the current max is at least 1.5 times the previous max
-                    bool cond1 = true;
+                    bool cond1 = (scores_max_local(mi) >= prev * thr2); // if the current max is at least 0.8 times the previous max
+                    // bool cond1 = true;
                     bool cond2 = ((scores_max_local(mi) - prev) * softmax_scale_log2) > thr; // if the current max is more than thr times the previous max
-                    do_qk |= cond1 & cond2 & row_not_out_of_bounds; // if both conditions are true and the row is not out of bounds, then set do_qk to true
+                    // do_qk |= cond1 & cond2 & row_not_out_of_bounds; // if both conditions are true and the row is not out of bounds, then set do_qk to true
+                    do_qk |= (cond1 | cond2) & row_not_out_of_bounds; // if both conditions are true and the row is not out of bounds, then set do_qk to true
                 }
 
                 // (warp = 32) * 4 = warpgroup, 2 * warpgroup

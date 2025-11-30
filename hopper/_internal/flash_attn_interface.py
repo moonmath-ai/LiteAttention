@@ -56,6 +56,7 @@ def _flash_attn_forward(
         attn_must_do_list=None,
         attn_write_list=None,
         thr=-3.0,
+        thr2=0.8,
         reverse_skip_list=False,
         phase=False
     ):
@@ -110,6 +111,7 @@ def _flash_attn_forward(
         attn_must_do_list,
         attn_write_list,
         thr=thr,
+        thr2=thr2,
         reverse_skip_list=reverse_skip_list,
         phase=phase,
     )
@@ -187,6 +189,7 @@ class FlashAttnQKVPackedFunc(torch.autograd.Function):
         attn_must_do_list=None,
         attn_write_list=None,
         thr=-3.0,
+        thr2=0.8,
         reverse_skip_list=False,
         phase=False,
     ):
@@ -225,6 +228,7 @@ class FlashAttnQKVPackedFunc(torch.autograd.Function):
             attn_must_do_list=attn_must_do_list,
             attn_write_list=attn_write_list,
             thr=thr,
+            thr2=thr2,
             reverse_skip_list=reverse_skip_list,
             phase=phase,
         )
@@ -303,6 +307,7 @@ class FlashAttnFunc(torch.autograd.Function):
         attn_must_do_list=None,
         attn_write_list=None,
         thr=-3.0,
+        thr2=0.8,
         return_softmax_lse=False,
         reverse_skip_list=False,
         phase=False,
@@ -336,6 +341,7 @@ class FlashAttnFunc(torch.autograd.Function):
             attn_must_do_list=attn_must_do_list,
             attn_write_list=attn_write_list,
             thr=thr,
+            thr2=thr2,
             reverse_skip_list=reverse_skip_list,
             phase=phase,
         )
@@ -414,6 +420,7 @@ class FlashAttnVarlenFunc(torch.autograd.Function):
         attn_must_do_list=None,
         attn_write_list=None,
         thr=-3.0,
+        thr2=0.8,
     ):
         if softmax_scale is None:
             softmax_scale = (q.shape[-1] + (qv.shape[-1] if qv is not None else 0)) ** (-0.5)
@@ -448,6 +455,7 @@ class FlashAttnVarlenFunc(torch.autograd.Function):
             attn_must_do_list=attn_must_do_list,
             attn_write_list=attn_write_list,
             thr=thr,
+            thr2=thr2,
         )
         # ctx.save_for_backward(q, k, v, out_padded, softmax_lse, cu_seqlens_q, cu_seqlens_k, seqused_q, seqused_k)
         ctx.save_for_backward(q, k, v, out, softmax_lse, cu_seqlens_q, cu_seqlens_k, seqused_q, seqused_k)
@@ -576,6 +584,7 @@ def flash_attn_func(
     attn_must_do_list=None,
     attn_write_list=None,
     thr=-3.0,
+    thr2=0.8,
     return_softmax_lse=False,
     reverse_skip_list=False,
     phase=False,
@@ -645,6 +654,7 @@ def flash_attn_func(
         attn_must_do_list,
         attn_write_list,
         thr,
+        thr2,
         return_softmax_lse,
         reverse_skip_list,
         phase,
@@ -737,6 +747,7 @@ def flash_attn_with_kvcache(
     attn_must_do_list=None,
     attn_write_list=None,
     thr=-3.0,
+    thr2=0.8,
 ):
     """
     If k and v are not None, k_cache and v_cache will be updated *inplace* with the new values from
@@ -869,6 +880,7 @@ def flash_attn_with_kvcache(
         attn_must_do_list=attn_must_do_list,
         attn_write_list=attn_write_list,
         thr=thr,
+        thr2=thr2,
     )
     # return (out, softmax_lse) if return_softmax_lse else out
     return (out, softmax_lse, *rest) if return_softmax_lse else out
