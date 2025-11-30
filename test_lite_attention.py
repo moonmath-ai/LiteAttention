@@ -276,7 +276,7 @@ def test_must_skip_list(q, k, v, head_dim):
     
     all_passed = True
     for test_idx, must_skip_list in enumerate(must_skip_list_cases):
-        attn = LiteAttention(reverse_skip_list=False)
+        attn = LiteAttention()
 
         # Set threshold to -inf to compute everything by default
         attn.threshold = -float("inf")
@@ -319,51 +319,52 @@ def test_must_do_list(q, k, v, head_dim):
 
     # Each entry is [start0, end0, start1, end1, ...] representing ranges to compute
     must_do_list_cases = [
-        # [0, 1000, 10000, seq_len-1],                       # Compute beginning and end
-        # [0, 5000],                                         # Compute first half
-        # [seq_len // 4, seq_len // 2],                      # Compute middle quarter
-        # [0, seq_len // 10, seq_len * 9 // 10, seq_len-1],  # Compute first and last 10%
-        # [seq_len // 3, seq_len * 2 // 3],                  # Compute middle third
-        # [0, 2000, 5000, 7000, 10000, seq_len-1],           # Multiple small ranges
-        [0, 2000, 15000, seq_len-1],                         # Custom test
+        [0, 1000, 10000, seq_len-1],                       # Compute beginning and end
+        [0, 5000],                                         # Compute first half
+        [seq_len // 4, seq_len // 2],                      # Compute middle quarter
+        [0, seq_len // 10, seq_len * 9 // 10, seq_len-1],  # Compute first and last 10%
+        [seq_len // 3, seq_len * 2 // 3],                  # Compute middle third
+        [0, 2000, 5000, 7000, 10000, seq_len-1],           # Multiple small ranges
+        [0, 2000, 15000, seq_len-1],                       # Custom test
     ]
     
     all_passed = True
     for test_idx, must_do_list in enumerate(must_do_list_cases):
-        attn = LiteAttention(reverse_skip_list=False)
+        attn = LiteAttention()
 
         # Set threshold to +inf to skip everything by default
         attn.threshold = float("inf")
 
-        torch.cuda.synchronize()
-        output = attn(q, k, v, must_do_list=must_do_list)
-        torch.cuda.synchronize()
-        
-        # The write_list from this pass (which will be read_list next pass)
-        # should contain the compute information.
-        result_list = attn.read_list
-        
-        # Calculate expected percentage based on tiles
-        computed_tiles = 0
-        for i in range(0, len(must_do_list), 2):
-            start_seq = must_do_list[i]
-            end_seq = must_do_list[i+1]
-            start_tile = start_seq // kBlockN
-            end_tile = LiteAttention.ceil_div(end_seq, kBlockN)
-            computed_tiles += end_tile - start_tile
-            print(f"    Range [{start_seq}, {end_seq}): tiles [{start_tile}, {end_tile}) = {end_tile - start_tile} tiles")
-        print(f"    Debug: Tiles to compute={computed_tiles}, Tiles total={ktiles}")
-        expected_percentage = computed_tiles / ktiles
-        
-        actual_percentage = attn.calc_percentage(result_list)
-        passed = abs(actual_percentage - expected_percentage) < 0.01
+        for i in range(10):
+            torch.cuda.synchronize()
+            output = attn(q, k, v, must_do_list=must_do_list)
+            torch.cuda.synchronize()
+            
+            # The write_list from this pass (which will be read_list next pass)
+            # should contain the compute information.
+            result_list = attn.read_list
+            
+            # Calculate expected percentage based on tiles
+            computed_tiles = 0
+            for i in range(0, len(must_do_list), 2):
+                start_seq = must_do_list[i]
+                end_seq = must_do_list[i+1]
+                start_tile = start_seq // kBlockN
+                end_tile = LiteAttention.ceil_div(end_seq, kBlockN)
+                computed_tiles += end_tile - start_tile
+                # print(f"    Range [{start_seq}, {end_seq}): tiles [{start_tile}, {end_tile}) = {end_tile - start_tile} tiles")
+            # print(f"    Debug: Tiles to compute={computed_tiles}, Tiles total={ktiles}")
+            expected_percentage = computed_tiles / ktiles
+            
+            actual_percentage = attn.calc_percentage(result_list)
+            passed = abs(actual_percentage - expected_percentage) < 0.01
 
-        if not passed:
-            print(f"    Expected {expected_percentage:.2%} computed, got {actual_percentage:.2%}")
-            print(f"    Must do ranges: {must_do_list}")
+            if not passed:
+                print(f"    Expected {expected_percentage:.2%} computed, got {actual_percentage:.2%}, expected tile count: {computed_tiles}, total tiles: {ktiles}")
+                print(f"    Must do ranges: {must_do_list}")
+            
+            all_passed &= passed
         
-        all_passed &= passed
-    
     print(f"  Must-do list tests: {'✅ PASSED' if all_passed else '❌ FAILED'}")
     return all_passed
 
