@@ -238,8 +238,6 @@ class LiteAttention:
             else:
                 must_do_list[i] = must_do_list[i] // k_tile_size  # round down end indices
 
-        # print("must_do_list", must_do_list)
-
         values = torch.tensor(must_do_list, dtype=torch.int32, device=device)
         values = torch.cat([values, torch.zeros(list_shape[3] - values.size(0), dtype=values.dtype, device=values.device)])
         return values
@@ -269,8 +267,6 @@ class LiteAttention:
                 must_do_list_expanded = self._expand_must_do_list([0,0], write_list.shape, query, value)  # [0,0] is for an empty must-do list
         else:
             must_do_list_expanded = None
-
-        print("must_do_list_expanded", must_do_list_expanded.shape)
         
         # Perform flash attention 3 with skip lists
         output = flash_attn_func(
