@@ -7,6 +7,7 @@ of read and write skip lists, hiding the complexity from users.
 
 import torch
 import os
+import warnings
 from typing import Optional, Tuple, Union
 
 from ._internal.flash_attn_interface import flash_attn_func
@@ -241,6 +242,30 @@ class LiteAttention:
         expanded = values.repeat(*list_shape[:3], 1).contiguous()
         return expanded
     
+    def _warn_non_default_params_with_skipping(
+        self,
+        causal: bool,
+        window_size: Tuple[int, int],
+        num_splits: int,
+        pack_gqa: Optional[bool]
+    ) -> None:
+        """Warn user if non-default values are provided for advanced features when skip optimization is enabled."""
+        params = {
+            "causal": (causal, False),
+            "window_size": (window_size, (-1, -1)),
+            "num_splits": (num_splits, 1),
+            "pack_gqa": (pack_gqa, None)
+        }
+        non_default = [f"{name}={val}" for name, (val, default) in params.items() if val != default]
+        
+        if non_default:
+            warnings.warn(
+                f"Skip optimization is enabled, but non-default values were provided for: {', '.join(non_default)}. "
+                f"These will be overridden to default values (causal=False, window_size=(-1, -1), num_splits=1, pack_gqa=None).",
+                UserWarning,
+                stacklevel=3
+            )
+    
     def __call__(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, 
                  scale: Optional[float] = None, return_softmax_lse: bool = False, 
                  must_do_list: list = None, must_skip_list: list = None,
@@ -285,6 +310,7 @@ class LiteAttention:
 
         # Disable advanced features when skip optimization is enabled
         if self.enable_skipping:
+            self._warn_non_default_params_with_skipping(causal, window_size, num_splits, pack_gqa)
             causal = False
             window_size = (-1, -1)
             num_splits = 1
