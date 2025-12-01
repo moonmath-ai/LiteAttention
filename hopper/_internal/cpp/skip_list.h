@@ -46,7 +46,9 @@ namespace flash
                 
                 int const num_heads = get<2>(params.shape_Q);
                 uint64_t const num_q_blocks = cute::ceil_div(get<0>(params.shape_Q), kBlockM);
-                uint64_t const num_k_blocks = cute::ceil_div(get<0>(params.shape_K), kBlockN) + 1;
+                uint64_t num_k_blocks = cute::ceil_div(get<0>(params.shape_K), kBlockN) + 1;
+                int max_len = params.qk_skip_mask_args.skip_list_max_len;
+                if (max_len) num_k_blocks = max_len + 1;
                 const uint32_t q_i = ((uint32_t)m_block);
                 uint64_t mask_offset = (static_cast<uint64_t>(bidb) * num_heads * num_q_blocks * num_k_blocks) + 
                                        (static_cast<uint64_t>(bidh) * num_q_blocks * num_k_blocks) + 
@@ -160,10 +162,11 @@ namespace flash
     template <bool ReverseMustDoList, bool HasMustDoList>
     struct SkipListWriter
     {
-        // int *list_ptr;
         int16_t *list_ptr;
         int write_idx = 1;
         bool is_skipping = true;
+        int max_len;
+
         
         static constexpr bool Phase = !ReverseMustDoList;
 
@@ -177,7 +180,10 @@ namespace flash
             
             int const num_heads = get<2>(params.shape_Q);
             uint64_t const num_q_blocks = cute::ceil_div(get<0>(params.shape_Q), kBlockM);
-            uint64_t const num_k_blocks = cute::ceil_div(get<0>(params.shape_K), kBlockN) + 1;
+            uint64_t num_k_blocks = cute::ceil_div(get<0>(params.shape_K), kBlockN) + 1;
+            max_len = params.qk_skip_mask_args.skip_list_max_len;
+            if (max_len) num_k_blocks = max_len + 1;
+            else max_len = num_k_blocks;            
             const uint32_t q_i = ((uint32_t)m_block);
             uint64_t mask_offset = (static_cast<uint64_t>(bidb) * num_heads * num_q_blocks * num_k_blocks) + 
                                    (static_cast<uint64_t>(bidh) * num_q_blocks * num_k_blocks) + 
@@ -190,11 +196,13 @@ namespace flash
         __device__
         void record_transition(bool skip, int n_block)
         {
-            if (skip != is_skipping)
-            {
-                list_ptr[write_idx] = n_block;
-                write_idx++;
-                is_skipping = skip;
+            if (write_idx < max_len){
+                if (skip != is_skipping)
+                {
+                    list_ptr[write_idx] = n_block;
+                    write_idx++;
+                    is_skipping = skip;
+                }
             }
         }
 
@@ -202,11 +210,13 @@ namespace flash
         __device__
         void record_range_end(bool skip, int end_idx)
         {
-            is_skipping = true;
-            if (skip != is_skipping)
-            {
-                list_ptr[write_idx] = end_idx;
-                write_idx++;
+            if (write_idx < max_len){
+                is_skipping = true;
+                if (skip != is_skipping)
+                {
+                    list_ptr[write_idx] = end_idx;
+                    write_idx++;
+                }
             }
         }
 
