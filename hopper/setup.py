@@ -403,7 +403,8 @@ if not SKIP_CUDA_BUILD:
     # ptxas 12.8 gives the best perf currently
     # We want to use the nvcc front end from 12.6 however, since if we use nvcc 12.8
     # Cutlass 3.8 will expect the new data types in cuda.h from CTK 12.8, which we don't have.
-    if bare_metal_version != Version("12.8"):
+    # For CUDA 13.0+, use the system compiler directly
+    if bare_metal_version != Version("12.8") and bare_metal_version < Version("13.0"):
         download_and_copy(
             name="nvcc",
             src_func=lambda system, arch, version: f"cuda_nvcc-{system}-{arch}-{version}-archive/bin",
@@ -536,7 +537,9 @@ if not SKIP_CUDA_BUILD:
     sources += ["_internal/cpp/flash_prepare_scheduler.cu"]
     nvcc_flags = [
         "-O3",
-        "-std=c++17",
+        # "-g",
+        # "-std=c++17",
+        "-std=c++20",
         "--ftemplate-backtrace-limit=0",  # To debug template code
         "--use_fast_math",
         # "--keep",
@@ -545,7 +548,7 @@ if not SKIP_CUDA_BUILD:
         # f"--split-compile={os.getenv('NVCC_THREADS', '4')}",  # split-compile is faster
         "-lineinfo",  # TODO: disable this for release to reduce binary size
         "-DCUTE_SM90_EXTENDED_MMA_SHAPES_ENABLED",  # Necessary for the WGMMA shapes that we use
-        "-DCUTLASS_ENABLE_GDC_FOR_SM90",  # For PDL
+        # "-DCUTLASS_ENABLE_GDC_FOR_SM90",  # For PDL
         "-DCUTLASS_DEBUG_TRACE_LEVEL=0",  # Can toggle for debugging
         "-DNDEBUG",  # Important, otherwise performance is severely impacted
     ]

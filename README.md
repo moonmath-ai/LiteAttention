@@ -103,6 +103,7 @@ The near-linear scaling between sparsity and runtime improvement demonstrates th
 - H100 / H200 GPU
 - CUDA >= 12.8
 - CUDA toolkit
+- C++ 20
 - PyTorch 2.2 and above
 - `packaging` Python package (`pip install packaging`)
 - `ninja` Python package (`pip install ninja`) *
@@ -182,19 +183,19 @@ The must_do_list defines ranges that must not be skipped and the format is as fo
     must_do_list = [start_0, end_0, start_1, end_1, ...]
     start_i - start index of a range we must no skip. (inclusive)
     end_i - end index of a range we must not skip. (exclusive)
-    IMPORTANT: start_i > end_i > start_(i+1) > end_(i+1) > ... because we iterate in reverse order inside of the kernel.
+    IMPORTANT: start_i < end_i < start_(i+1) < end_(i+1) < ... (regular ascending order).
 
 For example, if we have a sequence of length 100, the must_do_list could look like this:
 
 ```python
-must_do_list = [80, 60, 45, 40, 12, 2]
+must_do_list = [2, 12, 40, 45, 60, 80]
 ```
 
 The must_skip_list defines ranges that can always be skipped according to the same convention as the must_do_list. For example if:
 ```python
-must_skip_list = [80, 40]
+must_skip_list = [40, 80]
 ```
-then all the tokens between 80 and 40 can always be skipped.
+then all the tokens between 40 and 80 can always be skipped.
 
 ### Multi-GPU Usage (Sequence Parallelism)
 
