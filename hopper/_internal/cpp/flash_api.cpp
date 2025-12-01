@@ -1221,6 +1221,8 @@ mha_fwd(at::Tensor q,   // (b, s_q, h, d) or (total_q, h, d) if there is cu_seql
     #endif
     #ifdef FLASHATTENTION_DISABLE_SOFTCAP
     TORCH_CHECK(params.softcap == 0.0, "This flash attention build does not support tanh softcapping.");
+    #else
+    CHECK_SKIPLIST_SUPPORT(params.softcap > 0.0, "Softcap is not supported when using skip list. Disable softcap when enable_skipping=True.");
     #endif
     #ifdef FLASHATTENTION_DISABLE_SPLIT
     TORCH_CHECK(params.num_splits == 1, "This flash attention build does not support splits.");

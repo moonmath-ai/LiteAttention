@@ -636,14 +636,30 @@ class LiteAttention:
         causal: bool,
         window_size: Tuple[int, int],
         num_splits: int,
-        pack_gqa: Optional[bool]
+        pack_gqa: Optional[bool],
+        qv: Optional[torch.Tensor],
+        q_descale: Optional[torch.Tensor],
+        k_descale: Optional[torch.Tensor],
+        v_descale: Optional[torch.Tensor],
+        attention_chunk: int,
+        softcap: float,
+        deterministic: bool,
+        sm_margin: int
     ) -> None:
         """Warn user if non-default values are provided for advanced features when skip optimization is enabled."""
         params = {
             "causal": (causal, False),
             "window_size": (window_size, (-1, -1)),
             "num_splits": (num_splits, 1),
-            "pack_gqa": (pack_gqa, None)
+            "pack_gqa": (pack_gqa, None),
+            "qv": (qv, None),
+            "q_descale": (q_descale, None),
+            "k_descale": (k_descale, None),
+            "v_descale": (v_descale, None),
+            "attention_chunk": (attention_chunk, 0),
+            "softcap": (softcap, 0.0),
+            "deterministic": (deterministic, False),
+            "sm_margin": (sm_margin, 0)
         }
         non_default = [f"{name}={val}" for name, (val, default) in params.items() if val != default]
         
@@ -662,7 +678,15 @@ class LiteAttention:
                  causal: bool = False,
                  window_size: Tuple[int, int] = (-1, -1),
                  num_splits: int = 1,
-                 pack_gqa: Optional[bool] = None) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+                 pack_gqa: Optional[bool] = None,
+                 qv: Optional[torch.Tensor] = None,
+                 q_descale: Optional[torch.Tensor] = None,
+                 k_descale: Optional[torch.Tensor] = None,
+                 v_descale: Optional[torch.Tensor] = None,
+                 attention_chunk: int = 0,
+                 softcap: float = 0.0,
+                 deterministic: bool = False,
+                 sm_margin: int = 0) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """
         Perform Flash Attention 3 computation with optional skip list optimization.
         
@@ -700,6 +724,14 @@ class LiteAttention:
                 Use (-1, -1) to disable. Defaults to (-1, -1).
             num_splits (int, optional): Number of splits for split-K algorithm. Defaults to 1.
             pack_gqa (bool, optional): Enable packed GQA optimization. Defaults to None (auto).
+            qv (torch.Tensor, optional): Query-value tensor for attention with QV.
+            q_descale (torch.Tensor, optional): Descale factor for Q (FP8).
+            k_descale (torch.Tensor, optional): Descale factor for K (FP8).
+            v_descale (torch.Tensor, optional): Descale factor for V (FP8).
+            attention_chunk (int, optional): Chunk size for attention. Defaults to 0.
+            softcap (float, optional): Softcap value. Defaults to 0.0.
+            deterministic (bool, optional): Use deterministic algorithm. Defaults to False.
+            sm_margin (int, optional): SM margin. Defaults to 0.
             
         Returns:
             Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
@@ -736,11 +768,19 @@ class LiteAttention:
 
         # Disable advanced features when skip optimization is enabled
         if self.enable_skipping:
-            self._warn_non_default_params_with_skipping(causal, window_size, num_splits, pack_gqa)
+            self._warn_non_default_params_with_skipping(causal, window_size, num_splits, pack_gqa, qv, q_descale, k_descale, v_descale, attention_chunk, softcap, deterministic, sm_margin)
             causal = False
             window_size = (-1, -1)
             num_splits = 1
             pack_gqa = None
+            qv = None
+            q_descale = None
+            k_descale = None
+            v_descale = None
+            attention_chunk = 0
+            softcap = 0.0
+            deterministic = False
+            sm_margin = 0
         
         # Perform flash attention 3 with skip lists
         output = flash_attn_func(
@@ -749,9 +789,17 @@ class LiteAttention:
             v=value,
             softmax_scale=scale,
             causal=causal,
+            qv=qv,
+            q_descale=q_descale,
+            k_descale=k_descale,
+            v_descale=v_descale,
             window_size=window_size,
+            attention_chunk=attention_chunk,
+            softcap=softcap,
             num_splits=num_splits,
             pack_gqa=pack_gqa,
+            deterministic=deterministic,
+            sm_margin=sm_margin,
             attn_read_list=read_list,
             attn_must_do_list=must_do_list_expanded,
             attn_write_list=write_list,
