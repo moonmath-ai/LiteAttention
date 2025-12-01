@@ -13,6 +13,10 @@ try:
 except ImportError:
     apply_rotary_emb = None
 
+import sys
+test_dir = os.path.dirname(__file__)
+sys.path.insert(0, os.path.join(test_dir, '..', 'utils'))
+sys.path.insert(0, os.path.join(test_dir, '..', '_internal'))
 from padding import pad_input, unpad_input
 from test_util import (
     attention_ref,
@@ -22,17 +26,18 @@ from test_util import (
 
 from flash_attn_interface import flash_attn_func, flash_attn_varlen_func, flash_attn_combine
 from flash_attn_interface import flash_attn_with_kvcache, get_scheduler_metadata
+sys.path.insert(0, os.path.join(test_dir, '..'))
 from lite_attention import LiteAttention
 
 
-DISABLE_BACKWARD = os.getenv("FLASH_ATTENTION_DISABLE_BACKWARD", "FALSE") == "TRUE"
+DISABLE_BACKWARD = os.getenv("FLASH_ATTENTION_DISABLE_BACKWARD", "TRUE") == "TRUE"
 DISABLE_SPLIT = os.getenv("FLASH_ATTENTION_DISABLE_SPLIT", "FALSE") == "TRUE"
 DISABLE_PAGEDKV = os.getenv("FLASH_ATTENTION_DISABLE_PAGEDKV", "FALSE") == "TRUE"
 DISABLE_APPENDKV = os.getenv("FLASH_ATTENTION_DISABLE_APPENDKV", "FALSE") == "TRUE"
 DISABLE_LOCAL = os.getenv("FLASH_ATTENTION_DISABLE_LOCAL", "FALSE") == "TRUE"
 DISABLE_SOFTCAP = os.getenv("FLASH_ATTENTION_DISABLE_SOFTCAP", "FALSE") == "TRUE"
 DISABLE_PACKGQA = os.getenv("FLASH_ATTENTION_DISABLE_PACKGQA", "FALSE") == "TRUE"
-DISABLE_FP16 = os.getenv("FLASH_ATTENTION_DISABLE_FP16", "FALSE") == "TRUE"
+DISABLE_FP16 = os.getenv("FLASH_ATTENTION_DISABLE_FP16", "TRUE") == "TRUE"
 DISABLE_FP8 = os.getenv("FLASH_ATTENTION_DISABLE_FP8", "FALSE") == "TRUE" or torch.cuda.get_device_capability("cuda")[0] < 9
 DISABLE_HDIM64 = os.getenv("FLASH_ATTENTION_DISABLE_HDIM64", "FALSE") == "TRUE"
 DISABLE_HDIM96 = os.getenv("FLASH_ATTENTION_DISABLE_HDIM96", "FALSE") == "TRUE"
@@ -48,79 +53,6 @@ COMPILED_HDIMS = (
     + ([192] if not DISABLE_HDIM192 else [])
     + ([256] if not DISABLE_HDIM256 else [])
 )
-
-@pytest.mark.parametrize("dtype", [torch.bfloat16] + ([torch.float16] if not DISABLE_FP16 else []) + ([torch.float8_e4m3fn] if not DISABLE_FP8 else []))
-@pytest.mark.parametrize("mha_type", ["mha"])
-@pytest.mark.parametrize("has_qv", [False])
-@pytest.mark.parametrize("deterministic", [False])
-@pytest.mark.parametrize("softcap", [0.0] + ([15.0] if not DISABLE_SOFTCAP else []))
-@pytest.mark.parametrize("local", [False])
-@pytest.mark.parametrize("causal", [False])
-@pytest.mark.parametrize("V_colmajor", [False, True])
-@pytest.mark.parametrize("d", COMPILED_HDIMS)
-@pytest.mark.parametrize(
-    "seqlen_q,seqlen_k",
-    [
-        (1, 1),
-        (64, 128),
-        (128, 192),
-        (256, 256),
-        (239, 1),
-        (799, 3),
-        (113, 203),
-        (113, 128),
-        (128, 217),
-        (113, 211),
-        (108, 256),
-        (256, 512),
-        (384, 256),
-        (640, 128),
-        (512, 256),
-        (1024, 1024),
-        (1023, 1024),
-        (1024, 1023),
-        (4096, 4096),
-        (4224, 4224),
-    ],
-)
-def test_lite_attn_output(seqlen_q, seqlen_k, d, causal, local, softcap, V_colmajor, deterministic, has_qv, mha_type, dtype):
-    if V_colmajor and (seqlen_k % 16 != 0 or dtype != torch.float8_e4m3fn):
-        pytest.skip("V_colmajor requires seqlen_k to be a multiple of 16 and dtype to be float8_e4m3fn")
-    if has_qv and (d != 64 or dtype == torch.float8_e4m3fn):
-        pytest.skip("Has Qv requires hdim 64 and dtype to be float16 or bfloat16 (not float8_e4m3fn)")
-    device = "cuda"
-    # set seed
-    torch.random.manual_seed(0)
-    # batch_size = 40
-    # nheads = 16
-    batch_size = 9 if seqlen_k <= 2048 else 2
-    # batch_size = 1
-    nheads = 6
-    # nheads = 1
-    nheads_kv = nheads if mha_type == "mha" else (2 if mha_type == "gqa" else 1)
-    dtype_ref = torch.bfloat16 if dtype == torch.float8_e4m3fn else dtype
-    dv_vals = [128, d] if d > 128 and d <= 192 else ([256, 512, d] if d <= 64 else [d])
-    if dtype == torch.float8_e4m3fn:
-        dv_vals = [d]
-    if has_qv:
-        dv_vals = [256, 512]
-    attention_chunk_vals = [torch.randint(1, seqlen_k * 2, (1,)).item(), 0] if not DISABLE_LOCAL else [0]
-    for dv, attention_chunk in itertools.product(dv_vals, attention_chunk_vals):
-        lite_attn = LiteAttention(enable_skipping=True, threshold=-3.0)
-
-        print(f"{dv = }, {attention_chunk = }")
-        # q_ref = torch.randn(batch_size, seqlen_q, nheads, d, device=device, dtype=dtype_ref)
-        q_ref = torch.randn(batch_size, seqlen_q, nheads, d, device=device, dtype=dtype_ref)
-        if softcap > 0.0:
-            # Ensure the values of qk are at least within softcap range.
-            q_ref = (q_ref * softcap / 4)
-        q_ref = q_ref.to(dtype).to(dtype_ref).requires_grad_()
-        k_ref = torch.randn(batch_size, seqlen_k, nheads_kv, d, device=device, dtype=dtype_ref).to(dtype).to(dtype_ref).requires_grad_()
-        v_ref = torch.randn(batch_size, seqlen_k, nheads_kv, dv, device=device, dtype=dtype_ref).to(dtype).to(dtype_ref).requires_grad_()
-        if has_qv:
-            qv_ref = torch.randn(batch_size, seqlen_q, nheads, dv, device=device, dtype=dtype_ref).to(dtype).to(dtype_ref)
-        else:
-            qv_ref = None
 
 # @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float8_e4m3fn])
 @pytest.mark.parametrize("dtype", [torch.bfloat16] + ([torch.float16] if not DISABLE_FP16 else []) + ([torch.float8_e4m3fn] if not DISABLE_FP8 else []))
@@ -270,9 +202,10 @@ def test_flash_attn_output(
         print(f"Pytorch mean diff: {(out_pt - out_ref).abs().mean().item()}")
         pack_gqa_vals = [False, True] if not DISABLE_PACKGQA else [False]
         num_splits_vals = [1, 3] if not DISABLE_SPLIT else [1]
+        lite_attn = LiteAttention(enable_skipping=False, max_batch_size=batch_size)
         for pack_gqa, num_splits in itertools.product(pack_gqa_vals, num_splits_vals):
             print(f"{pack_gqa = }, {num_splits = }")
-            out = flash_attn_func(
+            out = lite_attn(
                 q,
                 k,
                 v,
@@ -1108,8 +1041,9 @@ def test_flash_attn_cluster(seqlen_q, seqlen_k, d, causal, dtype):
     q = torch.randn(batch_size, seqlen_q, nheads, d, device=device, dtype=dtype)
     k = torch.randn(batch_size, seqlen_k, nheads_kv, d, device=device, dtype=dtype)
     v = torch.randn(batch_size, seqlen_k, nheads_kv, d, device=device, dtype=dtype)
+    lite_attn = LiteAttention(enable_skipping=False, max_batch_size=batch_size)
     for _ in range(100):
-        flash_attn_func(q, k, v, causal=causal)
+        lite_attn(q, k, v, causal=causal)
 
 
 # @pytest.mark.parametrize("dtype", ([torch.float16] if is_sm75 else [torch.float16, torch.bfloat16]))

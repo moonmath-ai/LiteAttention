@@ -329,6 +329,7 @@ void run_mha_fwd_constexpr(Flash_fwd_params &params, cudaStream_t stream) {
         }
     } else {
         #ifndef FLASHATTENTION_DISABLE_FP8
+        TORCH_CHECK(!params.is_skipable, "Skip list is not supported when using FP8.");
         #ifndef FLASHATTENTION_DISABLE_HDIM64
         if (params.d <= 64) { return run_mha_fwd_<90, cutlass::float_e4m3_t, 64, 64, Split, PagedKVNonTMA, Has_softcap, PackGQA>(params, stream); }
         #endif
@@ -435,6 +436,9 @@ inline bool get_pack_gqa(Flash_fwd_params const& params) {
 }
 
 inline int get_num_splits(Flash_fwd_params const& params) {
+    if (params.is_skipable) {
+        return 1;
+    }
     #ifdef FLASHATTENTION_DISABLE_SPLIT
     return 1;
     #else
@@ -1208,23 +1212,37 @@ mha_fwd(at::Tensor q,   // (b, s_q, h, d) or (total_q, h, d) if there is cu_seql
         }
     }
 
+    #define CHECK_SKIPLIST_SUPPORT(cond, msg) if (params.is_skipable && (cond)) TORCH_CHECK(false, msg)
+
     #ifdef FLASHATTENTION_DISABLE_LOCAL
     TORCH_CHECK(!params.is_local, "This flash attention build does not support local attention.");
+    #else
+    CHECK_SKIPLIST_SUPPORT(params.is_local, "Local attention is not supported when using skip list. Disable local attention when enable_skipping=True.");
     #endif
     #ifdef FLASHATTENTION_DISABLE_SOFTCAP
     TORCH_CHECK(params.softcap == 0.0, "This flash attention build does not support tanh softcapping.");
+    #else
+    CHECK_SKIPLIST_SUPPORT(params.softcap > 0.0, "Softcap is not supported when using skip list. Disable softcap when enable_skipping=True.");
     #endif
     #ifdef FLASHATTENTION_DISABLE_SPLIT
     TORCH_CHECK(params.num_splits == 1, "This flash attention build does not support splits.");
+    #else
+    CHECK_SKIPLIST_SUPPORT(params.num_splits > 1, "Splits are not supported when using skip list. Set num_splits=1 when enable_skipping=True.");
     #endif
     #ifdef FLASHATTENTION_DISABLE_PACKGQA
     TORCH_CHECK(!params.pack_gqa || params.arch < 90 || (params.page_table && !params.pagedkv_tma) || params.num_splits > 1, "This flash attention build does not support pack_gqa.");
+    #else
+    CHECK_SKIPLIST_SUPPORT(params.pack_gqa && params.arch >= 90 && !(params.page_table && !params.pagedkv_tma) && params.num_splits == 1, "Pack GQA is not supported when using skip list. Disable pack GQA when enable_skipping=True.");
     #endif
     #ifdef FLASHATTENTION_DISABLE_PAGEDKV
     TORCH_CHECK(!(params.page_table && !params.pagedkv_tma), "This flash attention build does not support paged KV.");
+    #else
+    CHECK_SKIPLIST_SUPPORT(params.page_table && !params.pagedkv_tma, "Paged KV is not supported when using skip list. Disable paged KV when enable_skipping=True.");
     #endif
     #ifdef FLASHATTENTION_DISABLE_APPENDKV
     TORCH_CHECK(!k_new_.has_value(), "This flash attention build does not support appending KV.");
+    #else
+    CHECK_SKIPLIST_SUPPORT(k_new_.has_value(), "Appending KV is not supported when using skip list. Disable appending KV when enable_skipping=True.");
     #endif
 
     if (total_q > 0 && (total_k + params.total_knew) > 0 && num_heads_k > 0) {
