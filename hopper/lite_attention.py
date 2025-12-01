@@ -573,8 +573,7 @@ class LiteAttention:
         _, k_tile_size = LiteAttention.get_MN(head_dim, element_size, v_colmajor)
         
         # Prepend the length and convert to tensor
-        result = LiteAttenti
-        on.convert_sequence_indices_to_tile_indices("must_do_list", must_do_list, k_tile_size, value.shape[1])
+        result = LiteAttention.convert_sequence_indices_to_tile_indices("must_do_list", must_do_list, k_tile_size, value.shape[1])
         return torch.tensor([len(result)] + result, dtype=torch.int16, device=device).contiguous()
 
     @staticmethod
