@@ -705,8 +705,12 @@ mha_fwd(at::Tensor q,   // (b, s_q, h, d) or (total_q, h, d) if there is cu_seql
         std::optional<at::Tensor> attn_must_do_list_,
         std::optional<at::Tensor> attn_write_list_,
         int64_t skip_list_max_len,
-        double thr
-        ) {
+        double thr,
+        bool reverse_skip_list = false,
+        bool phase = false
+    ) {
+    // params.reverse_skip_list = reverse_skip_list;
+    // params.phase = phase;
 
     auto dprops = at::cuda::getCurrentDeviceProperties();
     bool is_sm8x = dprops->major >= 8;
@@ -913,6 +917,9 @@ mha_fwd(at::Tensor q,   // (b, s_q, h, d) or (total_q, h, d) if there is cu_seql
                      softcap,
                      sm_margin);
 
+    params.reverse_skip_list = reverse_skip_list;
+    params.phase = phase;
+
     // Convert skip mask tensors to QKSkipMaskArgs struct
     // Expected shape: [batch, heads, limbs] where limbs = ceil_div(q_tiles * k_tiles, 64)
     // bool is_skipable = false;
@@ -920,12 +927,14 @@ mha_fwd(at::Tensor q,   // (b, s_q, h, d) or (total_q, h, d) if there is cu_seql
     if (attn_read_list_.has_value()) {
         auto qk_skip_mask_tensor = attn_read_list_.value();
         // TORCH_CHECK(qk_skip_mask_tensor.dtype() == torch::kUInt32, "attn_read_list must be uint32 tensor");
-        TORCH_CHECK(qk_skip_mask_tensor.dtype() == torch::kInt32, "attn_read_list must be int32 tensor");
+        // TORCH_CHECK(qk_skip_mask_tensor.dtype() == torch::kInt32, "attn_read_list must be int32 tensor");
+        TORCH_CHECK(qk_skip_mask_tensor.dtype() == torch::kInt16, "attn_read_list must be int16 tensor");
         TORCH_CHECK(qk_skip_mask_tensor.dim() == 4, "attn_read_list must be 4D tensor with shape [batch, heads, q_blocks, k_blocks]");
         TORCH_CHECK(qk_skip_mask_tensor.is_contiguous(), "attn_read_list must be contiguous");
         
         // uint32_t* data_ptr = static_cast<uint32_t*>(qk_skip_mask_tensor.data_ptr());
-        int* data_ptr = static_cast<int*>(qk_skip_mask_tensor.data_ptr());
+        // int* data_ptr = static_cast<int*>(qk_skip_mask_tensor.data_ptr());
+        int16_t* data_ptr = static_cast<int16_t*>(qk_skip_mask_tensor.data_ptr());
         
         params.qk_skip_mask_args.attn_read_list = data_ptr;
         params.qk_skip_mask_args.skip_list_max_len = skip_list_max_len;
@@ -941,12 +950,13 @@ mha_fwd(at::Tensor q,   // (b, s_q, h, d) or (total_q, h, d) if there is cu_seql
     if (attn_write_list_.has_value()) {
         auto qk_skip_mask_tensor = attn_write_list_.value();
         // TORCH_CHECK(qk_skip_mask_tensor.dtype() == torch::kUInt32, "attn_write_list must be uint32 tensor");
-        TORCH_CHECK(qk_skip_mask_tensor.dtype() == torch::kInt32, "attn_write_list must be int32 tensor");
+        TORCH_CHECK(qk_skip_mask_tensor.dtype() == torch::kInt16, "attn_write_list must be int16 tensor");
         TORCH_CHECK(qk_skip_mask_tensor.dim() == 4, "attn_write_list must be 4D tensor with shape [batch, heads, q_blocks, k_blocks]");
         TORCH_CHECK(qk_skip_mask_tensor.is_contiguous(), "attn_write_list must be contiguous");
         
         // uint32_t* data_ptr = static_cast<uint32_t*>(qk_skip_mask_tensor.data_ptr());
-        int* data_ptr = static_cast<int*>(qk_skip_mask_tensor.data_ptr());
+        // int* data_ptr = static_cast<int*>(qk_skip_mask_tensor.data_ptr());
+        int16_t* data_ptr = static_cast<int16_t*>(qk_skip_mask_tensor.data_ptr());
         params.qk_skip_mask_args.attn_write_list = data_ptr;
     } else {
         params.qk_skip_mask_args.attn_write_list = nullptr;
@@ -954,15 +964,17 @@ mha_fwd(at::Tensor q,   // (b, s_q, h, d) or (total_q, h, d) if there is cu_seql
 
     if (attn_must_do_list_.has_value()) {
         auto qk_skip_mask_tensor = attn_must_do_list_.value();
-        TORCH_CHECK(qk_skip_mask_tensor.dtype() == torch::kInt32, "attn_must_do_list must be int32 tensor");
-        TORCH_CHECK(qk_skip_mask_tensor.dim() == 1, "attn_must_do_list must be 1D tensor with shape [k_blocks]");
+        TORCH_CHECK(qk_skip_mask_tensor.dtype() == torch::kInt16, "attn_must_do_list must be int16 tensor");
+        TORCH_CHECK(qk_skip_mask_tensor.dim() == 1, "attn_must_do_list must be 1D tensor with shape [length]");
         TORCH_CHECK(qk_skip_mask_tensor.is_contiguous(), "attn_must_do_list must be contiguous");
         
-        int* data_ptr = static_cast<int*>(qk_skip_mask_tensor.data_ptr());
+        int16_t* data_ptr = static_cast<int16_t*>(qk_skip_mask_tensor.data_ptr());
         
         params.qk_skip_mask_args.attn_must_do_list = data_ptr;
+        params.has_must_do_list = true;
     } else {
         params.qk_skip_mask_args.attn_must_do_list = nullptr;
+        params.has_must_do_list = false;
     }
 
     params.total_q = total_q;
@@ -1763,7 +1775,9 @@ TORCH_LIBRARY(lite_attention, m) {
         "Tensor? attn_must_do_list = None,"
         "Tensor? attn_write_list = None,"
         "int skip_list_max_len = 0,"
-        "float thr = -3.0) -> (Tensor(out!), Tensor, Tensor, Tensor)"
+        "float thr = -3.0,"
+        "bool reverse_skip_list = False,"
+        "bool phase = False) -> (Tensor(out!), Tensor, Tensor, Tensor)"
     );
     m.def("bwd("
         "Tensor dout,"
