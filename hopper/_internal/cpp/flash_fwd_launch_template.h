@@ -383,38 +383,30 @@ void run_mha_fwd_(Flash_fwd_params &params, cudaStream_t stream)
                     static constexpr bool HasQv = HasQV_ && Arch == 90 && !Is_FP8 && kHeadDim == 64 && kHeadDimV >= 256;
                     APPENDKV_SWITCH(params.knew_ptr, AppendKV, [&] {
                         BOOL_SWITCH(params.is_skipable, Is_skipable, [&] {
-                            if constexpr (Is_skipable) {
-                                // Only when Is_skipable is true, check HasMustDoList, ReverseSkipList, and Phase
-                                BOOL_SWITCH(params.has_must_do_list, HasMustDoList, [&] {
-                                    BOOL_SWITCH(params.reverse_skip_list, ReverseSkipList, [&] {
-                                        BOOL_SWITCH(params.phase, Phase, [&] {
-                                            // Only needed here to decide if we should use cluster
-                                            static constexpr int kBlockM = Arch >= 90 ? std::get<0>(tile_size_fwd_sm90(kHeadDim, kHeadDimV, Is_causal, Is_local, sizeof(T) /*element_size*/, V_colmajor, PagedKVNonTMA, Has_softcap, Is_skipable)) : 128;
-                                            // DOR: in our case this is always true since kHeadDim == 128, Arch == 90 ...
-                                            static constexpr bool Enable_cluster = Arch == 90 && (sizeof(T) == 2 ? (kHeadDim >= 128) : (kHeadDim == 192)) && !Is_causal && !Is_local && !Split && !PagedKVNonTMA && !Varlen;
-                                            // Only use Cluster if number of tiles along seqlen_q is even and not varlen
-                                            CLUSTER_SWITCH(cutlass::ceil_div(params.seqlen_q * (!PackGQA ? 1 : params.h / params.h_k), kBlockM) % 2 == 0, Use_cluster, [&] {
-                                                static constexpr int ClusterM = Enable_cluster && Use_cluster ? 2 : 1;
+                            // Only needed here to decide if we should use cluster
+                            static constexpr int kBlockM = Arch >= 90 ? std::get<0>(tile_size_fwd_sm90(kHeadDim, kHeadDimV, Is_causal, Is_local, sizeof(T) /*element_size*/, V_colmajor, PagedKVNonTMA, Has_softcap, Is_skipable)) : 128;
+                            // DOR: in our case this is always true since kHeadDim == 128, Arch == 90 ...
+                            static constexpr bool Enable_cluster = Arch == 90 && (sizeof(T) == 2 ? (kHeadDim >= 128) : (kHeadDim == 192)) && !Is_causal && !Is_local && !Split && !PagedKVNonTMA && !Varlen;
+                            // Only use Cluster if number of tiles along seqlen_q is even and not varlen
+                            CLUSTER_SWITCH(cutlass::ceil_div(params.seqlen_q * (!PackGQA ? 1 : params.h / params.h_k), kBlockM) % 2 == 0, Use_cluster, [&] {
+                                static constexpr int ClusterM = Enable_cluster && Use_cluster ? 2 : 1;
+                                if constexpr (!Is_skipable) {
+                                    // When Is_skipable is disabled, use default values
+                                    static constexpr bool HasMustDoList = false;
+                                    static constexpr bool ReverseSkipList = false;
+                                    static constexpr bool Phase = true;
+                                    run_flash_fwd<Arch, kHeadDim, kHeadDimV, ClusterM, T, T_out, Is_causal, Is_local, Has_softcap, Varlen, PagedKVNonTMA, AppendKV && Varlen, HasQv, PackGQA, Split, V_colmajor, Is_skipable, ReverseSkipList, Phase, HasMustDoList>(params, stream);
+                                } else {
+                                    // When Is_skipable is enabled, check HasMustDoList, ReverseSkipList, and Phase
+                                    BOOL_SWITCH(params.has_must_do_list, HasMustDoList, [&] {
+                                        BOOL_SWITCH(params.reverse_skip_list, ReverseSkipList, [&] {
+                                            BOOL_SWITCH(params.phase, Phase, [&] {
                                                 run_flash_fwd<Arch, kHeadDim, kHeadDimV, ClusterM, T, T_out, Is_causal, Is_local, Has_softcap, Varlen, PagedKVNonTMA, AppendKV && Varlen, HasQv, PackGQA, Split, V_colmajor, Is_skipable, ReverseSkipList, Phase, HasMustDoList>(params, stream);
                                             });
                                         });
                                     });
-                                });
-                            } else {
-                                // When Is_skipable is false, HasMustDoList, ReverseSkipList, and Phase must be false
-                                static constexpr bool HasMustDoList = false;
-                                static constexpr bool ReverseSkipList = false;
-                                static constexpr bool Phase = true;
-                                // Only needed here to decide if we should use cluster
-                                static constexpr int kBlockM = Arch >= 90 ? std::get<0>(tile_size_fwd_sm90(kHeadDim, kHeadDimV, Is_causal, Is_local, sizeof(T) /*element_size*/, V_colmajor, PagedKVNonTMA, Has_softcap, Is_skipable)) : 128;
-                                // DOR: in our case this is always true since kHeadDim == 128, Arch == 90 ...
-                                static constexpr bool Enable_cluster = Arch == 90 && (sizeof(T) == 2 ? (kHeadDim >= 128) : (kHeadDim == 192)) && !Is_causal && !Is_local && !Split && !PagedKVNonTMA && !Varlen;
-                                // Only use Cluster if number of tiles along seqlen_q is even and not varlen
-                                CLUSTER_SWITCH(cutlass::ceil_div(params.seqlen_q * (!PackGQA ? 1 : params.h / params.h_k), kBlockM) % 2 == 0, Use_cluster, [&] {
-                                    static constexpr int ClusterM = Enable_cluster && Use_cluster ? 2 : 1;
-                                    run_flash_fwd<Arch, kHeadDim, kHeadDimV, ClusterM, T, T_out, Is_causal, Is_local, Has_softcap, Varlen, PagedKVNonTMA, AppendKV && Varlen, HasQv, PackGQA, Split, V_colmajor, Is_skipable, ReverseSkipList, Phase, HasMustDoList>(params, stream);
-                                });
-                            }
+                                }
+                            });
                         });
                     });
                 });

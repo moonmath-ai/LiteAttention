@@ -302,7 +302,7 @@ class LiteAttention:
                 return 128, 128
 
     @staticmethod
-    def init_skip_list(batch, seq_len, heads, head_dim, v_colmajor, dtype, device, must_skip_list: list = None) -> torch.Tensor:
+    def init_skip_list(batch, seq_len, heads, head_dim, v_colmajor, dtype, device, must_skip_list: list = None, reverse_skip_list: bool = True) -> torch.Tensor:
         """
         Initialize skip list tensors with default "compute all tiles" configuration.
         
@@ -369,14 +369,14 @@ class LiteAttention:
         skip_list = torch.empty(2, batch, heads, qtiles, ktiles + 1, dtype=torch.int16, device=device)
 
         if must_skip_list is not None:
+            tile_indices = LiteAttention.convert_sequence_indices_to_tile_indices("must_skip_list", must_skip_list, kBlockN, seq_len)
 
-            tile_indices = LiteAttention.convert_sequence_indices_to_tile_indices("must_skip_list", must_skip_list, kBlockN)
+            # convert from skip-ranges to do-ranges for read list
+            tile_indices.pop(0) if tile_indices[0] == 0 else tile_indices.insert(0, 0)
+            tile_indices.pop() if tile_indices[-1] == ktiles else tile_indices.append(ktiles)
 
-            # convert from skip-ranges to do-ranges:
-            tile_indices.insert(0, 0)
-            tile_indices.append(ktiles)
-     
-            skip_list[0, :, :, :, :len(tile_indices)] = [len(tile_indices)] + tile_indices
+            tile_indices = [len(tile_indices)] + list(reversed(tile_indices))
+            skip_list[0, :, :, :, :len(tile_indices)] = torch.tensor(tile_indices, dtype=torch.int16, device=device)
         else:
             # Initialize first buffer with "compute all tiles" configuration
             # [2, ktiles-1, -1] means: length=2, one range from ktiles-1 down to 0 (via -1)
@@ -415,7 +415,7 @@ class LiteAttention:
         device = query.device
         
         # Allocate for max_batch_size to avoid reallocation on batch size changes
-        return LiteAttention.init_skip_list(self.max_batch_size, seq_len, heads, head_dim, v_colmajor, dtype, device, must_skip_list)
+        return LiteAttention.init_skip_list(self.max_batch_size, seq_len, heads, head_dim, v_colmajor, dtype, device, must_skip_list, self.reverse_skip_list)
     
     
     def _get_read_write_lists(self, query: torch.Tensor, value: torch.Tensor, must_skip_list: list = None) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
@@ -865,6 +865,9 @@ class LiteAttention:
         This method reads from the current skip list, so it should be called after
         at least one forward pass has been executed.
         """
+        import matplotlib.pyplot as plt
+        import torch.nn.functional as F
+
         # os.makedirs(save_path, exist_ok=True)
         # Create subdirectories for each batch and attention head
         batch = query.shape[0]
@@ -879,13 +882,10 @@ class LiteAttention:
         else:
             step = 0
 
-        # Create single output directory
-        os.makedirs(save_path, exist_ok=True)
-        
-        # for b in range(batch):
-        #     for h in heads_list:
-        #         batch_head_dir = os.path.join(save_path, f"batch_{b}", f"head_{h}")
-        #         os.makedirs(batch_head_dir, exist_ok=True)
+        for b in range(batch):
+            for h in heads_list:
+                batch_head_dir = os.path.join(save_path, f"batch_{b}", f"head_{h}")
+                os.makedirs(batch_head_dir, exist_ok=True)
 
         kBlockM, kBlockN = LiteAttention.get_MN(key.shape[-1], key.dtype.itemsize)
         # Add grid overlay
@@ -929,22 +929,12 @@ class LiteAttention:
                 attn_map = attn_down[0, 0]  # (max_res, max_res)
                 
                 current_skip_list = skip_list[b, h][None, None, ...]
-                perecentage = self.calc_percentage(current_skip_list)
+                percentage = self.calc_percentage(current_skip_list)
 
                 plt.figure(figsize=(6, 6))
                 attn_cpu = attn_map.detach().float().cpu()
-                # When do_softmax is True, values are already in [0, 1] range, so we disable auto-normalization
-                if do_softmax and False:
-                    plt.imshow(attn_cpu, cmap='viridis', interpolation='nearest', vmin=0, vmax=1)
-                else:
-                    plt.imshow(attn_cpu, cmap='viridis', interpolation='nearest')
-                
-                # Build title with name_prefix if provided
-                title_parts = []
-                if name_prefix:
-                    title_parts.append(name_prefix)
-                title_parts.extend([f"Batch {b}", f"Head {h}", f"Percentage {perecentage * 100:.2f}%", f"Do Softmax: {do_softmax}"])
-                plt.title(" | ".join(title_parts))
+                plt.imshow(attn_cpu, cmap='viridis', interpolation='nearest')
+                plt.title(f"Batch {b} | Head {h} | Percentage {percentage * 100:.2f}% | Do Softmax: {do_softmax}")
                 
                 # Add horizontal grid lines
                 for y in y_positions:
@@ -977,17 +967,9 @@ class LiteAttention:
                 plt.axis("off")
                 plt.tight_layout()
 
-                # Build filename with name_prefix, batch, and head
-                if name_prefix:
-                    filename = f"{name_prefix}_batch_{b}_head_{h}.png"
-                else:
-                    filename = f"batch_{b}_head_{h}.png"
-                file_path = os.path.join(save_path, filename)
-                
-                # batch_head_dir = os.path.join(save_path, f"batch_{b}", f"head_{h}")
-                # filename = f"{name_prefix}.png" if name_prefix else "visualization.png"
-                # file_path = os.path.join(batch_head_dir, filename)
-                
+                batch_head_dir = os.path.join(save_path, f"batch_{b}", f"head_{h}")
+                filename = f"{name_prefix}.png" if name_prefix else "visualization.png"
+                file_path = os.path.join(batch_head_dir, filename)
                 plt.savefig(file_path, dpi=150)
                 plt.close()
 

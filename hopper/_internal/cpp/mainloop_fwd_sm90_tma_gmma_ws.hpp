@@ -399,11 +399,11 @@ namespace flash
         using TensorStorage = std::conditional_t<!Transpose_V, TensorStorageNoTranspose, TensorStorageTransposeV>;
 
         // These are tuned for speed. They don't affect correctness.
-        static constexpr bool UseSchedulerBarrier = (IntraWGOverlap
+        static constexpr bool UseSchedulerBarrier = ((IntraWGOverlap
                                                          ? (NumMmaWarpGroups >= 2) && (!Is_FP8 ? kHeadDim <= 128 : kHeadDim >= 128)
                                                          : NumMmaWarpGroups == 2) &&
-                                                    !LargeHeadDimV;
-        // static constexpr bool UseSchedulerBarrier = true;
+                                                    !LargeHeadDimV) || Is_skipable;
+
         static constexpr bool RescaleOBeforeGemm = kHeadDim > 128 && (!Is_FP8 || V_colmajor) && IntraWGOverlap;
 
         // Host side kernel arguments
@@ -701,7 +701,7 @@ namespace flash
             auto &skip_reader = shared_storage.skip_list_storage.reader;
             
             // MustDoListReader: only used by producer (thread 0) to determine which blocks must be computed
-            MustDoListReader<ReverseSkipList> must_do_reader;
+            MustDoListReader<!Phase> must_do_reader;
             
             if constexpr (Is_skipable)
             {

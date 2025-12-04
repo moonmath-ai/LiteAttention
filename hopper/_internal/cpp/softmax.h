@@ -12,6 +12,7 @@
 
 #include "utils.h"
 #include "skip_list.h"
+#include "skip_list.h"
 
 namespace flash
 {

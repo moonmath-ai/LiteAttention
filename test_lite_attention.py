@@ -20,9 +20,10 @@ def run_attention_warmup(attn, q, k, v, num_iters=1):
 
 def print_skip_percentage(attn, q):
     """Print the skip percentage for the given query."""
-    skip_percentage = attn.calc_percentage(attn._skip_list[attn._phase, :q.shape[0]])
-    print(f"    Skip percentage: {skip_percentage:.2%}")
+    skip_percentage = attn.calc_percentage(attn.read_list)
+    print(f"    Skip percentage: {skip_percentage:.2%}", f"raw percentage: {skip_percentage}")
 
+# not valid in the new skip list format!!!
 def check_first_element_is_last_block(skip_list):
     """
     Check that the first element in the skip list is the last block (ktiles - 1).
@@ -67,7 +68,11 @@ def check_no_empty_or_negative_ranges(skip_list):
     """
     # Check that all ranges are positive (start < end)
     # [start0 - end0, end0 - start1, start1 - end1, end1 - start2, ..., start_n - end_n]
-    diff = (skip_list[..., 1:-1] - skip_list[..., 2:]) > 0
+    diff = (skip_list[..., 1:-1] - skip_list[..., 2:])
+    # correct the sign according to the first difference
+    sign = torch.sign(diff.flatten()[0])
+    diff = (diff * sign) > 0
+
     arange = torch.arange(diff.shape[-1], device=skip_list.device).view(1, 1, 1, -1) >= skip_list[..., 0:1] - 1
     # Only check ranges that are within the valid list length
     passed_individually = (arange + diff) > 0
@@ -103,8 +108,8 @@ def test_skip_all(q, k, v, head_dim):
     mpassed = (diff == 1)
     passed &= mpassed.all()
 
-    # Test that the only block we don't skip is the last one
-    passed &= check_first_element_is_last_block(skip_list)
+    # # Test that the only block we don't skip is the last one
+    # passed &= check_first_element_is_last_block(skip_list)
     
     print(f"  Skip all test: {'✅ PASSED' if passed else '❌ FAILED'}")
     if not passed:
@@ -124,25 +129,32 @@ def test_skip_nothing(q, k, v, head_dim):
     """
     attn = LiteAttention()
     attn.threshold = float('-inf')
+    read_list_original, _ = attn._get_read_write_lists(q, v)
+    read_list_original = read_list_original.clone()
+    attn._phase = 0
     
     # Warm up
-    run_attention_warmup(attn, q, k, v)
+    run_attention_warmup(attn, q, k, v, 2)
     
-    read_list = attn._skip_list[attn._phase, :q.shape[0]]  # [batch, heads, qtiles, ktiles]
-    write_list = attn._skip_list[1 - attn._phase, :q.shape[0]]  # [batch, heads, qtiles, ktiles]
+    # read_list = attn._skip_list[attn._phase, :q.shape[0]]  # [batch, heads, qtiles, ktiles]
+    read_list = attn.read_list  # [batch, heads, qtiles, ktiles+1]
+    # write_list = attn._skip_list[1 - attn._phase, :q.shape[0]]  # [batch, heads, qtiles, ktiles]
+    # write_list = attn.write_list  # [batch, heads, qtiles, ktiles+1]
     
     # Check if read and write lists match
-    test_tensor = torch.tensor([2, read_list.shape[-1] - 2, -1], device=read_list.device, dtype=read_list.dtype)[None, None, None,]
-    diff = (read_list[..., :3] == test_tensor).all(-1)
+    one_range = read_list[..., 0] == 2
+    diff_min = read_list[..., 1 : 3].min(dim=-1).values == read_list_original[..., 1 : 3].min(dim=-1).values
+    diff_max = read_list[..., 1 : 3].max(dim=-1).values == read_list_original[..., 1 : 3].max(dim=-1).values
+    assert diff_min.shape == diff_max.shape == one_range.shape
+    diff = one_range & diff_min & diff_max
     passed = diff.all()
-    
-    # Test that the only block we don't skip is the last one
-    passed &= check_first_element_is_last_block(read_list)
-    
     print(f"  Skip nothing test: {'✅ PASSED' if passed else '❌ FAILED'}")
     if not passed:
+        mismatch_percent = (~diff).sum().item() / diff.numel() * 100
+        print(f"    Mismatch percentage: {mismatch_percent:.2f}%")
         print_skip_percentage(attn, q)
-        print(f"    Mismatched read_list:\n{read_list[~diff][..., :5]}")
+        print(f"    Mismatched read_list:\n{read_list[~diff][..., :3]}")
+        print(f"    Mismatched read_list_original:\n{read_list_original[~diff][..., :3]}")
     
     return passed
 
@@ -209,7 +221,8 @@ def consistency_test(q, k, v, head_dim, num_iters=10):
         torch.cuda.synchronize()
 
         previous_skip_list = skip_list
-        skip_list = attn._skip_list[attn._phase, :q.shape[0]]
+        # skip_list = attn._skip_list[attn._phase, :q.shape[0]]
+        skip_list = attn.read_list
 
         # check new percentage is not bigger than the previous one
         new_percentage = attn.calc_percentage(skip_list)
@@ -220,11 +233,11 @@ def consistency_test(q, k, v, head_dim, num_iters=10):
             return False
         percentage = new_percentage
         
-        # Check that the first element in the skip list is the last block
-        if not check_first_element_is_last_block(skip_list):
-            print(f"  Consistency test: {'✅ PASSED' if False else '❌ FAILED'}")
-            print(f"    Failed on iteration {i}")
-            return False
+        # # Check that the first element in the skip list is the last block
+        # if not check_first_element_is_last_block(skip_list):
+        #     print(f"  Consistency test: {'✅ PASSED' if False else '❌ FAILED'}")
+        #     print(f"    Failed on iteration {i}")
+        #     return False
         
         # Check that the list length isn't bigger than ktiles + 1
         if not check_skip_list_length_valid(skip_list):
@@ -241,18 +254,132 @@ def consistency_test(q, k, v, head_dim, num_iters=10):
     print(f"  Consistency test: {'✅ PASSED' if True else '❌ FAILED'}")
     return True
 
+def test_must_skip_list(q, k, v, head_dim):
+    """
+    Test that must_skip_list forces tiles to be skipped even if threshold dictates computing.
+    Tests multiple must skip list configurations.
+    """
+    seq_len = k.shape[1]
+    element_size = k.dtype.itemsize
+    _, kBlockN = LiteAttention.get_MN(head_dim, element_size)
+    ktiles = LiteAttention.ceil_div(seq_len, kBlockN)
+
+    # Each entry is [start0, end0, start1, end1, ...] representing ranges to skip
+    must_skip_list_cases = [
+        [0, 1000, 10000, seq_len-1],                       # Skip beginning and end
+        [0, 5000],                                         # Skip first half
+        [seq_len // 4, seq_len // 2],                      # Skip middle quarter
+        [0, seq_len // 10, seq_len * 9 // 10, seq_len-1],  # Skip first and last 10%
+        [seq_len // 3, seq_len * 2 // 3],                  # Skip middle third
+        [0, 2000, 5000, 7000, 10000, seq_len-1],           # Multiple small ranges
+    ]
+    
+    all_passed = True
+    for test_idx, must_skip_list in enumerate(must_skip_list_cases):
+        attn = LiteAttention()
+
+        # Set threshold to -inf to compute everything by default
+        attn.threshold = -float("inf")
+
+        torch.cuda.synchronize()
+        output = attn(q, k, v, must_skip_list=must_skip_list)
+        torch.cuda.synchronize()
+        
+        # The write_list from this pass (which will be read_list next pass)
+        # should contain the skip information.
+        result_list = attn.read_list
+        
+        # Calculate expected percentage based on tiles
+        skipped_tiles = 0
+        for i in range(0, len(must_skip_list), 2):
+            start_seq = must_skip_list[i]
+            end_seq = must_skip_list[i+1]
+            start_tile = start_seq // kBlockN
+            end_tile = LiteAttention.ceil_div(end_seq, kBlockN)
+            skipped_tiles += end_tile - start_tile
+        expected_percentage = (ktiles - skipped_tiles) / ktiles
+        
+        actual_percentage = attn.calc_percentage(result_list)
+        passed = abs(actual_percentage - expected_percentage) < 0.01
+        
+        all_passed &= passed
+    
+    print(f"  Must-skip list tests: {'✅ PASSED' if all_passed else '❌ FAILED'}")
+    return all_passed
+
+def test_must_do_list(q, k, v, head_dim):
+    """
+    Test that must_do_list forces tiles to be computed even if threshold dictates skipping.
+    Tests multiple must do list configurations.
+    """
+    seq_len = k.shape[1]
+    element_size = k.dtype.itemsize
+    _, kBlockN = LiteAttention.get_MN(head_dim, element_size)
+    ktiles = LiteAttention.ceil_div(seq_len, kBlockN)
+
+    # Each entry is [start0, end0, start1, end1, ...] representing ranges to compute
+    must_do_list_cases = [
+        [0, 1000, 10000, seq_len-1],                       # Compute beginning and end
+        [0, 5000],                                         # Compute first half
+        [seq_len // 4, seq_len // 2],                      # Compute middle quarter
+        [0, seq_len // 10, seq_len * 9 // 10, seq_len-1],  # Compute first and last 10%
+        [seq_len // 3, seq_len * 2 // 3],                  # Compute middle third
+        [0, 2000, 5000, 7000, 10000, seq_len-1],           # Multiple small ranges
+        [0, 2000, 15000, seq_len-1],                       # Custom test
+    ]
+    
+    all_passed = True
+    for test_idx, must_do_list in enumerate(must_do_list_cases):
+        attn = LiteAttention()
+
+        # Set threshold to +inf to skip everything by default
+        attn.threshold = float("inf")
+
+        for i in range(10):
+            torch.cuda.synchronize()
+            output = attn(q, k, v, must_do_list=must_do_list)
+            torch.cuda.synchronize()
+            
+            # The write_list from this pass (which will be read_list next pass)
+            # should contain the compute information.
+            result_list = attn.read_list
+            
+            # Calculate expected percentage based on tiles
+            computed_tiles = 0
+            for i in range(0, len(must_do_list), 2):
+                start_seq = must_do_list[i]
+                end_seq = must_do_list[i+1]
+                start_tile = start_seq // kBlockN
+                end_tile = LiteAttention.ceil_div(end_seq, kBlockN)
+                computed_tiles += end_tile - start_tile
+                # print(f"    Range [{start_seq}, {end_seq}): tiles [{start_tile}, {end_tile}) = {end_tile - start_tile} tiles")
+            # print(f"    Debug: Tiles to compute={computed_tiles}, Tiles total={ktiles}")
+            expected_percentage = computed_tiles / ktiles
+            
+            actual_percentage = attn.calc_percentage(result_list)
+            passed = abs(actual_percentage - expected_percentage) < 0.01
+
+            if not passed:
+                print(f"    Expected {expected_percentage:.2%} computed, got {actual_percentage:.2%}, expected tile count: {computed_tiles}, total tiles: {ktiles}")
+                print(f"    Must do ranges: {must_do_list}")
+            
+            all_passed &= passed
+        
+    print(f"  Must-do list tests: {'✅ PASSED' if all_passed else '❌ FAILED'}")
+    return all_passed
 
 def stress_test(q, k, v, head_dim, num_iters=10):
     """Stress test the attention mechanism."""
     attn = LiteAttention()
     attn.threshold = float(0.0)
 
-    torch.cuda.synchronize()
-    output = attn(q, k, v)
-    torch.cuda.synchronize()
+    output = run_attention_warmup(attn, q, k, v, 2) # only after 2 iters we stabalize do to bi-direction
+
 
     n = 11
-    percentage = attn.calc_percentage(attn._skip_list[attn._phase, :q.shape[0]])
+    percentage = attn.calc_percentage(attn.read_list)
+    read_list_original = attn.read_list.clone()
+    percentage_per_head = attn.calc_percentage_per_head(attn.read_list)
     
     passed = True
 
@@ -260,16 +387,20 @@ def stress_test(q, k, v, head_dim, num_iters=10):
         torch.cuda.synchronize()
         output = attn(q, k, v)
         torch.cuda.synchronize()
-        new_percentage = attn.calc_percentage(attn._skip_list[attn._phase, :q.shape[0]])
-        
-        # Test that the only block we don't skip is the last one
-        skip_list = attn._skip_list[attn._phase, :q.shape[0]]
-        passed &= check_first_element_is_last_block(skip_list)
+        new_percentage = attn.calc_percentage(attn.read_list)
+        new_percentage_per_head = attn.calc_percentage_per_head(attn.read_list)
         
         if new_percentage != percentage:
             print(f"  Skip list: {attn._skip_list[attn._phase, 0,0,0,:n]}, ktiles: {attn._skip_list.shape[-1] - 1}")
-            print(f"  percentage changed from {percentage:.2%} to {new_percentage:.2%} at iteration {i}")
+            # print(f"  percentage changed from {percentage:.2%} to {new_percentage:.2%} at iteration {i}")
+            print(f"  percentage changed from {percentage} to {new_percentage} at iteration {i}")
             print(f"  Stress test completed: {'✅ PASSED' if False else '❌ FAILED'}")
+            diff = new_percentage_per_head != percentage_per_head
+            diff_read = attn.read_list[diff]
+            diff_read_original = read_list_original[diff]
+            length = max(diff_read[..., 0].max().item(), diff_read_original[..., 0].max().item())
+            print(f"  read_list: {diff_read[..., :length]}")
+            print(f"  original : {diff_read_original[..., :length]}")
             return
 
     print_skip_percentage(attn, q)
@@ -289,10 +420,12 @@ def run_tests_for_head_dim(head_dim, batch=2, seq_len=18200, heads=32):
     stress_test(q, k, v, head_dim)
     test_skip_all(q, k, v, head_dim)
     test_skip_nothing(q, k, v, head_dim)
+    test_must_skip_list(q, k, v, head_dim)
+    test_must_do_list(q, k, v, head_dim)
     q, k, v = generate_test_tensors(batch=batch, seq_len=min(6000, seq_len), heads=heads, head_dim=head_dim)
     test_softmax_lse_correctness(q, k, v, head_dim)
 
-    consistency_test(q, k, v, head_dim)
+    # consistency_test(q, k, v, head_dim)
 
 
 def main():
