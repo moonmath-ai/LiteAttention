@@ -122,10 +122,20 @@ namespace flash
         }
 
         __device__
+        bool has_passed_current_range(int n_block) const
+        {
+            if constexpr (!Reverse) {
+                return flash::warp_uniform(n_block >= end_idx);
+            } else {
+                return flash::warp_uniform(n_block <= end_idx);
+            }
+        }
+
+        __device__
         bool find_range(int n_block)
         {
             bool found = is_n_block_in_range(n_block);
-            while (has_more() && !found) {
+            while (has_more() && !found && has_passed_current_range(n_block)) {
                 load_range();
                 advance();
                 found = is_n_block_in_range(n_block);
