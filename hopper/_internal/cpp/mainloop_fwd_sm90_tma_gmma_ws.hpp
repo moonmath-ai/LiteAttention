@@ -1725,7 +1725,7 @@ namespace flash
 
                 // clear(tOrO);
 
-                auto fwd_step = [&](int const n_block, auto mask_fn, auto is_first_iter_type, auto check_inf_type, auto &skip_reader) -> int
+                auto fwd_step = [&](int const n_block, auto mask_fn, auto is_first_iter_type, auto check_inf_type, auto &skip_reader) -> bool
                 {
                     static constexpr bool Is_first_iter = decltype(is_first_iter_type)::value;
                     static constexpr bool Check_inf = decltype(check_inf_type)::value;
@@ -1738,9 +1738,17 @@ namespace flash
                     Tensor tSrS = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
                     consumer_wait(pipeline_k, smem_pipe_read);
                     
-                    int new_n_block = n_block;
+                    // int new_n_block = n_block;
+                    int new_n_block;
                     if constexpr (Is_skipable){
                         new_n_block = skip_reader.next_n_block();
+                    }else{
+                        new_n_block = n_block;
+                    }
+
+                    bool has_more = true;
+                    if constexpr (Is_skipable){
+                        has_more = skip_reader.has_more(new_n_block);
                     }
 
                     flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS);
@@ -1834,14 +1842,16 @@ namespace flash
                     warpgroup_wait<0>();
                     pipeline_v.consumer_release(smem_pipe_read); // release V
                     
-                    return new_n_block;
+                    return has_more;
                 };
 
                 auto first_iter_mask_fn = [&](auto &tSrS, int n_block)
                 { mask.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS, m_block, n_block); };
                 // fwd_step(n_block, first_iter_mask_fn, cute::true_type{} /*is_first_iter*/, cute::true_type{} /*check_inf*/, skip_reader);
+                bool has_more_outer = true;
                 if constexpr (Is_skipable){
-                    n_block = fwd_step(n_block, first_iter_mask_fn, cute::true_type{} /*is_first_iter*/, cute::true_type{} /*check_inf*/, skip_reader);
+                    has_more_outer = fwd_step(0, first_iter_mask_fn, cute::true_type{} /*is_first_iter*/, cute::true_type{} /*check_inf*/, skip_reader);
+                    // n_block = fwd_step(0, first_iter_mask_fn, cute::true_type{} /*is_first_iter*/, cute::true_type{} /*check_inf*/, skip_reader);
                 }else{
                     fwd_step(n_block, first_iter_mask_fn, cute::true_type{} /*is_first_iter*/, cute::true_type{} /*check_inf*/, skip_reader);
                     --n_block;
@@ -1874,8 +1884,9 @@ namespace flash
                     auto mask_fn = [&](auto &tSrS, int n_block) {
                         mask.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS, m_block, n_block); 
                     };
-                    while(skip_reader.has_more(n_block)){
-                        n_block = fwd_step(n_block, mask_fn, cute::false_type{} /*is_first_iter*/, cute::true_type{} /*check_inf*/, skip_reader);
+                    // while(skip_reader.has_more(n_block)){
+                    while(has_more_outer){
+                        has_more_outer = fwd_step(0, mask_fn, cute::false_type{} /*is_first_iter*/, cute::true_type{} /*check_inf*/, skip_reader);
                     }
                 }
 
