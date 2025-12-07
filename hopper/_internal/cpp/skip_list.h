@@ -419,7 +419,7 @@ namespace flash
         }
     };
 
-    template <const int BufferSize, bool ReverseSkipList, bool Phase>
+    template <const int BufferSize, bool ReverseSkipList, bool Phase, bool HasMustDoList>
     struct SkipListStorage
     {
         alignas(16) int n_blocks_buffer[BufferSize]; // 4
@@ -427,7 +427,8 @@ namespace flash
         alignas(16) int skip_tests[BufferSize][4]; // 16
         int last_n_block[1]; // 4
         SkipListReader<ReverseSkipList, Phase> reader;
-        // DelayedSkipListWriter<BufferSize / 2> writer;  // BufferSize = DelayAmount * 2, so DelayAmount = BufferSize / 2
+        // DelayedSkipListWriter<BufferSize / 2, ReverseSkipList, Phase, HasMustDoList> writer;  // BufferSize = DelayAmount * 2, so DelayAmount = BufferSize / 2
+        MustDoListReader<!Phase> must_do_reader;  // Lives in shared memory similar to reader
     };
 
 } // namespace flash

@@ -702,7 +702,8 @@ namespace flash
             auto &skip_reader = shared_storage.skip_list_storage.reader;
             
             // MustDoListReader: only used by producer (thread 0) to determine which blocks must be computed
-            MustDoListReader<!Phase> must_do_reader;
+            // Lives in shared memory similar to skip_reader
+            auto &must_do_reader = shared_storage.skip_list_storage.must_do_reader;
             
             if constexpr (Is_skipable)
             {
