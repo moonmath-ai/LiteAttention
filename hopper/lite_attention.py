@@ -280,11 +280,14 @@ class LiteAttention:
         """
         if element_size == 2:
             if head_dim <= 64:
-                return 192, 192
+                # return 192, 192
+                return 128, 224
             elif head_dim <= 96:
-                return 192, 144
+                # return 192, 144
+                return 128, 208
             elif head_dim <= 128:
                 return 128, 176
+                # return 128, 192
             elif head_dim <= 192:
                 return 128, 112
             else:
