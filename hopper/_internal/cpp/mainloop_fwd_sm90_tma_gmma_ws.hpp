@@ -404,7 +404,8 @@ namespace flash
                                                          : NumMmaWarpGroups == 2) &&
                                                     !LargeHeadDimV) || Is_skipable;
 
-        static constexpr bool RescaleOBeforeGemm = kHeadDim > 128 && (!Is_FP8 || V_colmajor) && IntraWGOverlap;
+        // static constexpr bool RescaleOBeforeGemm = kHeadDim > 128 && (!Is_FP8 || V_colmajor) && IntraWGOverlap;
+        static constexpr bool RescaleOBeforeGemm = ((kHeadDim > 128) && (!Is_FP8 || V_colmajor) && IntraWGOverlap) || (Is_skipable && IntraWGOverlap);
 
         // Host side kernel arguments
         struct Arguments
