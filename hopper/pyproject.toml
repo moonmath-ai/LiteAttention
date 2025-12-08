@@ -1,0 +1,70 @@
+[build-system]
+requires = [
+    "torch",
+    "setuptools>=49.0",
+    "wheel",
+    "packaging",
+    "ninja",
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lite_attention"
+description = "Lite Attention"
+readme = {file = "./README.md", content-type = "text/markdown"}
+requires-python = ">=3.8"
+license = {text = "Apache-2.0"}
+authors = [
+    {name = "Jay Shah"},
+    {name = "Ganesh Bikshandi"},
+    {name = "Ying Zhang"},
+    {name = "Vijay Thakkar"},
+    {name = "Pradeep Ramani"},
+    {name = "Tri Dao"},
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: Unix",
+]
+dynamic = ["version"]
+
+dependencies = [
+    "torch",
+    "setuptools",
+    "packaging",
+    "wheel",
+    "ninja",
+]
+
+[project.optional-dependencies]
+dev = [
+    "numpy",
+    "pytest>=7.0",
+    "ruff",
+    "einops",
+]
+
+[project.urls]
+Homepage = "https://moonmath-ai.github.io/LiteAttention/"
+Repository = "https://github.com/moonmath-ai/LiteAttention"
+
+[tool.setuptools]
+packages = ["lite_attention", "lite_attention._internal", "lite_attention.utils"]
+
+[tool.setuptools.package-dir]
+lite_attention = "."
+
+[tool.setuptools.dynamic]
+version = {attr = "lite_attention.__version__"}
+
+[tool.bdist_wheel]
+py-limited-api = "cp39"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = ["-v", "--tb=short"]
+
