@@ -99,6 +99,7 @@ namespace flash
 
         // when using skip optimizations we need 16 registers for the producer
         static constexpr uint32_t SkipOptimizationRegisterRequirement = (Is_skipable && (NumMmaWarpGroups < 3)) ? 8 : 0;
+        // static constexpr uint32_t SkipOptimizationRegisterRequirement = 0;
 
         /// Register requirement for Load and Math WGs
         // If we use cp.async to load K and V, we need more registers for the producer WG.
@@ -154,7 +155,7 @@ namespace flash
             } pipelines;
 
             // SkipListStorage<BufferSize> skip_list_storage;
-            SkipListStorage<BufferSize, ReverseSkipList, Phase> skip_list_storage;
+            SkipListStorage<BufferSize, ReverseSkipList, Phase, HasMustDoList> skip_list_storage;
         };
 
         static constexpr int SharedStorageSize = sizeof(SharedStorage);
@@ -418,7 +419,7 @@ namespace flash
 
                 // // Initialize skip_writer in shared memory with shared memory buffers
                 // // Use placement new to initialize the writer that resides in shared memory
-                // new (&shared_storage.skip_list_storage.writer) DelayedSkipListWriter<CollectiveMainloop::kStages>(
+                // new (&shared_storage.skip_list_storage.writer) DelayedSkipListWriter<CollectiveMainloop::kStages, ReverseSkipList, Phase, HasMustDoList>(
                 //     shared_storage.skip_list_storage.n_blocks_buffer,
                 //     shared_storage.skip_list_storage.end_range_buffer,
                 //     shared_storage.skip_list_storage.skip_tests

@@ -26,12 +26,23 @@ constexpr std::tuple<int, int, bool, bool> tile_size_fwd_sm90(
             } else {
                 // Switch to tile size 192 x 192 for now
                 bool const use_blockN_128 = is_causal || is_local || paged_kv_non_TMA;
-                return {192, use_blockN_128 ? 128 : 192, use_blockN_128, true && maybe_intra_wg_overlap};
+                // return {192, use_blockN_128 ? 128 : 192, use_blockN_128, true && maybe_intra_wg_overlap};
+                if (is_skipable){
+                    return {128, 224, true, true && maybe_intra_wg_overlap};
+                }else{
+                    return {192, use_blockN_128 ? 128 : 192, use_blockN_128, true};
+                }
             }
             // Good for long seqlen (>= 4k) but suffers from tile quantization at short seqlen
             // return {192, is_causal || is_local ? 192 : 176, true, false};
         } else if (headdim <= 96) {
-            return {192, is_local || paged_kv_non_TMA ? 128 : 144, false, true && maybe_intra_wg_overlap};
+            // return {192, is_local || paged_kv_non_TMA ? 128 : 144, false, true && maybe_intra_wg_overlap};
+            if (is_skipable){
+                return {128, 208, true, true && maybe_intra_wg_overlap};
+            }else{
+                return {192, is_local || paged_kv_non_TMA ? 128 : 144, false, true && maybe_intra_wg_overlap};
+
+            }
         } else if (headdim <= 128) {
             bool const use_blockN_128 = is_causal || is_local || paged_kv_non_TMA;
             // return {128, use_blockN_128 ? 128 : 176, true, true && maybe_intra_wg_overlap};
