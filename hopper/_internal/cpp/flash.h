@@ -11,9 +11,11 @@
 
 struct QKSkipMaskArgs
 {
-    int *attn_read_list;
-    int *attn_write_list;
-    int *attn_must_do_list;
+    // int *attn_read_list;
+    int16_t *attn_read_list;
+    // int *attn_write_list;
+    int16_t *attn_write_list;
+    int16_t *attn_must_do_list;
     float thr;
 };
 
@@ -181,6 +183,9 @@ struct Flash_fwd_params : public Qkv_params
     // lite attention related
     QKSkipMaskArgs qk_skip_mask_args;
     bool is_skipable;
+    bool reverse_skip_list = false;
+    bool phase = false;
+    bool has_must_do_list = false;
     // ~~~~~~~~~~~~~~~~
 };
 

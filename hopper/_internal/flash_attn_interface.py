@@ -56,6 +56,8 @@ def _flash_attn_forward(
         attn_must_do_list=None,
         attn_write_list=None,
         thr=-3.0,
+        reverse_skip_list=False,
+        phase=False
     ):
     q, k, k_new, v_new = [maybe_contiguous(x) for x in (q, k, k_new, v_new)]
     v = v.contiguous() if v.stride(-1) != 1 and v.stride(-3) != 1 else v
@@ -108,6 +110,8 @@ def _flash_attn_forward(
         attn_must_do_list,
         attn_write_list,
         thr=thr,
+        reverse_skip_list=reverse_skip_list,
+        phase=phase,
     )
     return out, softmax_lse, *rest
 
@@ -183,6 +187,8 @@ class FlashAttnQKVPackedFunc(torch.autograd.Function):
         attn_must_do_list=None,
         attn_write_list=None,
         thr=-3.0,
+        reverse_skip_list=False,
+        phase=False,
     ):
         if softmax_scale is None:
             softmax_scale = qkv.shape[-1] ** (-0.5)
@@ -219,6 +225,8 @@ class FlashAttnQKVPackedFunc(torch.autograd.Function):
             attn_must_do_list=attn_must_do_list,
             attn_write_list=attn_write_list,
             thr=thr,
+            reverse_skip_list=reverse_skip_list,
+            phase=phase,
         )
         # ctx.save_for_backward(q, k, v, out_padded, softmax_lse)
         ctx.save_for_backward(q, k, v, out, softmax_lse)
@@ -296,6 +304,8 @@ class FlashAttnFunc(torch.autograd.Function):
         attn_write_list=None,
         thr=-3.0,
         return_softmax_lse=False,
+        reverse_skip_list=False,
+        phase=False,
     ):
         if softmax_scale is None:
             softmax_scale = (q.shape[-1] + (qv.shape[-1] if qv is not None else 0)) ** (-0.5)
@@ -326,6 +336,8 @@ class FlashAttnFunc(torch.autograd.Function):
             attn_must_do_list=attn_must_do_list,
             attn_write_list=attn_write_list,
             thr=thr,
+            reverse_skip_list=reverse_skip_list,
+            phase=phase,
         )
         # ctx.save_for_backward(q, k, v, out_padded, softmax_lse)
         ctx.save_for_backward(q, k, v, out, softmax_lse)
@@ -565,6 +577,8 @@ def flash_attn_func(
     attn_write_list=None,
     thr=-3.0,
     return_softmax_lse=False,
+    reverse_skip_list=False,
+    phase=False,
 ):
     """dropout_p should be set to 0.0 during evaluation
     Supports multi-query and grouped-query attention (MQA/GQA) by passing in KV with fewer heads
@@ -632,6 +646,8 @@ def flash_attn_func(
         attn_write_list,
         thr,
         return_softmax_lse,
+        reverse_skip_list,
+        phase,
     )
 
 

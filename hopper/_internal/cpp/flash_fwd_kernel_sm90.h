@@ -19,6 +19,7 @@
 #include "seqlen.h"
 #include "utils.h"
 #include "softmax.h"
+#include "skip_list.h"
 
 namespace flash
 {
@@ -64,6 +65,11 @@ namespace flash
         static_assert(CollectiveMainloop::LargeHeadDimV == CollectiveEpilogue::LargeHeadDimV);
         using SeqlenInfo_t = typename CollectiveMainloop::SeqlenInfo_t;
 
+        static constexpr bool Is_skipable = CollectiveMainloop::Is_skipable;
+        static constexpr bool ReverseSkipList = CollectiveMainloop::ReverseSkipList;
+        static constexpr bool Phase = CollectiveMainloop::Phase;
+        static constexpr bool HasMustDoList = CollectiveMainloop::HasMustDoList;
+
         // Mainloop derived types
         using TileShape_MNK_PV = typename CollectiveMainloop::TileShape_MNK_PV;
         using TiledMmaPV = typename CollectiveMainloop::TiledMmaPV;
@@ -89,10 +95,13 @@ namespace flash
         static constexpr uint32_t MinBlocksPerMultiprocessor = 1;
         static_assert(NumMmaWarpGroups == 1 || NumMmaWarpGroups == 2 || NumMmaWarpGroups == 3);
 
+        // when using skip optimizations we need 16 registers for the producer
+        static constexpr uint32_t SkipOptimizationRegisterRequirement = (Is_skipable && (NumMmaWarpGroups < 3)) ? 8 : 0;
+
         /// Register requirement for Load and Math WGs
         // If we use cp.async to load K and V, we need more registers for the producer WG.
-        static constexpr uint32_t LoadRegisterRequirement = NumMmaWarpGroups == 1 ? 56 : (NumMmaWarpGroups == 2 ? (Use_TMA_KV ? 24 : 40) : 32);
-        static constexpr uint32_t MmaRegisterRequirement = NumMmaWarpGroups == 1 ? 256 : (NumMmaWarpGroups == 2 ? (Use_TMA_KV ? 240 : 232) : 160);
+        static constexpr uint32_t LoadRegisterRequirement = (NumMmaWarpGroups == 1 ? 56 : (NumMmaWarpGroups == 2 ? (Use_TMA_KV ? 24 : 40) : 32)) + SkipOptimizationRegisterRequirement;
+        static constexpr uint32_t MmaRegisterRequirement = (NumMmaWarpGroups == 1 ? 256 : (NumMmaWarpGroups == 2 ? (Use_TMA_KV ? 240 : 232) : 160)) - SkipOptimizationRegisterRequirement;
         // If you want to print from the producer warp, you'd need to increase the number of registers
         // Otherwise you'll get CUDA error.
         // static constexpr uint32_t LoadRegisterRequirement = 40;
@@ -111,6 +120,8 @@ namespace flash
         // and nothing else, so we'll pad in case sizeof(smem_o) > sizeof(smem_v).
         static constexpr int mainloop_smem_padding_ = int(sizeof(typename CollectiveEpilogue::TensorStorage)) - int(sizeof(decltype((typename CollectiveMainloop::TensorStorage{}).smem_v)));
         static constexpr int mainloop_smem_padding = mainloop_smem_padding_ < 0 ? 0 : mainloop_smem_padding_;
+
+        static constexpr int BufferSize = CollectiveMainloop::kStages * 2;
         struct SharedStorage
         {
             struct TensorStorage : cute::aligned_struct<128, _1>
@@ -126,6 +137,7 @@ namespace flash
                     typename CollectiveEpilogue::TensorStorage epilogue;
                 };
             } tensors;
+
             struct PipelineStorage : cute::aligned_struct<16, _1>
             {
                 alignas(16) BarrierQ barrier_Q;
@@ -137,15 +149,10 @@ namespace flash
                 alignas(16) typename CollectiveMainloop::MainloopPipelineKVNew::SharedStorage pipeline_k_new;
                 alignas(16) typename CollectiveMainloop::MainloopPipelineKVNew::SharedStorage pipeline_v_new;
                 alignas(16) typename TileScheduler::SharedStorage smem_scheduler;
-
-                // alignas(16) std::conditional_t<CollectiveMainloop::Is_skipable,
-                //                    int[CollectiveMainloop::kStages],
-                //                    cute::array<int, 0>> curr_n_block;
-                // int curr_n_block[NumMmaWarpGroups][CollectiveMainloop::kStages];
-                // int skip_tests[NumMmaWarpGroups][CollectiveMainloop::kStages][4];
-                int skip_tests[4];
-                // int skip_tests[CollectiveMainloop::kStages][NumMmaWarpGroups][4];
             } pipelines;
+
+            // SkipListStorage<BufferSize> skip_list_storage;
+            SkipListStorage<BufferSize, ReverseSkipList, Phase> skip_list_storage;
         };
 
         static constexpr int SharedStorageSize = sizeof(SharedStorage);
@@ -407,6 +414,22 @@ namespace flash
 
                 cutlass::arch::wait_on_dependent_grids();
 
+                // // Initialize skip_writer in shared memory with shared memory buffers
+                // // Use placement new to initialize the writer that resides in shared memory
+                // new (&shared_storage.skip_list_storage.writer) DelayedSkipListWriter<CollectiveMainloop::kStages>(
+                //     shared_storage.skip_list_storage.n_blocks_buffer,
+                //     shared_storage.skip_list_storage.end_range_buffer,
+                //     shared_storage.skip_list_storage.skip_tests
+                // );
+                // consider: move this to shared memory to reduce register pressure + not needing to worry about which thread been elected
+                // Initialize skip_writer with shared memory buffers
+                DelayedSkipListWriter<CollectiveMainloop::kStages, ReverseSkipList, Phase, HasMustDoList> skip_writer(
+                    shared_storage.skip_list_storage.n_blocks_buffer,
+                    shared_storage.skip_list_storage.end_range_buffer,
+                    shared_storage.skip_list_storage.skip_tests
+                );
+
+                bool should_load_KV=false;
                 // Load Q, K, V
                 for (auto work_tile_info = SingleProducerWarp || warp_idx_in_warpgroup == 0
                                                ? scheduler.template get_initial_work</*IsProducerWarp=*/true>(params.scheduler)
@@ -444,11 +467,14 @@ namespace flash
                         scheduler.prefetch_next_work(params.scheduler, work_tile_info);
                     };
 
-                    mainloop.load(params.mainloop, pipeline_k, pipeline_v, pipeline_vt, smem_pipe_write,
-                                    shared_storage, scheduler_prefetch, seqlen_info, block_coord, work_idx);
+                    should_load_KV = mainloop.load(params.mainloop, pipeline_k, pipeline_v, pipeline_vt, smem_pipe_write,
+                                shared_storage, scheduler_prefetch, seqlen_info, block_coord, work_idx, skip_writer);
+                                // shared_storage, scheduler_prefetch, seqlen_info, block_coord, work_idx, shared_storage.skip_list_storage.writer);
+                                // shared_storage, scheduler_prefetch, seqlen_info, block_coord, work_idx, skip_reader, skip_writer);
 
                 }
-                mainloop.load_tail(pipeline_k, pipeline_v, pipeline_vt, smem_pipe_write, shared_storage, work_idx);
+                mainloop.load_tail(pipeline_k, pipeline_v, pipeline_vt, smem_pipe_write, shared_storage, work_idx, skip_writer, should_load_KV);
+                // mainloop.load_tail(pipeline_k, pipeline_v, pipeline_vt, smem_pipe_write, shared_storage, work_idx, shared_storage.skip_list_storage.writer, should_load_KV);
             }
             else
             { // Consumer
@@ -509,9 +535,13 @@ namespace flash
                         float const q_descale = params.mainloop.ptr_q_descale == nullptr ? 1.0f : params.mainloop.ptr_q_descale[bidb * get<0>(params.mainloop.stride_q_descale) + bidh_kv * get<1>(params.mainloop.stride_q_descale)];
                         float const k_descale = params.mainloop.ptr_k_descale == nullptr ? 1.0f : params.mainloop.ptr_k_descale[bidb * get<0>(params.mainloop.stride_k_descale) + bidh_kv * get<1>(params.mainloop.stride_k_descale)];
                         softmax_scale_log2 *= q_descale * k_descale;
-                    }
+                    }                    
+                    const int thread_idx = threadIdx.x - MmaThreadOffset;
+
+                    // // DOR: kNRows = 2 * (2 * 128 / 256) = 2
+                    // flash::Softmax<!LargeHeadDimV ? 2 * (2 * kBlockM / NumMmaThreads) : 2, /*Max_offset=*/!Is_FP8 ? 0 : 8> softmax(softmax_scale_log2, row_mask, local_row_idx);
                     // DOR: kNRows = 2 * (2 * 128 / 256) = 2
-                    flash::Softmax<!LargeHeadDimV ? 2 * (2 * kBlockM / NumMmaThreads) : 2, /*Max_offset=*/!Is_FP8 ? 0 : 8> softmax(softmax_scale_log2);
+                    flash::Softmax<!LargeHeadDimV ? 2 * (2 * kBlockM / NumMmaThreads) : 2, /*Max_offset=*/!Is_FP8 ? 0 : 8> softmax(softmax_scale_log2, seqlen_info.seqlen_q, thread_idx);
 
                     /*
                     taken from the answer here: https://youtu.be/JwUcZwPOCpA?t=3152
@@ -523,10 +553,10 @@ namespace flash
                     // Attention output (GEMM-II) accumulator.
                     Tensor tOrO = partition_fragment_C(tiled_mma_pv, select<0, 1>(TileShape_MNK_PV{}));
                     bool tile_valid;
-                    const int thread_idx = threadIdx.x - MmaThreadOffset;
+                    // const int thread_idx = threadIdx.x - MmaThreadOffset;
                     if constexpr (!LargeHeadDimV)
                     {
-                        tile_valid = mainloop.mma_dispatch(
+                        tile_valid = mainloop.mma(
                             params.mainloop, pipeline_k, pipeline_v, smem_pipe_read,
                             tOrO, softmax, thread_idx, work_idx, seqlen_info, block_coord, shared_storage);
                     }
@@ -534,7 +564,7 @@ namespace flash
                     { // mma_pv might not compile if !LargeHeadDimV
                         if (warp_group_idx == 1)
                         {
-                            tile_valid = mainloop.mma_dispatch(
+                            tile_valid = mainloop.mma(
                                 params.mainloop, pipeline_k, pipeline_v, smem_pipe_read,
                                 tOrO, softmax, thread_idx, work_idx, seqlen_info, block_coord, shared_storage);
                         }
