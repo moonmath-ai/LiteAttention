@@ -116,6 +116,8 @@ namespace flash
         static_assert(!HasMustDoList || Is_skipable, "MustDoList is only supported when skipping is enabled");
         static_assert(!ReverseSkipList || Is_skipable, "ReverseSkipList is only supported when skipping is enabled");
         static_assert(!(Is_INT8 && HasQv), "INT8 and HasQv cannot be enabled at the same time");
+        static_assert(!(Is_INT8 && AppendKV), "INT8 and AppendKV cannot be enabled at the same time");
+        static_assert(!(Is_INT8 && PagedKVNonTMA), "INT8 and PagedKVNonTMA cannot be enabled at the same time");
         // static_assert(!Phase || !ReverseSkipList, "Phase is only supported when ReverseSkipList is enabled");
 
         static constexpr cute::GMMA::Major MmaMajorV = !Is_FP8 && !V_colmajor ? GMMA::Major::MN : GMMA::Major::K;
@@ -220,14 +222,14 @@ namespace flash
             SmemLayoutAtomVCpAsync{},
             make_shape(shape<1>(TileShape_MNK{}), Int<kHeadDimV>{}, Int<kStages>{})));
 
-        using SmemLayoutAtomP = decltype(cutlass::gemm::collective::detail::ss_smem_selector<GMMA::Major::K, Element,
+        using SmemLayoutAtomP = decltype(cutlass::gemm::collective::detail::ss_smem_selector<GMMA::Major::K, ElementV,
                                                                                              decltype(cute::get<0>(TileShape_MNK{})), decltype(cute::get<1>(TileShape_MNK{}))>());
         using SmemLayoutP = decltype(tile_to_shape(SmemLayoutAtomP{}, select<0, 1>(TileShape_MNK{})));
 
         // Only for LargeHeadDimV where WG0 sends WG1 the scales
         using SmemLayoutScale = cute::Layout<cute::Shape<Int<kBlockM>, Int<kStages>>>;
 
-        using SmemCopyAtomP = Copy_Atom<cute::SM90_U32x4_STSM_N, Element>;
+        using SmemCopyAtomP = Copy_Atom<cute::SM90_U32x4_STSM_N, ElementV>;
 
         // Use LDSM.T and STSM to transpose V in the case of FP8 and V being row-major.
         // For FP16/BF16 we don't do any transposing.
@@ -242,7 +244,7 @@ namespace flash
         using LDSM_value_stride = Stride<_1, _2, _16, _4>;
         using LDSM_divide_shape = std::conditional_t<kHeadDimV_multiple_64, Shape<_64, _8>, Shape<_32, _8>>;
         using S2RTiledCopyVt = decltype(make_tiled_copy(
-            Copy_Atom<SM75_U16x8_LDSM_T, Element>{}, Layout<LDSM_thread_shape, LDSM_thread_stride>{},
+            Copy_Atom<SM75_U16x8_LDSM_T, ElementV>{}, Layout<LDSM_thread_shape, LDSM_thread_stride>{},
             Layout<LDSM_value_shape, LDSM_value_stride>{}));
 
         using STSM_thread_shape = std::conditional_t<kHeadDimV_multiple_64, Shape<_8, _4, _4, _1>, Shape<_8, _4, _2, _2>>;
@@ -257,7 +259,7 @@ namespace flash
         // using STSM_value_stride = Stride<_4, _1, _0, _8>;
         // using STSM_divide_shape = Shape<_16, _16>;
         using R2STiledCopyV = decltype(make_tiled_copy(
-            Copy_Atom<SM90_U32x4_STSM_N, Element>{}, Layout<STSM_thread_shape, STSM_thread_stride>{},
+            Copy_Atom<SM90_U32x4_STSM_N, ElementV>{}, Layout<STSM_thread_shape, STSM_thread_stride>{},
             Layout<STSM_value_shape, STSM_value_stride>{}));
 
         using GmemTiledCopyQ = cute::SM90_TMA_LOAD;
@@ -331,7 +333,7 @@ namespace flash
         // Set the bytes transferred in this TMA transaction (may involve multiple issues)
         static constexpr uint32_t TmaTransactionBytesQ = static_cast<uint32_t>(size(SmemLayoutQ{}) * cutlass::sizeof_bits_v<Element> / 8);
         static constexpr uint32_t TmaTransactionBytesK = static_cast<uint32_t>(size(take<0, 2>(SmemLayoutK{})) * cutlass::sizeof_bits_v<Element> / 8);
-        static constexpr uint32_t TmaTransactionBytesV = static_cast<uint32_t>(size(take<0, 2>(SmemLayoutVt{})) * cutlass::sizeof_bits_v<Element> / 8);
+        static constexpr uint32_t TmaTransactionBytesV = static_cast<uint32_t>(size(take<0, 2>(SmemLayoutVt{})) * cutlass::sizeof_bits_v<ElementV> / 8);
         static constexpr uint32_t TmaTransactionBytesQv = static_cast<uint32_t>(size(SmemLayoutQv{}) * cutlass::sizeof_bits_v<Element> / 8);
 
         using PipelineTmaAsync = std::conditional_t<CUTE_STATIC_V(size(ClusterShape{})) == 1, typename cutlass::PipelineTmaAsyncNoCluster<kStages>, typename cutlass::PipelineTmaAsync<kStages>>;
@@ -353,7 +355,7 @@ namespace flash
         static constexpr size_t SmemAlignmentP = cutlass::detail::alignment_for_swizzle(SmemLayoutP{});
         static_assert(SmemAlignmentP >= 128, "Require at least 128B alignment");
 
-        using SmemP_t = std::conditional_t<MmaPV_is_RS, cute::array<Element, 0>, cute::array_aligned<Element, cute::cosize_v<SmemLayoutP>, SmemAlignmentP>>;
+        using SmemP_t = std::conditional_t<MmaPV_is_RS, cute::array<ElementV, 0>, cute::array_aligned<ElementV, cute::cosize_v<SmemLayoutP>, SmemAlignmentP>>;
         using SmemScale_t = std::conditional_t<!LargeHeadDimV, cute::array<float, 0>, cute::array_aligned<float, cute::cosize_v<SmemLayoutScale>, 128>>;
         using SmemQv_t = std::conditional_t<!HasQv, cute::array<Element, 0>, cute::array_aligned<Element, cute::cosize_v<SmemLayoutQv>, SmemAlignmentQv>>;
         // Sometimes even with SmemP_t = cute::array<Element, 0>, putting it in the TensorStorage struct causes
@@ -361,7 +363,7 @@ namespace flash
 
         struct TensorStorageWithoutPNoTranspose : cute::aligned_struct<cute::max(SmemAlignmentQ, SmemAlignmentK, SmemAlignmentVtNoTranspose), _0>
         {
-            cute::array_aligned<Element, cute::cosize_v<SmemLayoutVt>, SmemAlignmentVtNoTranspose> smem_v;
+            cute::array_aligned<ElementV, cute::cosize_v<SmemLayoutVt>, SmemAlignmentVtNoTranspose> smem_v;
             cute::array_aligned<Element, cute::cosize_v<SmemLayoutQ>, SmemAlignmentQ> smem_q;
             cute::array_aligned<Element, cute::cosize_v<SmemLayoutK>, SmemAlignmentK> smem_k;
             SmemQv_t smem_qv;
@@ -369,7 +371,7 @@ namespace flash
 
         struct TensorStorageWithPNoTranspose : cute::aligned_struct<cute::max(SmemAlignmentQ, SmemAlignmentK, SmemAlignmentVtNoTranspose, SmemAlignmentP), _0>
         {
-            cute::array_aligned<Element, cute::cosize_v<SmemLayoutVt>, SmemAlignmentVtNoTranspose> smem_v;
+            cute::array_aligned<ElementV, cute::cosize_v<SmemLayoutVt>, SmemAlignmentVtNoTranspose> smem_v;
             cute::array_aligned<Element, cute::cosize_v<SmemLayoutQ>, SmemAlignmentQ> smem_q;
             cute::array_aligned<Element, cute::cosize_v<SmemLayoutK>, SmemAlignmentK> smem_k;
             SmemQv_t smem_qv;
@@ -377,7 +379,7 @@ namespace flash
         };
         struct TensorStorageWithPScaleNoTranspose : cute::aligned_struct<cute::max(SmemAlignmentQ, SmemAlignmentK, SmemAlignmentVtNoTranspose, SmemAlignmentP), _0>
         {
-            cute::array_aligned<Element, cute::cosize_v<SmemLayoutVt>, SmemAlignmentVtNoTranspose> smem_v;
+            cute::array_aligned<ElementV, cute::cosize_v<SmemLayoutVt>, SmemAlignmentVtNoTranspose> smem_v;
             cute::array_aligned<Element, cute::cosize_v<SmemLayoutQ>, SmemAlignmentQ> smem_q;
             cute::array_aligned<Element, cute::cosize_v<SmemLayoutK>, SmemAlignmentK> smem_k;
             SmemQv_t smem_qv;
@@ -395,8 +397,8 @@ namespace flash
         static_assert(SmemAlignmentVt >= 128 and SmemAlignmentV >= 128, "Require at least 128B alignment");
         struct TensorStorageTransposeV : cute::aligned_struct<cute::max(SmemAlignmentQ, SmemAlignmentK, SmemAlignmentV), _0>
         {
-            cute::array_aligned<Element, cute::cosize_v<SmemLayoutVtMma>, SmemAlignmentV> smem_v;
-            cute::array_aligned<Element, cute::cosize_v<SmemLayoutVt>, SmemAlignmentVt> smem_vt;
+            cute::array_aligned<ElementV, cute::cosize_v<SmemLayoutVtMma>, SmemAlignmentV> smem_v;
+            cute::array_aligned<ElementV, cute::cosize_v<SmemLayoutVt>, SmemAlignmentVt> smem_vt;
             cute::array_aligned<Element, cute::cosize_v<SmemLayoutQ>, SmemAlignmentQ> smem_q;
             cute::array_aligned<Element, cute::cosize_v<SmemLayoutK>, SmemAlignmentK> smem_k;
             SmemQv_t smem_qv;
@@ -424,7 +426,7 @@ namespace flash
             Element *const ptr_K; // not Element const* since we might append to KV cache in-place
             ShapeQKV const shape_K;
             StrideQK const stride_K;
-            Element *const ptr_V;
+            ElementV *const ptr_V;
             int32_t const headdim_v;
             StrideV const stride_V;
             Element const *const ptr_K_new;
@@ -471,13 +473,13 @@ namespace flash
             Element *const ptr_K;
             ShapeQKV const shape_K;
             StrideQK const stride_K;
-            Element *const ptr_V;
+            ElementV *const ptr_V;
             int32_t const headdim_v;
             StrideV const stride_V;
             Element const *const ptr_K_new;
             ShapeQKV const shape_K_new;
             StrideQK const stride_K_new;
-            Element const *const ptr_V_new;
+            ElementV const *const ptr_V_new;
             StrideV const stride_V_new;
             Element const *const ptr_Qv;
             StrideV const stride_Qv;
