@@ -76,11 +76,17 @@ namespace flash
         // Tile shape for Q@V multiplication when HasQv is true
         using TileShape_MNK_QV = Shape<decltype(get<0>(TileShape_MNK{})), decltype(get<1>(TileShape_MNK{})), Int<kHeadDimV>>;
         using Element = Element_;
+        using ElementV = std::conditional_t<Is_INT8, cute::bfloat16_t, Element>;
         using ElementAccum = ElementAccum_;
+        using ElementAccumQK = std::conditional_t<Is_INT8, int32_t, ElementAccum>;
         using ArchTag = ArchTag_;
+
         // Check if using FP8 data types (either E4M3 or E5M2)
         static constexpr bool Is_FP8 = cute::is_same_v<Element, cutlass::float_e4m3_t> || cute::is_same_v<Element, cutlass::float_e5m2_t>;
-        ;
+        // Check if using INT8 data type
+        static constexpr bool Is_INT8 = cute::is_same_v<Element, int8_t>;
+        // Combined check for any 8-bit type
+        static constexpr bool Is_8Bit = Is_FP8 || Is_INT8;
         static constexpr bool Is_causal = Is_causal_;
         static constexpr bool Is_local = Is_local_;
         static constexpr bool Has_softcap = Has_softcap_;
@@ -91,7 +97,7 @@ namespace flash
         static constexpr bool PackGQA = PackGQA_;
         static constexpr bool Split = Split_;
         static constexpr bool V_colmajor = V_colmajor_;
-        // For FP8 with row-major V, we need to transpose V in shared memory
+        // For FP8 with row-major V, we need to transpose V in shared memory (INT8 has bf16 V, so no transpose needed)
         static constexpr bool Transpose_V = Is_FP8 && !V_colmajor;
         // Use TMA (Tensor Memory Accelerator) for Q unless using packed GQA layout
         static constexpr bool Use_TMA_Q = !PackGQA;
@@ -109,6 +115,9 @@ namespace flash
 
         static_assert(!HasMustDoList || Is_skipable, "MustDoList is only supported when skipping is enabled");
         static_assert(!ReverseSkipList || Is_skipable, "ReverseSkipList is only supported when skipping is enabled");
+        static_assert(!(Is_INT8 && HasQv), "INT8 and HasQv cannot be enabled at the same time");
+        static_assert(!(Is_INT8 && AppendKV), "INT8 and AppendKV cannot be enabled at the same time");
+        static_assert(!(Is_INT8 && PagedKVNonTMA), "INT8 and PagedKVNonTMA cannot be enabled at the same time");
         // static_assert(!Phase || !ReverseSkipList, "Phase is only supported when ReverseSkipList is enabled");
 
         static constexpr cute::GMMA::Major MmaMajorV = !Is_FP8 && !V_colmajor ? GMMA::Major::MN : GMMA::Major::K;
@@ -141,8 +150,8 @@ namespace flash
         using TiledMmaQK = decltype(cute::make_tiled_mma(
             std::conditional_t<
                 !MmaQK_is_RS,
-                decltype(cute::GMMA::ss_op_selector<Element, Element, ElementAccum, TileShape_MNK>()),
-                decltype(cute::GMMA::rs_op_selector<Element, Element, ElementAccum, TileShape_MNK>())>{},
+                decltype(cute::GMMA::ss_op_selector<Element, Element, ElementAccumQK, TileShape_MNK>()),
+                decltype(cute::GMMA::rs_op_selector<Element, Element, ElementAccumQK, TileShape_MNK>())>{},
             AtomLayoutQK{}));
         using AtomLayoutPV = std::conditional_t<
             !LargeHeadDimV,
@@ -151,9 +160,9 @@ namespace flash
         using TiledMmaPV = decltype(cute::make_tiled_mma(
             std::conditional_t<
                 !MmaPV_is_RS,
-                decltype(cute::GMMA::ss_op_selector<Element, Element, ElementAccum,
+                decltype(cute::GMMA::ss_op_selector<ElementV, ElementV, ElementAccum,
                                                     TileShape_MNK_PV, GMMA::Major::K, MmaMajorV>()),
-                decltype(cute::GMMA::rs_op_selector<Element, Element, ElementAccum,
+                decltype(cute::GMMA::rs_op_selector<ElementV, ElementV, ElementAccum,
                                                     TileShape_MNK_PV, GMMA::Major::K, MmaMajorV>())>{},
             AtomLayoutPV{}));
         using TiledMmaQV = decltype(cute::make_tiled_mma(
@@ -161,7 +170,7 @@ namespace flash
             AtomLayoutQK{}));
         // For hdim64,512, WG1 can use RS but WG2 must use SS
         using TiledMmaPV_RS = decltype(cute::make_tiled_mma(
-            cute::GMMA::rs_op_selector<Element, Element, ElementAccum, TileShape_MNK_PV, GMMA::Major::K, MmaMajorV>(),
+            cute::GMMA::rs_op_selector<ElementV, ElementV, ElementAccum, TileShape_MNK_PV, GMMA::Major::K, MmaMajorV>(),
             AtomLayoutPV{}));
 
         static constexpr int NumMmaThreadsQK = size(TiledMmaQK{});
@@ -182,14 +191,14 @@ namespace flash
             SmemLayoutAtomK{},
             make_shape(shape<1>(TileShape_MNK{}), shape<2>(TileShape_MNK{}), Int<kStages>{})));
 
-        using SmemLayoutAtomVt = decltype(cutlass::gemm::collective::detail::ss_smem_selector<TmaMajorV, Element,
+        using SmemLayoutAtomVt = decltype(cutlass::gemm::collective::detail::ss_smem_selector<TmaMajorV, ElementV,
                                                                                               Int<kHeadDimV>, decltype(cute::get<2>(TileShape_MNK_PV{}))>());
         using SmemLayoutVt = decltype(tile_to_shape(
             SmemLayoutAtomVt{},
             make_shape(Int<kHeadDimV>{}, shape<2>(TileShape_MNK_PV{}), Int<kStages>{}),
             std::conditional_t<TmaMajorV == GMMA::Major::K, cute::Step<_1, _2, _3>, cute::Step<_2, _1, _3>>{}));
 
-        using SmemLayoutAtomVtMma = decltype(cutlass::gemm::collective::detail::ss_smem_selector<MmaMajorV, Element,
+        using SmemLayoutAtomVtMma = decltype(cutlass::gemm::collective::detail::ss_smem_selector<MmaMajorV, ElementV,
                                                                                                  Int<kHeadDimV>, decltype(cute::get<2>(TileShape_MNK_PV{}))>());
         using SmemLayoutVtMma = decltype(tile_to_shape(
             SmemLayoutAtomVtMma{},
@@ -207,20 +216,20 @@ namespace flash
         static_assert(CUTE_STATIC_V(size(SmemLayoutVMmaQV{})) == size(SmemLayoutVtMma{}));
 
         // Only used if we're using cp.async to load V
-        using SmemLayoutAtomVCpAsync = decltype(cutlass::gemm::collective::detail::ss_smem_selector<GMMA::Major::K, Element,
+        using SmemLayoutAtomVCpAsync = decltype(cutlass::gemm::collective::detail::ss_smem_selector<GMMA::Major::K, ElementV,
                                                                                                     decltype(cute::get<1>(TileShape_MNK{})), Int<kHeadDimV>>());
         using SmemLayoutVCpAsync = decltype(tile_to_shape(
             SmemLayoutAtomVCpAsync{},
             make_shape(shape<1>(TileShape_MNK{}), Int<kHeadDimV>{}, Int<kStages>{})));
 
-        using SmemLayoutAtomP = decltype(cutlass::gemm::collective::detail::ss_smem_selector<GMMA::Major::K, Element,
+        using SmemLayoutAtomP = decltype(cutlass::gemm::collective::detail::ss_smem_selector<GMMA::Major::K, ElementV,
                                                                                              decltype(cute::get<0>(TileShape_MNK{})), decltype(cute::get<1>(TileShape_MNK{}))>());
         using SmemLayoutP = decltype(tile_to_shape(SmemLayoutAtomP{}, select<0, 1>(TileShape_MNK{})));
 
         // Only for LargeHeadDimV where WG0 sends WG1 the scales
         using SmemLayoutScale = cute::Layout<cute::Shape<Int<kBlockM>, Int<kStages>>>;
 
-        using SmemCopyAtomP = Copy_Atom<cute::SM90_U32x4_STSM_N, Element>;
+        using SmemCopyAtomP = Copy_Atom<cute::SM90_U32x4_STSM_N, ElementV>;
 
         // Use LDSM.T and STSM to transpose V in the case of FP8 and V being row-major.
         // For FP16/BF16 we don't do any transposing.
@@ -235,7 +244,7 @@ namespace flash
         using LDSM_value_stride = Stride<_1, _2, _16, _4>;
         using LDSM_divide_shape = std::conditional_t<kHeadDimV_multiple_64, Shape<_64, _8>, Shape<_32, _8>>;
         using S2RTiledCopyVt = decltype(make_tiled_copy(
-            Copy_Atom<SM75_U16x8_LDSM_T, Element>{}, Layout<LDSM_thread_shape, LDSM_thread_stride>{},
+            Copy_Atom<SM75_U16x8_LDSM_T, ElementV>{}, Layout<LDSM_thread_shape, LDSM_thread_stride>{},
             Layout<LDSM_value_shape, LDSM_value_stride>{}));
 
         using STSM_thread_shape = std::conditional_t<kHeadDimV_multiple_64, Shape<_8, _4, _4, _1>, Shape<_8, _4, _2, _2>>;
@@ -250,7 +259,7 @@ namespace flash
         // using STSM_value_stride = Stride<_4, _1, _0, _8>;
         // using STSM_divide_shape = Shape<_16, _16>;
         using R2STiledCopyV = decltype(make_tiled_copy(
-            Copy_Atom<SM90_U32x4_STSM_N, Element>{}, Layout<STSM_thread_shape, STSM_thread_stride>{},
+            Copy_Atom<SM90_U32x4_STSM_N, ElementV>{}, Layout<STSM_thread_shape, STSM_thread_stride>{},
             Layout<STSM_value_shape, STSM_value_stride>{}));
 
         using GmemTiledCopyQ = cute::SM90_TMA_LOAD;
@@ -308,7 +317,7 @@ namespace flash
 
         using TMA_V = decltype(make_tma_copy(
             GmemTiledCopyKV{},
-            make_tensor(make_gmem_ptr(static_cast<Element const *>(nullptr)), ShapeQKV{}, select<1, 0, 2, 3>(StrideV{})),
+            make_tensor(make_gmem_ptr(static_cast<ElementV const *>(nullptr)), ShapeQKV{}, select<1, 0, 2, 3>(StrideV{})),
             take<0, 2>(SmemLayoutVt{}),
             select<1, 2>(TileShape_MNK_PV{}),
             size<0>(ClusterShape{}))); // mcast along M mode for this N load, if any
@@ -324,7 +333,7 @@ namespace flash
         // Set the bytes transferred in this TMA transaction (may involve multiple issues)
         static constexpr uint32_t TmaTransactionBytesQ = static_cast<uint32_t>(size(SmemLayoutQ{}) * cutlass::sizeof_bits_v<Element> / 8);
         static constexpr uint32_t TmaTransactionBytesK = static_cast<uint32_t>(size(take<0, 2>(SmemLayoutK{})) * cutlass::sizeof_bits_v<Element> / 8);
-        static constexpr uint32_t TmaTransactionBytesV = static_cast<uint32_t>(size(take<0, 2>(SmemLayoutVt{})) * cutlass::sizeof_bits_v<Element> / 8);
+        static constexpr uint32_t TmaTransactionBytesV = static_cast<uint32_t>(size(take<0, 2>(SmemLayoutVt{})) * cutlass::sizeof_bits_v<ElementV> / 8);
         static constexpr uint32_t TmaTransactionBytesQv = static_cast<uint32_t>(size(SmemLayoutQv{}) * cutlass::sizeof_bits_v<Element> / 8);
 
         using PipelineTmaAsync = std::conditional_t<CUTE_STATIC_V(size(ClusterShape{})) == 1, typename cutlass::PipelineTmaAsyncNoCluster<kStages>, typename cutlass::PipelineTmaAsync<kStages>>;
@@ -346,7 +355,7 @@ namespace flash
         static constexpr size_t SmemAlignmentP = cutlass::detail::alignment_for_swizzle(SmemLayoutP{});
         static_assert(SmemAlignmentP >= 128, "Require at least 128B alignment");
 
-        using SmemP_t = std::conditional_t<MmaPV_is_RS, cute::array<Element, 0>, cute::array_aligned<Element, cute::cosize_v<SmemLayoutP>, SmemAlignmentP>>;
+        using SmemP_t = std::conditional_t<MmaPV_is_RS, cute::array<ElementV, 0>, cute::array_aligned<ElementV, cute::cosize_v<SmemLayoutP>, SmemAlignmentP>>;
         using SmemScale_t = std::conditional_t<!LargeHeadDimV, cute::array<float, 0>, cute::array_aligned<float, cute::cosize_v<SmemLayoutScale>, 128>>;
         using SmemQv_t = std::conditional_t<!HasQv, cute::array<Element, 0>, cute::array_aligned<Element, cute::cosize_v<SmemLayoutQv>, SmemAlignmentQv>>;
         // Sometimes even with SmemP_t = cute::array<Element, 0>, putting it in the TensorStorage struct causes
@@ -354,7 +363,7 @@ namespace flash
 
         struct TensorStorageWithoutPNoTranspose : cute::aligned_struct<cute::max(SmemAlignmentQ, SmemAlignmentK, SmemAlignmentVtNoTranspose), _0>
         {
-            cute::array_aligned<Element, cute::cosize_v<SmemLayoutVt>, SmemAlignmentVtNoTranspose> smem_v;
+            cute::array_aligned<ElementV, cute::cosize_v<SmemLayoutVt>, SmemAlignmentVtNoTranspose> smem_v;
             cute::array_aligned<Element, cute::cosize_v<SmemLayoutQ>, SmemAlignmentQ> smem_q;
             cute::array_aligned<Element, cute::cosize_v<SmemLayoutK>, SmemAlignmentK> smem_k;
             SmemQv_t smem_qv;
@@ -362,7 +371,7 @@ namespace flash
 
         struct TensorStorageWithPNoTranspose : cute::aligned_struct<cute::max(SmemAlignmentQ, SmemAlignmentK, SmemAlignmentVtNoTranspose, SmemAlignmentP), _0>
         {
-            cute::array_aligned<Element, cute::cosize_v<SmemLayoutVt>, SmemAlignmentVtNoTranspose> smem_v;
+            cute::array_aligned<ElementV, cute::cosize_v<SmemLayoutVt>, SmemAlignmentVtNoTranspose> smem_v;
             cute::array_aligned<Element, cute::cosize_v<SmemLayoutQ>, SmemAlignmentQ> smem_q;
             cute::array_aligned<Element, cute::cosize_v<SmemLayoutK>, SmemAlignmentK> smem_k;
             SmemQv_t smem_qv;
@@ -370,7 +379,7 @@ namespace flash
         };
         struct TensorStorageWithPScaleNoTranspose : cute::aligned_struct<cute::max(SmemAlignmentQ, SmemAlignmentK, SmemAlignmentVtNoTranspose, SmemAlignmentP), _0>
         {
-            cute::array_aligned<Element, cute::cosize_v<SmemLayoutVt>, SmemAlignmentVtNoTranspose> smem_v;
+            cute::array_aligned<ElementV, cute::cosize_v<SmemLayoutVt>, SmemAlignmentVtNoTranspose> smem_v;
             cute::array_aligned<Element, cute::cosize_v<SmemLayoutQ>, SmemAlignmentQ> smem_q;
             cute::array_aligned<Element, cute::cosize_v<SmemLayoutK>, SmemAlignmentK> smem_k;
             SmemQv_t smem_qv;
@@ -388,8 +397,8 @@ namespace flash
         static_assert(SmemAlignmentVt >= 128 and SmemAlignmentV >= 128, "Require at least 128B alignment");
         struct TensorStorageTransposeV : cute::aligned_struct<cute::max(SmemAlignmentQ, SmemAlignmentK, SmemAlignmentV), _0>
         {
-            cute::array_aligned<Element, cute::cosize_v<SmemLayoutVtMma>, SmemAlignmentV> smem_v;
-            cute::array_aligned<Element, cute::cosize_v<SmemLayoutVt>, SmemAlignmentVt> smem_vt;
+            cute::array_aligned<ElementV, cute::cosize_v<SmemLayoutVtMma>, SmemAlignmentV> smem_v;
+            cute::array_aligned<ElementV, cute::cosize_v<SmemLayoutVt>, SmemAlignmentVt> smem_vt;
             cute::array_aligned<Element, cute::cosize_v<SmemLayoutQ>, SmemAlignmentQ> smem_q;
             cute::array_aligned<Element, cute::cosize_v<SmemLayoutK>, SmemAlignmentK> smem_k;
             SmemQv_t smem_qv;
@@ -399,12 +408,14 @@ namespace flash
         using TensorStorage = std::conditional_t<!Transpose_V, TensorStorageNoTranspose, TensorStorageTransposeV>;
 
         // These are tuned for speed. They don't affect correctness.
+        // For INT8, V is bf16, so we use Is_FP8 for V-related tuning
         static constexpr bool UseSchedulerBarrier = ((IntraWGOverlap
                                                          ? (NumMmaWarpGroups >= 2) && (!Is_FP8 ? kHeadDim <= 128 : kHeadDim >= 128)
                                                          : NumMmaWarpGroups == 2) &&
                                                     !LargeHeadDimV) || Is_skipable;
 
-        static constexpr bool RescaleOBeforeGemm = kHeadDim > 128 && (!Is_FP8 || V_colmajor) && IntraWGOverlap;
+        // static constexpr bool RescaleOBeforeGemm = kHeadDim > 128 && (!Is_FP8 || V_colmajor) && IntraWGOverlap;
+        static constexpr bool RescaleOBeforeGemm = ((kHeadDim > 128) && (!Is_FP8 || V_colmajor) && IntraWGOverlap) || (Is_skipable && IntraWGOverlap);
 
         // Host side kernel arguments
         struct Arguments
@@ -415,7 +426,7 @@ namespace flash
             Element *const ptr_K; // not Element const* since we might append to KV cache in-place
             ShapeQKV const shape_K;
             StrideQK const stride_K;
-            Element *const ptr_V;
+            ElementV *const ptr_V;
             int32_t const headdim_v;
             StrideV const stride_V;
             Element const *const ptr_K_new;
@@ -462,13 +473,13 @@ namespace flash
             Element *const ptr_K;
             ShapeQKV const shape_K;
             StrideQK const stride_K;
-            Element *const ptr_V;
+            ElementV *const ptr_V;
             int32_t const headdim_v;
             StrideV const stride_V;
             Element const *const ptr_K_new;
             ShapeQKV const shape_K_new;
             StrideQK const stride_K_new;
-            Element const *const ptr_V_new;
+            ElementV const *const ptr_V_new;
             StrideV const stride_V_new;
             Element const *const ptr_Qv;
             StrideV const stride_Qv;
@@ -701,7 +712,8 @@ namespace flash
             auto &skip_reader = shared_storage.skip_list_storage.reader;
             
             // MustDoListReader: only used by producer (thread 0) to determine which blocks must be computed
-            MustDoListReader<!Phase> must_do_reader;
+            // Lives in shared memory similar to skip_reader
+            auto &must_do_reader = shared_storage.skip_list_storage.must_do_reader;
             
             if constexpr (Is_skipable)
             {
@@ -805,6 +817,7 @@ namespace flash
             // This is used to index into the batch dimension of mK and mV
             int const bidb_kv_idx = !is_varlen_k && !params.ptr_pagetable ? bidb_kv : 0;
 
+            // TODO: maybe modify this struct to support ElementV as well as Element? (only if we get compile errors)
             using PagedKVManager_t = PagedKVManager<get<1>(TileShape_MNK{}), get<2>(TileShape_MNK{}), get<1>(TileShape_MNK_PV{}), NumProducerThreads, Element, Transpose_V || !IntraWGOverlap /*KV_Same_Iter*/>;
             PagedKVManager_t paged_kv_manager(
                 params.ptr_pagetable, params.shape_pagetable, params.stride_pagetable,
@@ -828,7 +841,6 @@ namespace flash
             CUTE_STATIC_ASSERT_V(size<2>(tTranssVt_) == size<2>(tTranssV_));
             CUTE_STATIC_ASSERT_V(size<3>(tTranssVt_) == size<3>(tTranssV_));
             CUTE_STATIC_ASSERT_V(size<4>(tTranssVt_) == size<4>(tTranssV_));
-            // DOR: returne here and understand this better!
             // Faster to have 2 LDSM.T, byte permute, STSM for better ILP
             static constexpr int Transpose_ILP = (size<2>(tTranssVt_) * size<3>(tTranssVt_)) % 2 == 0 ? 2 : 1;
             Tensor tTranssVt = logical_divide(group_modes<1, rank(tTranssVt_) - 1>(tTranssVt_), Shape<Underscore, Int<Transpose_ILP>>{}); // ((16, 1), (2, kHeadDim / 64 * kBlockN / 32 / 2), kStages)
@@ -1162,7 +1174,6 @@ namespace flash
             shared_storage.pipelines.barrier_O.wait((work_idx + 1) % 2);
             int warp_idx_in_warpgroup = __shfl_sync(0xffffffff, (threadIdx.x / 32) % 4, 0);
             // Issue the epilogue waits
-            // TODO: check if this should be called by 1 thread or more
             // if (warp_idx_in_warpgroup == 0 && cute::elect_one_sync())
             if (warp_idx_in_warpgroup == 0 && should_load_KV)
             {
@@ -1291,6 +1302,7 @@ namespace flash
                 if constexpr (MmaPV_is_RS)
                 {
                     // We might not have smem_p if !MmaPV_is_RS, just use smem_q as a placeholder since we don't use it
+                    // TODO: we maybe would need to change this placeholder because not it's not Element but ElementV
                     return make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_q.data()), SmemLayoutP{});
                 }
                 else
@@ -1324,11 +1336,9 @@ namespace flash
             Layout warp_group_thread_layout = make_layout(make_shape(Int<MmaWarpGroups>{}),
                                                           make_stride(Int<cutlass::NumThreadsPerWarpGroup>{}));
 
-            // // DOR: cool way to hint the compiler to make this value a warp uniform
             // int warp_group_idx = __shfl_sync(0xFFFFFFFF, thread_idx / cutlass::NumThreadsPerWarpGroup, 0);
             TiledMmaQK tiled_mma_qk;
             TiledMmaPV tiled_mma_pv;
-            // DOR: why? do? we? need? this?
             TiledMmaQV tiled_mma_qv;
             // (thread_idx, value ) -> index in some op or memory
             auto wg_mma_qk = tiled_mma_qk.get_slice(warp_group_thread_layout(warp_group_idx));
@@ -1343,7 +1353,6 @@ namespace flash
             Tensor tSrK = wg_mma_qk.partition_fragment_B(sK);
             Tensor tOrV = wg_mma_pv.partition_fragment_B(sV);
             Tensor tOsP = wg_mma_pv.partition_fragment_A(sP);
-            // DOR: because there is an overlap in shared memory between V and Q (TOMER idea)
             Tensor tSrQv = wg_mma_qv.partition_fragment_A(sQv);
             Tensor tSrV = wg_mma_qv.partition_fragment_B(sVMmaQV);
             Tensor tPsP = smem_thr_copy_P.partition_D(cute::as_position_independent_swizzle_tensor(sP));
@@ -1387,6 +1396,25 @@ namespace flash
                 float const k_descale = params.ptr_k_descale == nullptr ? 1.0f : params.ptr_k_descale[bidb * get<0>(params.stride_k_descale) + bidh_kv * get<1>(params.stride_k_descale)];
                 softcap_val *= q_descale * k_descale;
             }
+            
+            // For INT8: Create K descale tensor sliced by (bidb, bidh) for efficient n_block indexing
+            // Shape is (batch, head, n_blocks) with stride (head*n_blocks, n_blocks, 1)
+            // We slice once to get a 1D view indexed only by n_block
+            auto KDescaleSliced = [&]() {
+                if constexpr (Is_INT8) {
+                    // 3D stride: batch stride = get<0>, head stride = get<1>, n_block stride = 1
+                    auto stride_k_descale_3d = make_stride(get<0>(params.stride_k_descale), get<1>(params.stride_k_descale), _1{});
+                    // Shape: (batch, head_kv, n_block_max) - n_block_max can be any value >= actual n_blocks
+                    auto shape_k_descale_3d = make_shape(get<3>(params.shape_K), get<2>(params.shape_K), n_block_max);
+                    Tensor mKDescale = make_tensor(make_gmem_ptr(params.ptr_k_descale), shape_k_descale_3d, stride_k_descale_3d);
+                    // Slice by bidb and bidh_kv to get 1D tensor indexed by n_block
+                    return mKDescale(bidb, bidh_kv, _);
+                } else {
+                    // Placeholder for non-INT8 - won't be used
+                    return make_tensor(make_gmem_ptr(static_cast<float const*>(nullptr)), make_shape(_1{}));
+                }
+            }();
+
             // Softcapping needs to happen before masking since if we apply after masking, softcapping
             // can turn -inf to e.g. -50.0, which can affect the attention softmax.
             auto scoremod_premask_fn = [&](auto &tSrS)
@@ -1492,11 +1520,16 @@ namespace flash
                     flash::gemm</*zero_init=*/false, /*wg_wait=*/0>(tiled_mma_qv, tSrQv, tSrV(_, _, _, smem_pipe_read.index()), tSrS);
                 }
                 scoremod_premask_fn(tSrS);
+                if constexpr (Is_INT8){
+                    softmax.set_dequan_s(KDescaleSliced(n_block));
+                }
+                // TODO: update this to work with int32_t (pad to most negative value?)
                 mask.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS, m_block, n_block);
 
                 // Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
                 Tensor scores_scale = [&]
                 {
+                    // TODO: make sure we allowed to do max reduction on the int32_t
                     if constexpr (Is_skipable){
                         return softmax.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, /*Is_first=*/true, true>(
                             tSrS, params.qk_skip_mask_args.thr, skip_reader, m_block
@@ -1508,15 +1541,16 @@ namespace flash
                 }();
                 // Don't need to store scales to send to WG1 (in the case of LargeHeadDimV) since it's 1.f
 
+                // TODO: tSrS doesn't necessarily keep it's type! for example input int32_t output float
                 softmax.template online_softmax</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
-                if constexpr (Is_FP8 && !V_colmajor)
+                if constexpr (Is_8Bit && !V_colmajor)
                 {
                     flash::permute_Cregs_fp8(tSrS);
                 }
                 Tensor tOrP_acc = make_tensor(tSrS.data(), flash::convert_layout_acc_Aregs<TiledMmaPV>(tSrS.layout()));
-                Tensor tOrP = make_tensor_like<Element>(tOrP_acc);
+                Tensor tOrP = make_tensor_like<ElementV>(tOrP_acc);
                 convert_type_out(tOrP_acc, tOrP);
-                if constexpr (Is_FP8 && V_colmajor)
+                if constexpr (Is_8Bit && V_colmajor)
                 {
                     flash::permute_Aregs_fp8(tOrP);
                 }
@@ -1566,6 +1600,11 @@ namespace flash
                     }
 
                     flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS);
+
+                    if constexpr (Is_INT8){
+                        softmax.set_dequan_s(KDescaleSliced(new_n_block));
+                    }
+
                     if constexpr (RescaleOBeforeGemm)
                     {
                         softmax.rescale_o(tOrO, scores_scale);
@@ -1609,12 +1648,12 @@ namespace flash
                         warpgroup_wait<0>();
                         pipeline_v.consumer_release(smem_pipe_read_v); // release V
                     }
-                    if constexpr (Is_FP8 && !V_colmajor)
+                    if constexpr (Is_8Bit && !V_colmajor)
                     {
                         flash::permute_Cregs_fp8(tSrS);
                     }
                     convert_type_out(make_tensor(tSrS.data(), tOrP.layout()), tOrP);
-                    if constexpr (Is_FP8 && V_colmajor)
+                    if constexpr (Is_8Bit && V_colmajor)
                     {
                         flash::permute_Aregs_fp8(tOrP);
                     }
@@ -1694,6 +1733,7 @@ namespace flash
                     consumer_wait(pipeline_v, smem_pipe_read);
                 }
                 flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP), tOrV(_, _, _, smem_pipe_read.index()), tOrO);
+                // For INT8, V is bf16, so no v_descale needed (use Is_FP8)
                 float const v_descale = !Is_FP8 || params.ptr_v_descale == nullptr ? 1.0f : params.ptr_v_descale[bidb * get<0>(params.stride_v_descale) + bidh_kv * get<1>(params.stride_v_descale)];
                 cute::copy(softmax.finalize(v_descale), scores_scale);
                 if constexpr (LargeHeadDimV)
@@ -1705,17 +1745,11 @@ namespace flash
                 warpgroup_wait<0>();
                 pipeline_v.consumer_release(smem_pipe_read); // release V, otherwise producers will hang
                 softmax.rescale_o(tOrO, scores_scale);
-                if constexpr (Is_FP8 && !V_colmajor)
+                if constexpr (Is_8Bit && !V_colmajor)
                 {
                     flash::permute_output_fp8(tOrO);
                 }
                 ++smem_pipe_read;
-
-                // if constexpr (Is_skipable){
-                //     if(cute::elect_one_sync() && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0){
-                //         printf("consumer is done!\n");
-                //     }
-                // }
             }
             else
             { // No intra-WG overlap
@@ -1724,7 +1758,7 @@ namespace flash
 
                 // clear(tOrO);
 
-                auto fwd_step = [&](int const n_block, auto mask_fn, auto is_first_iter_type, auto check_inf_type, auto &skip_reader) -> int
+                auto fwd_step = [&](int const n_block, auto mask_fn, auto is_first_iter_type, auto check_inf_type, auto &skip_reader) -> bool
                 {
                     static constexpr bool Is_first_iter = decltype(is_first_iter_type)::value;
                     static constexpr bool Check_inf = decltype(check_inf_type)::value;
@@ -1737,9 +1771,17 @@ namespace flash
                     Tensor tSrS = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
                     consumer_wait(pipeline_k, smem_pipe_read);
                     
-                    int new_n_block = n_block;
+                    // int new_n_block = n_block;
+                    int new_n_block;
                     if constexpr (Is_skipable){
                         new_n_block = skip_reader.next_n_block();
+                    }else{
+                        new_n_block = n_block;
+                    }
+
+                    bool has_more = true;
+                    if constexpr (Is_skipable){
+                        has_more = skip_reader.has_more(new_n_block);
                     }
 
                     flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS);
@@ -1765,6 +1807,9 @@ namespace flash
                     }
 
                     scoremod_premask_fn(tSrS);
+                    if constexpr (Is_INT8){
+                        softmax.set_dequan_s(KDescaleSliced(new_n_block));
+                    }
                     mask_fn(tSrS, new_n_block);
                     // Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
                     Tensor scores_scale = [&]
@@ -1784,16 +1829,16 @@ namespace flash
 
                     softmax.template online_softmax<Is_first_iter, Check_inf>(tSrS);
 
-                    if constexpr (Is_FP8 && !V_colmajor)
+                    if constexpr (Is_8Bit && !V_colmajor)
                     {
                         flash::permute_Cregs_fp8(tSrS);
                     }
                     Tensor tOrP_acc = make_tensor(tSrS.data(), flash::convert_layout_acc_Aregs<TiledMmaPV>(tSrS.layout()));
-                    Tensor tOrP = make_tensor_like<Element>(tOrP_acc);
+                    Tensor tOrP = make_tensor_like<ElementV>(tOrP_acc);
 
                     convert_type_out(tOrP_acc, tOrP);
 
-                    if constexpr (Is_FP8 && V_colmajor)
+                    if constexpr (Is_8Bit && V_colmajor)
                     {
                         flash::permute_Aregs_fp8(tOrP);
                     }
@@ -1833,14 +1878,16 @@ namespace flash
                     warpgroup_wait<0>();
                     pipeline_v.consumer_release(smem_pipe_read); // release V
                     
-                    return new_n_block;
+                    return has_more;
                 };
 
                 auto first_iter_mask_fn = [&](auto &tSrS, int n_block)
                 { mask.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS, m_block, n_block); };
                 // fwd_step(n_block, first_iter_mask_fn, cute::true_type{} /*is_first_iter*/, cute::true_type{} /*check_inf*/, skip_reader);
+                bool has_more_outer = true;
                 if constexpr (Is_skipable){
-                    n_block = fwd_step(n_block, first_iter_mask_fn, cute::true_type{} /*is_first_iter*/, cute::true_type{} /*check_inf*/, skip_reader);
+                    has_more_outer = fwd_step(0, first_iter_mask_fn, cute::true_type{} /*is_first_iter*/, cute::true_type{} /*check_inf*/, skip_reader);
+                    // n_block = fwd_step(0, first_iter_mask_fn, cute::true_type{} /*is_first_iter*/, cute::true_type{} /*check_inf*/, skip_reader);
                 }else{
                     fwd_step(n_block, first_iter_mask_fn, cute::true_type{} /*is_first_iter*/, cute::true_type{} /*check_inf*/, skip_reader);
                     --n_block;
@@ -1873,8 +1920,9 @@ namespace flash
                     auto mask_fn = [&](auto &tSrS, int n_block) {
                         mask.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS, m_block, n_block); 
                     };
-                    while(skip_reader.has_more(n_block)){
-                        n_block = fwd_step(n_block, mask_fn, cute::false_type{} /*is_first_iter*/, cute::true_type{} /*check_inf*/, skip_reader);
+                    // while(skip_reader.has_more(n_block)){
+                    while(has_more_outer){
+                        has_more_outer = fwd_step(0, mask_fn, cute::false_type{} /*is_first_iter*/, cute::true_type{} /*check_inf*/, skip_reader);
                     }
                 }
 
@@ -1892,6 +1940,7 @@ namespace flash
                 warp_scheduler_barrier_arrive();
                 // Tell producers that smem_q is ready
                 cutlass::arch::NamedBarrier::arrive(NumMmaThreadsQK + (Use_TMA_Q ? cutlass::NumThreadsPerWarp : NumProducerThreads), static_cast<uint32_t>(FwdNamedBarriers::QueryEmpty) /*id*/);
+                // For INT8, V is bf16, so no v_descale needed (use Is_FP8)
                 float const v_descale = !Is_FP8 || params.ptr_v_descale == nullptr ? 1.0f : params.ptr_v_descale[bidb * get<0>(params.stride_v_descale) + bidh_kv * get<1>(params.stride_v_descale)];
                 Tensor scores_scale = softmax.finalize(v_descale);
 
@@ -1902,7 +1951,7 @@ namespace flash
                     cutlass::arch::NamedBarrier::arrive(NumMmaThreads, static_cast<uint32_t>(FwdNamedBarriers::PFull) /*id*/);
                 }
                 softmax.rescale_o(tOrO, scores_scale);
-                if constexpr (Is_FP8 && !V_colmajor)
+                if constexpr (Is_8Bit && !V_colmajor)
                 {
                     flash::permute_output_fp8(tOrO);
                 }

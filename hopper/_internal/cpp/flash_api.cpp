@@ -76,6 +76,7 @@ void set_params_fprop(Flash_fwd_params &params,
 
     params.is_bf16 = q.dtype() == torch::kBFloat16;
     params.is_e4m3 = q.dtype() == torch::kFloat8_e4m3fn;
+    params.is_int8 = q.dtype() == torch::kInt8;
 
     // Set the pointers and strides.
     params.q_ptr = q.data_ptr();
@@ -249,7 +250,7 @@ void set_params_dgrad(Flash_bwd_params &params,
 
 template <int Arch, int Split, bool PagedKVNonTMA, bool PackGQA, bool Has_softcap>
 void run_mha_fwd_constexpr(Flash_fwd_params &params, cudaStream_t stream) {
-    if (!params.is_e4m3) {
+    if (!params.is_e4m3 && !params.is_int8) {
         if (params.is_bf16) {
             #ifndef FLASHATTENTION_DISABLE_HDIM64
             if (params.d <= 64) {
@@ -327,7 +328,7 @@ void run_mha_fwd_constexpr(Flash_fwd_params &params, cudaStream_t stream) {
             TORCH_CHECK(false, "This flash attention build does not support FP16.");
             #endif
         }
-    } else {
+    } else if (params.is_e4m3) {
         #ifndef FLASHATTENTION_DISABLE_FP8
         #ifndef FLASHATTENTION_DISABLE_HDIM64
         if (params.d <= 64) { return run_mha_fwd_<90, cutlass::float_e4m3_t, 64, 64, Split, PagedKVNonTMA, Has_softcap, PackGQA>(params, stream); }
@@ -355,6 +356,36 @@ void run_mha_fwd_constexpr(Flash_fwd_params &params, cudaStream_t stream) {
         #endif
         #else
         TORCH_CHECK(false, "This flash attention build does not support FP8.");
+        #endif
+    } else {
+        // INT8
+        #ifndef FLASHATTENTION_DISABLE_INT8
+        #ifndef FLASHATTENTION_DISABLE_HDIM64
+        if (params.d <= 64) { return run_mha_fwd_<90, int8_t, 64, 64, Split, PagedKVNonTMA, Has_softcap, PackGQA>(params, stream); }
+        #endif
+        #ifndef FLASHATTENTION_DISABLE_HDIM96
+        if (params.d <= 96) { return run_mha_fwd_<90, int8_t, 96, 96, Split, PagedKVNonTMA, Has_softcap, PackGQA>(params, stream); }
+        #endif
+        #ifndef FLASHATTENTION_DISABLE_HDIM128
+        if (params.d <= 128) { return run_mha_fwd_<90, int8_t, 128, 128, Split, PagedKVNonTMA, Has_softcap, PackGQA>(params, stream); }
+        #endif
+        #ifndef FLASHATTENTION_DISABLE_HDIM192
+        if (params.d <= 192) {
+            #ifndef FLASHATTENTION_DISABLE_HDIMDIFF192
+            if constexpr (Arch == 90) {
+                if (params.dv <= 128) {
+                    return run_mha_fwd_<90, int8_t, 192, 128, Split, PagedKVNonTMA, Has_softcap, PackGQA>(params, stream);
+                }
+            }
+            #endif
+            return run_mha_fwd_<90, int8_t, 192, 192, Split, PagedKVNonTMA, Has_softcap, PackGQA>(params, stream);
+        }
+        #endif
+        #ifndef FLASHATTENTION_DISABLE_HDIM256
+        if (params.d <= 256) { return run_mha_fwd_<90, int8_t, 256, 256, Split, PagedKVNonTMA, Has_softcap, PackGQA>(params, stream); }
+        #endif
+        #else
+        TORCH_CHECK(false, "This flash attention build does not support INT8.");
         #endif
     }
 }
@@ -410,7 +441,7 @@ void run_mha_fwd_combine(Flash_fwd_params &params, cudaStream_t stream, bool ena
 inline bool get_pagedkv_tma(Flash_fwd_params const& params) {
     if (params.arch < 90 || !params.page_table || params.leftpad_k || params.knew_ptr) { return false; }
     // This needs to match the kernel configs
-    auto kBlockMN_kernel_args_sm90 = tile_size_fwd_sm90(params.d_rounded, params.dv_rounded, params.is_causal, params.is_local, params.is_e4m3 ? 1 : 2 /*element_size*/, false /*v_colmajor*/, false /*paged_kv_non_TMA*/, params.softcap > 0.f, params.is_skipable);
+    auto kBlockMN_kernel_args_sm90 = tile_size_fwd_sm90(params.d_rounded, params.dv_rounded, params.is_causal, params.is_local, (params.is_e4m3 || params.is_int8) ? 1 : 2 /*element_size*/, false /*v_colmajor*/, false /*paged_kv_non_TMA*/, params.softcap > 0.f, params.is_skipable);
     int const kBlockM = std::get<0>(kBlockMN_kernel_args_sm90);
     int const kBlockN = std::get<1>(kBlockMN_kernel_args_sm90);
     // Heuristic: when seqlen_q <= kBlockM, we're not compute bound, and somehow using TMA is slower,
@@ -428,7 +459,7 @@ inline bool get_pack_gqa(Flash_fwd_params const& params) {
     // params.page_table must already be set
     if (params.h == params.h_k) { return false; }
     // This needs to match the kernel configs
-    auto kBlockMN_kernel_args_sm90 = tile_size_fwd_sm90(params.d_rounded, params.dv_rounded, params.is_causal, params.is_local, params.is_e4m3 ? 1 : 2 /*element_size*/, false /*v_colmajor*/, params.page_table && !params.pagedkv_tma, params.softcap > 0.f, params.is_skipable);
+    auto kBlockMN_kernel_args_sm90 = tile_size_fwd_sm90(params.d_rounded, params.dv_rounded, params.is_causal, params.is_local, (params.is_e4m3 || params.is_int8) ? 1 : 2 /*element_size*/, false /*v_colmajor*/, params.page_table && !params.pagedkv_tma, params.softcap > 0.f, params.is_skipable);
     int const kBlockM = std::get<0>(kBlockMN_kernel_args_sm90);
     return should_pack_gqa(params.cu_seqlens_q || params.seqused_q, params.seqlen_q, params.h / params.h_k, kBlockM);
     #endif
@@ -442,10 +473,10 @@ inline int get_num_splits(Flash_fwd_params const& params) {
     // params.page_table must already be set
     // This needs to match the kernel configs
     bool varlen = params.cu_seqlens_q || params.cu_seqlens_k || params.seqused_q || params.seqused_k || params.leftpad_k;
-    auto kBlockMN_kernel_args_sm90 = tile_size_fwd_sm90(params.d_rounded, params.dv_rounded, params.is_causal, params.is_local, params.is_e4m3 ? 1 : 2 /*element_size*/, false /*v_colmajor*/, params.page_table && !params.pagedkv_tma, params.softcap > 0.f, params.is_skipable);
+    auto kBlockMN_kernel_args_sm90 = tile_size_fwd_sm90(params.d_rounded, params.dv_rounded, params.is_causal, params.is_local, (params.is_e4m3 || params.is_int8) ? 1 : 2 /*element_size*/, false /*v_colmajor*/, params.page_table && !params.pagedkv_tma, params.softcap > 0.f, params.is_skipable);
     // Strictly speaking we need to pass in (varlen && params.num_splits > 1) but num_splits
     // has not been set here. It's OK though because we might just underestimate kBlockN a bit
-    auto kBlockMN_kernel_args_sm8x = tile_size_fwd_sm8x(params.arch == 86 || params.arch == 89, params.d_rounded, params.dv_rounded, params.is_causal, params.is_local, params.is_e4m3 ? 1 : 2 /*element_size*/, params.page_table, varlen, params.softcap > 0.f, params.knew_ptr);
+    auto kBlockMN_kernel_args_sm8x = tile_size_fwd_sm8x(params.arch == 86 || params.arch == 89, params.d_rounded, params.dv_rounded, params.is_causal, params.is_local, (params.is_e4m3 || params.is_int8) ? 1 : 2 /*element_size*/, params.page_table, varlen, params.softcap > 0.f, params.knew_ptr);
     int const kBlockM = params.arch >= 90 ? std::get<0>(kBlockMN_kernel_args_sm90) : std::get<0>(kBlockMN_kernel_args_sm8x);
     int const kBlockN = params.arch >= 90 ? std::get<1>(kBlockMN_kernel_args_sm90) : std::get<1>(kBlockMN_kernel_args_sm8x);
     int seqlen_q_packgqa = params.seqlen_q * (params.h / params.h_k);
@@ -455,7 +486,7 @@ inline int get_num_splits(Flash_fwd_params const& params) {
         : std::max(0, std::min(params.seqlen_k, params.window_size_right + params.window_size_left + 1 + kBlockM));
     int const num_n_blocks = (seqlen_k_loaded + kBlockN - 1) / kBlockN;
     int const num_m_blocks = (seqlen_q_packgqa + kBlockM - 1) / kBlockM;
-    int const size_one_kv_head = params.seqlen_k * (params.d + params.dv) * (params.is_e4m3 ? 1 : 2);
+    int const size_one_kv_head = params.seqlen_k * (params.d + params.dv) * ((params.is_e4m3 || params.is_int8) ? 1 : 2);
     // Always enable PackGQA for Split
     // If varlen, we use dynamic split, so this heuristic just needs to get an upper bound on num_splits.
     // We assume the case where there's 1 long sequence and the rest are short, i.e. pretending
@@ -540,14 +571,15 @@ mha_fwd_get_scheduler_metadata(
         std::optional<bool> pack_gqa_,
         int64_t sm_margin) {
 
-    TORCH_CHECK(qkv_dtype == at::ScalarType::Half || qkv_dtype == at::ScalarType::BFloat16 || qkv_dtype == at::ScalarType::Float8_e4m3fn,
-                "FlashAttention only supports fp16, bf16, and fp8_e4m3 data type");
+    TORCH_CHECK(qkv_dtype == at::ScalarType::Half || qkv_dtype == at::ScalarType::BFloat16 || qkv_dtype == at::ScalarType::Float8_e4m3fn || qkv_dtype == torch::kInt8,
+                "FlashAttention only supports fp16, bf16, fp8_e4m3, and int8 data type");
     TORCH_CHECK(num_heads % num_heads_k == 0, "Number of heads in key/value must divide number of heads in query");
 
     // Reset the parameters
     Flash_fwd_params params{};
     params.is_bf16 = qkv_dtype == at::ScalarType::BFloat16;
     params.is_e4m3 = qkv_dtype == at::ScalarType::Float8_e4m3fn;
+    params.is_int8 = qkv_dtype == torch::kInt8;
     params.b = batch_size;
     params.seqlen_q = max_seqlen_q;
     params.seqlen_k = max_seqlen_k;
@@ -645,8 +677,8 @@ mha_fwd_get_scheduler_metadata(
     }
 
     if (use_prepare_varlen) {
-        auto kBlockMN_kernel_args_sm90 = tile_size_fwd_sm90(params.d_rounded, params.dv_rounded, params.is_causal, params.is_local, params.is_e4m3 ? 1 : 2 /*element_size*/, false /*v_colmajor*/, params.page_table && !params.pagedkv_tma, params.softcap > 0.f, params.is_skipable);
-        auto kBlockMN_kernel_args_sm8x = tile_size_fwd_sm8x(params.arch == 86 || params.arch == 89, params.d_rounded, params.dv_rounded, params.is_causal, params.is_local, params.is_e4m3 ? 1 : 2 /*element_size*/, params.page_table, is_varlen && params.num_splits > 1, params.softcap > 0.f, params.knew_ptr);
+        auto kBlockMN_kernel_args_sm90 = tile_size_fwd_sm90(params.d_rounded, params.dv_rounded, params.is_causal, params.is_local, (params.is_e4m3 || params.is_int8) ? 1 : 2 /*element_size*/, false /*v_colmajor*/, params.page_table && !params.pagedkv_tma, params.softcap > 0.f, params.is_skipable);
+        auto kBlockMN_kernel_args_sm8x = tile_size_fwd_sm8x(params.arch == 86 || params.arch == 89, params.d_rounded, params.dv_rounded, params.is_causal, params.is_local, (params.is_e4m3 || params.is_int8) ? 1 : 2 /*element_size*/, params.page_table, is_varlen && params.num_splits > 1, params.softcap > 0.f, params.knew_ptr);
         int const kBlockM = params.arch >= 90 ? std::get<0>(kBlockMN_kernel_args_sm90) : std::get<0>(kBlockMN_kernel_args_sm8x);
         int const kBlockN = params.arch >= 90 ? std::get<1>(kBlockMN_kernel_args_sm90) : std::get<1>(kBlockMN_kernel_args_sm8x);
         auto stream = at::cuda::getCurrentCUDAStream().stream();
@@ -716,14 +748,19 @@ mha_fwd(at::Tensor q,   // (b, s_q, h, d) or (total_q, h, d) if there is cu_seql
     TORCH_CHECK(is_sm8x, "FlashAttention only supports Ampere GPUs or newer.");
 
     auto q_type = q.scalar_type();
-    TORCH_CHECK(q_type == at::ScalarType::Half || q_type == at::ScalarType::BFloat16 || q_type == at::ScalarType::Float8_e4m3fn,
-                "FlashAttention only supports fp16, bf16, and fp8_e4m3 data type");
+    TORCH_CHECK(q_type == at::ScalarType::Half || q_type == at::ScalarType::BFloat16 || q_type == at::ScalarType::Float8_e4m3fn || q_type == torch::kInt8,
+                "FlashAttention only supports fp16, bf16, fp8_e4m3, and int8 data type");
     if (dprops->major < 9) {
         TORCH_CHECK(q_type == at::ScalarType::Half || q_type == at::ScalarType::BFloat16,
                     "FlashAttention on Ampere/Ada cards only supports fp16 and bf16 data type");
     }
     TORCH_CHECK(k.scalar_type() == q_type, "query and key must have the same dtype");
-    TORCH_CHECK(v.scalar_type() == q_type, "query and value must have the same dtype");
+    // For INT8, Q and K are int8 but V is bf16
+    if (q_type == torch::kInt8) {
+        TORCH_CHECK(v.scalar_type() == torch::kBFloat16, "For INT8 attention, value must be bf16");
+    } else {
+        TORCH_CHECK(v.scalar_type() == q_type, "query and value must have the same dtype");
+    }
 
     CHECK_DEVICE(q); CHECK_DEVICE(k); CHECK_DEVICE(v);
 
@@ -855,16 +892,18 @@ mha_fwd(at::Tensor q,   // (b, s_q, h, d) or (total_q, h, d) if there is cu_seql
         TORCH_CHECK(!is_varlen, "This flash attention build does not support varlen.");
     #endif
 
-    int const alignment = q_type == torch::kFloat8_e4m3fn ? 16 : 8;
-    TORCH_CHECK(head_size % alignment == 0, "head_size should be a multiple of " + std::to_string(alignment));
-    TORCH_CHECK(head_size_v % alignment == 0, "head_size_v should be a multiple of " + std::to_string(alignment));
+    int const alignment_qk = (q_type == torch::kFloat8_e4m3fn || q_type == torch::kInt8) ? 16 : 8;
+    // For INT8, V is bf16 so it uses 8-byte alignment; for FP8, V is also FP8 so it uses 16-byte alignment
+    int const alignment_v = (q_type == torch::kFloat8_e4m3fn) ? 16 : 8;
+    TORCH_CHECK(head_size % alignment_qk == 0, "head_size should be a multiple of " + std::to_string(alignment_qk));
+    TORCH_CHECK(head_size_v % alignment_v == 0, "head_size_v should be a multiple of " + std::to_string(alignment_v));
 
     auto opts = q.options();
-    auto out_type = q_type == at::ScalarType::Float8_e4m3fn ? at::ScalarType::BFloat16 : q_type;
+    auto out_type = (q_type == at::ScalarType::Float8_e4m3fn || q_type == torch::kInt8) ? at::ScalarType::BFloat16 : q_type;
     at::Tensor out;
     if (out_.has_value()) {
         out = out_.value();
-        TORCH_CHECK(out.scalar_type() == out_type, "For FP16/BF16 input, output must have the same dtype as inputs. For FP8 input, output must have dtype BF16");
+        TORCH_CHECK(out.scalar_type() == out_type, "For FP16/BF16 input, output must have the same dtype as inputs. For FP8/INT8 input, output must have dtype BF16");
         CHECK_DEVICE(out);
         TORCH_CHECK(out.stride(-1) == 1, "Output tensor must have contiguous last dimension");
         if (!is_varlen_q) {
@@ -1004,7 +1043,12 @@ mha_fwd(at::Tensor q,   // (b, s_q, h, d) or (total_q, h, d) if there is cu_seql
         k_new = k_new_.value();
         v_new = v_new_.value();
         TORCH_CHECK(k_new.dtype() == q_type, "k_new must have the same dtype as query");
-        TORCH_CHECK(v_new.dtype() == q_type, "v_new must have the same dtype as query");
+        // For INT8, v_new is bf16
+        if (q_type == torch::kInt8) {
+            TORCH_CHECK(v_new.dtype() == torch::kBFloat16, "For INT8 attention, v_new must be bf16");
+        } else {
+            TORCH_CHECK(v_new.dtype() == q_type, "v_new must have the same dtype as query");
+        }
         CHECK_DEVICE(k_new); CHECK_DEVICE(v_new);
         TORCH_CHECK(k_new.stride(-1) == 1, "k_new tensor must have contiguous last dimension");
         TORCH_CHECK(v_new.stride(-1) == 1, "v_new tensor must have contiguous last dimension");
@@ -1175,7 +1219,7 @@ mha_fwd(at::Tensor q,   // (b, s_q, h, d) or (total_q, h, d) if there is cu_seql
         params.lseaccum_head_stride = softmax_lse_accum.stride(-2);
     }
 
-    if (q_type == at::ScalarType::Float8_e4m3fn) {
+    if (q_type == at::ScalarType::Float8_e4m3fn || q_type == torch::kInt8) {
         if (q_descale_.has_value()) {
             auto q_descale = q_descale_.value();
             CHECK_DEVICE(q_descale);
@@ -1196,7 +1240,8 @@ mha_fwd(at::Tensor q,   // (b, s_q, h, d) or (total_q, h, d) if there is cu_seql
         } else {
             params.k_descale_ptr = nullptr;
         }
-        if (v_descale_.has_value()) {
+        // v_descale only for FP8, not INT8 (INT8 has bf16 V)
+        if (q_type == at::ScalarType::Float8_e4m3fn && v_descale_.has_value()) {
             auto v_descale = v_descale_.value();
             CHECK_DEVICE(v_descale);
             CHECK_SHAPE(v_descale, batch_size, num_heads_k);

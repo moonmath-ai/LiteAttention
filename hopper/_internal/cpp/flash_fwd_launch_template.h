@@ -59,8 +59,11 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream)
     static_assert(!(AppendKV && V_colmajor), "AppendKV and V_colmajor cannot be enabled at the same time");
     static_assert(!(AppendKV && !Varlen), "AppendKV requires Varlen");
 
-    // Type traits using CuTe's type system for FP8 detection
+    // Type traits using CuTe's type system for FP8/INT8 detection
     static constexpr bool Is_FP8 = cute::is_same_v<Element, cutlass::float_e4m3_t> || cute::is_same_v<Element, cutlass::float_e5m2_t>;
+    static constexpr bool Is_INT8 = cute::is_same_v<Element, int8_t>;
+    static constexpr bool Is_8Bit = Is_FP8 || Is_INT8;  // For Q/K operations
+    // For INT8, V is bf16, so no transpose needed (only FP8 has 8-bit V)
     static constexpr bool FP8_TransposeV = Is_FP8 && !V_colmajor;
     using ArchTag = std::conditional_t<Arch >= 90, cutlass::arch::Sm90, cutlass::arch::Sm80>;
 
@@ -371,7 +374,9 @@ void run_mha_fwd_(Flash_fwd_params &params, cudaStream_t stream)
 {
     static_assert(sizeof(T) == 2 || sizeof(T) == 1, "Only 16bit and 8bit are supported");
     static constexpr bool Is_FP8 = cute::is_same_v<T, cutlass::float_e4m3_t> || cute::is_same_v<T, cutlass::float_e5m2_t>;
-    using T_out = std::conditional_t<!Is_FP8, T, cutlass::bfloat16_t>;
+    static constexpr bool Is_INT8 = cute::is_same_v<T, int8_t>;
+    static constexpr bool Is_8Bit = Is_FP8 || Is_INT8;
+    using T_out = std::conditional_t<!Is_8Bit, T, cutlass::bfloat16_t>;
     CAUSAL_LOCAL_SWITCH(params.is_causal, params.is_local, Is_causal, Is_local, [&]
                         { VCOLMAJOR_SWITCH(params.v_dim_stride != 1, V_colmajor_, [&]
                                            {
@@ -380,7 +385,7 @@ void run_mha_fwd_(Flash_fwd_params &params, cudaStream_t stream)
                 // Reorder switches: HasQV_ -> AppendKV -> Is_skipable -> HasMustDoList -> ReverseSkipList -> Phase
                 // This ensures invalid combinations (HasMustDoList or ReverseSkipList true when Is_skipable false) are never generated
                 BOOL_SWITCH(params.qv_ptr, HasQV_, [&] {
-                    static constexpr bool HasQv = HasQV_ && Arch == 90 && !Is_FP8 && kHeadDim == 64 && kHeadDimV >= 256;
+                    static constexpr bool HasQv = HasQV_ && Arch == 90 && !Is_8Bit && kHeadDim == 64 && kHeadDimV >= 256;
                     APPENDKV_SWITCH(params.knew_ptr, AppendKV, [&] {
                         BOOL_SWITCH(params.is_skipable, Is_skipable, [&] {
                             // Only needed here to decide if we should use cluster
