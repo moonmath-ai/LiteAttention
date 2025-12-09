@@ -52,6 +52,8 @@ namespace flash
         static constexpr bool Varlen = CollectiveMainloop::Varlen;
         static constexpr bool Split = CollectiveMainloop::Split;
         static constexpr bool Is_FP8 = CollectiveMainloop::Is_FP8;
+        static constexpr bool Is_INT8 = CollectiveMainloop::Is_INT8;
+        static constexpr bool Is_8Bit = CollectiveMainloop::Is_8Bit;
         static constexpr bool Transpose_V = CollectiveMainloop::Transpose_V;
         static constexpr bool AppendKV = CollectiveMainloop::AppendKV;
         static constexpr bool HasQv = CollectiveMainloop::HasQv;
@@ -539,7 +541,7 @@ namespace flash
                     const int thread_idx = threadIdx.x - MmaThreadOffset;
 
                     // // DOR: kNRows = 2 * (2 * 128 / 256) = 2
-                    // flash::Softmax<!LargeHeadDimV ? 2 * (2 * kBlockM / NumMmaThreads) : 2, /*Max_offset=*/!Is_FP8 ? 0 : 8> softmax(softmax_scale_log2, row_mask, local_row_idx);
+                    // flash::Softmax<!LargeHeadDimV ? 2 * (2 * kBlockM / NumMmaThreads) : 2, /*Max_offset=*/!Is_8Bit ? 0 : 8> softmax(softmax_scale_log2, row_mask, local_row_idx);
                     // DOR: kNRows = 2 * (2 * 128 / 256) = 2
                     flash::Softmax<!LargeHeadDimV ? 2 * (2 * kBlockM / NumMmaThreads) : 2, /*Max_offset=*/!Is_FP8 ? 0 : 8> softmax(softmax_scale_log2, seqlen_info.seqlen_q, thread_idx);
 

@@ -80,7 +80,10 @@ namespace flash
         using ArchTag = ArchTag_;
         // Check if using FP8 data types (either E4M3 or E5M2)
         static constexpr bool Is_FP8 = cute::is_same_v<Element, cutlass::float_e4m3_t> || cute::is_same_v<Element, cutlass::float_e5m2_t>;
-        ;
+        // Check if using INT8 data type
+        static constexpr bool Is_INT8 = cute::is_same_v<Element, int8_t>;
+        // Combined check for any 8-bit type
+        static constexpr bool Is_8Bit = Is_FP8 || Is_INT8;
         static constexpr bool Is_causal = Is_causal_;
         static constexpr bool Is_local = Is_local_;
         static constexpr bool Has_softcap = Has_softcap_;
@@ -91,7 +94,7 @@ namespace flash
         static constexpr bool PackGQA = PackGQA_;
         static constexpr bool Split = Split_;
         static constexpr bool V_colmajor = V_colmajor_;
-        // For FP8 with row-major V, we need to transpose V in shared memory
+        // For FP8 with row-major V, we need to transpose V in shared memory (INT8 has bf16 V, so no transpose needed)
         static constexpr bool Transpose_V = Is_FP8 && !V_colmajor;
         // Use TMA (Tensor Memory Accelerator) for Q unless using packed GQA layout
         static constexpr bool Use_TMA_Q = !PackGQA;
@@ -399,6 +402,7 @@ namespace flash
         using TensorStorage = std::conditional_t<!Transpose_V, TensorStorageNoTranspose, TensorStorageTransposeV>;
 
         // These are tuned for speed. They don't affect correctness.
+        // For INT8, V is bf16, so we use Is_FP8 for V-related tuning
         static constexpr bool UseSchedulerBarrier = ((IntraWGOverlap
                                                          ? (NumMmaWarpGroups >= 2) && (!Is_FP8 ? kHeadDim <= 128 : kHeadDim >= 128)
                                                          : NumMmaWarpGroups == 2) &&
@@ -1694,6 +1698,7 @@ namespace flash
                     consumer_wait(pipeline_v, smem_pipe_read);
                 }
                 flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP), tOrV(_, _, _, smem_pipe_read.index()), tOrO);
+                // For INT8, V is bf16, so no v_descale needed (use Is_FP8)
                 float const v_descale = !Is_FP8 || params.ptr_v_descale == nullptr ? 1.0f : params.ptr_v_descale[bidb * get<0>(params.stride_v_descale) + bidh_kv * get<1>(params.stride_v_descale)];
                 cute::copy(softmax.finalize(v_descale), scores_scale);
                 if constexpr (LargeHeadDimV)
@@ -1892,6 +1897,7 @@ namespace flash
                 warp_scheduler_barrier_arrive();
                 // Tell producers that smem_q is ready
                 cutlass::arch::NamedBarrier::arrive(NumMmaThreadsQK + (Use_TMA_Q ? cutlass::NumThreadsPerWarp : NumProducerThreads), static_cast<uint32_t>(FwdNamedBarriers::QueryEmpty) /*id*/);
+                // For INT8, V is bf16, so no v_descale needed (use Is_FP8)
                 float const v_descale = !Is_FP8 || params.ptr_v_descale == nullptr ? 1.0f : params.ptr_v_descale[bidb * get<0>(params.stride_v_descale) + bidh_kv * get<1>(params.stride_v_descale)];
                 Tensor scores_scale = softmax.finalize(v_descale);
 
