@@ -76,8 +76,11 @@ namespace flash
         // Tile shape for Q@V multiplication when HasQv is true
         using TileShape_MNK_QV = Shape<decltype(get<0>(TileShape_MNK{})), decltype(get<1>(TileShape_MNK{})), Int<kHeadDimV>>;
         using Element = Element_;
+        using ElementV = std::conditional_t<Is_INT8, cute::bfloat16_t, Element>;
         using ElementAccum = ElementAccum_;
+        using ElementAccumQK = std::conditional_t<Is_INT8, int32_t, ElementAccum>;
         using ArchTag = ArchTag_;
+
         // Check if using FP8 data types (either E4M3 or E5M2)
         static constexpr bool Is_FP8 = cute::is_same_v<Element, cutlass::float_e4m3_t> || cute::is_same_v<Element, cutlass::float_e5m2_t>;
         // Check if using INT8 data type
@@ -112,6 +115,7 @@ namespace flash
 
         static_assert(!HasMustDoList || Is_skipable, "MustDoList is only supported when skipping is enabled");
         static_assert(!ReverseSkipList || Is_skipable, "ReverseSkipList is only supported when skipping is enabled");
+        static_assert(!(Is_INT8 && HasQv), "INT8 and HasQv cannot be enabled at the same time");
         // static_assert(!Phase || !ReverseSkipList, "Phase is only supported when ReverseSkipList is enabled");
 
         static constexpr cute::GMMA::Major MmaMajorV = !Is_FP8 && !V_colmajor ? GMMA::Major::MN : GMMA::Major::K;
@@ -144,8 +148,8 @@ namespace flash
         using TiledMmaQK = decltype(cute::make_tiled_mma(
             std::conditional_t<
                 !MmaQK_is_RS,
-                decltype(cute::GMMA::ss_op_selector<Element, Element, ElementAccum, TileShape_MNK>()),
-                decltype(cute::GMMA::rs_op_selector<Element, Element, ElementAccum, TileShape_MNK>())>{},
+                decltype(cute::GMMA::ss_op_selector<Element, Element, ElementAccumQK, TileShape_MNK>()),
+                decltype(cute::GMMA::rs_op_selector<Element, Element, ElementAccumQK, TileShape_MNK>())>{},
             AtomLayoutQK{}));
         using AtomLayoutPV = std::conditional_t<
             !LargeHeadDimV,
@@ -154,9 +158,9 @@ namespace flash
         using TiledMmaPV = decltype(cute::make_tiled_mma(
             std::conditional_t<
                 !MmaPV_is_RS,
-                decltype(cute::GMMA::ss_op_selector<Element, Element, ElementAccum,
+                decltype(cute::GMMA::ss_op_selector<ElementV, ElementV, ElementAccum,
                                                     TileShape_MNK_PV, GMMA::Major::K, MmaMajorV>()),
-                decltype(cute::GMMA::rs_op_selector<Element, Element, ElementAccum,
+                decltype(cute::GMMA::rs_op_selector<ElementV, ElementV, ElementAccum,
                                                     TileShape_MNK_PV, GMMA::Major::K, MmaMajorV>())>{},
             AtomLayoutPV{}));
         using TiledMmaQV = decltype(cute::make_tiled_mma(
@@ -164,7 +168,7 @@ namespace flash
             AtomLayoutQK{}));
         // For hdim64,512, WG1 can use RS but WG2 must use SS
         using TiledMmaPV_RS = decltype(cute::make_tiled_mma(
-            cute::GMMA::rs_op_selector<Element, Element, ElementAccum, TileShape_MNK_PV, GMMA::Major::K, MmaMajorV>(),
+            cute::GMMA::rs_op_selector<ElementV, ElementV, ElementAccum, TileShape_MNK_PV, GMMA::Major::K, MmaMajorV>(),
             AtomLayoutPV{}));
 
         static constexpr int NumMmaThreadsQK = size(TiledMmaQK{});
@@ -185,14 +189,14 @@ namespace flash
             SmemLayoutAtomK{},
             make_shape(shape<1>(TileShape_MNK{}), shape<2>(TileShape_MNK{}), Int<kStages>{})));
 
-        using SmemLayoutAtomVt = decltype(cutlass::gemm::collective::detail::ss_smem_selector<TmaMajorV, Element,
+        using SmemLayoutAtomVt = decltype(cutlass::gemm::collective::detail::ss_smem_selector<TmaMajorV, ElementV,
                                                                                               Int<kHeadDimV>, decltype(cute::get<2>(TileShape_MNK_PV{}))>());
         using SmemLayoutVt = decltype(tile_to_shape(
             SmemLayoutAtomVt{},
             make_shape(Int<kHeadDimV>{}, shape<2>(TileShape_MNK_PV{}), Int<kStages>{}),
             std::conditional_t<TmaMajorV == GMMA::Major::K, cute::Step<_1, _2, _3>, cute::Step<_2, _1, _3>>{}));
 
-        using SmemLayoutAtomVtMma = decltype(cutlass::gemm::collective::detail::ss_smem_selector<MmaMajorV, Element,
+        using SmemLayoutAtomVtMma = decltype(cutlass::gemm::collective::detail::ss_smem_selector<MmaMajorV, ElementV,
                                                                                                  Int<kHeadDimV>, decltype(cute::get<2>(TileShape_MNK_PV{}))>());
         using SmemLayoutVtMma = decltype(tile_to_shape(
             SmemLayoutAtomVtMma{},
@@ -210,7 +214,7 @@ namespace flash
         static_assert(CUTE_STATIC_V(size(SmemLayoutVMmaQV{})) == size(SmemLayoutVtMma{}));
 
         // Only used if we're using cp.async to load V
-        using SmemLayoutAtomVCpAsync = decltype(cutlass::gemm::collective::detail::ss_smem_selector<GMMA::Major::K, Element,
+        using SmemLayoutAtomVCpAsync = decltype(cutlass::gemm::collective::detail::ss_smem_selector<GMMA::Major::K, ElementV,
                                                                                                     decltype(cute::get<1>(TileShape_MNK{})), Int<kHeadDimV>>());
         using SmemLayoutVCpAsync = decltype(tile_to_shape(
             SmemLayoutAtomVCpAsync{},
@@ -311,7 +315,7 @@ namespace flash
 
         using TMA_V = decltype(make_tma_copy(
             GmemTiledCopyKV{},
-            make_tensor(make_gmem_ptr(static_cast<Element const *>(nullptr)), ShapeQKV{}, select<1, 0, 2, 3>(StrideV{})),
+            make_tensor(make_gmem_ptr(static_cast<ElementV const *>(nullptr)), ShapeQKV{}, select<1, 0, 2, 3>(StrideV{})),
             take<0, 2>(SmemLayoutVt{}),
             select<1, 2>(TileShape_MNK_PV{}),
             size<0>(ClusterShape{}))); // mcast along M mode for this N load, if any
