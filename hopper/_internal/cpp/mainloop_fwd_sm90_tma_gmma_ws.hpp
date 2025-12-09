@@ -817,6 +817,7 @@ namespace flash
             // This is used to index into the batch dimension of mK and mV
             int const bidb_kv_idx = !is_varlen_k && !params.ptr_pagetable ? bidb_kv : 0;
 
+            // TODO: maybe modify this struct to support ElementV as well as Element? (only if we get compile errors)
             using PagedKVManager_t = PagedKVManager<get<1>(TileShape_MNK{}), get<2>(TileShape_MNK{}), get<1>(TileShape_MNK_PV{}), NumProducerThreads, Element, Transpose_V || !IntraWGOverlap /*KV_Same_Iter*/>;
             PagedKVManager_t paged_kv_manager(
                 params.ptr_pagetable, params.shape_pagetable, params.stride_pagetable,
@@ -840,7 +841,6 @@ namespace flash
             CUTE_STATIC_ASSERT_V(size<2>(tTranssVt_) == size<2>(tTranssV_));
             CUTE_STATIC_ASSERT_V(size<3>(tTranssVt_) == size<3>(tTranssV_));
             CUTE_STATIC_ASSERT_V(size<4>(tTranssVt_) == size<4>(tTranssV_));
-            // DOR: returne here and understand this better!
             // Faster to have 2 LDSM.T, byte permute, STSM for better ILP
             static constexpr int Transpose_ILP = (size<2>(tTranssVt_) * size<3>(tTranssVt_)) % 2 == 0 ? 2 : 1;
             Tensor tTranssVt = logical_divide(group_modes<1, rank(tTranssVt_) - 1>(tTranssVt_), Shape<Underscore, Int<Transpose_ILP>>{}); // ((16, 1), (2, kHeadDim / 64 * kBlockN / 32 / 2), kStages)
@@ -1174,7 +1174,6 @@ namespace flash
             shared_storage.pipelines.barrier_O.wait((work_idx + 1) % 2);
             int warp_idx_in_warpgroup = __shfl_sync(0xffffffff, (threadIdx.x / 32) % 4, 0);
             // Issue the epilogue waits
-            // TODO: check if this should be called by 1 thread or more
             // if (warp_idx_in_warpgroup == 0 && cute::elect_one_sync())
             if (warp_idx_in_warpgroup == 0 && should_load_KV)
             {
@@ -1303,6 +1302,7 @@ namespace flash
                 if constexpr (MmaPV_is_RS)
                 {
                     // We might not have smem_p if !MmaPV_is_RS, just use smem_q as a placeholder since we don't use it
+                    // TODO: we maybe would need to change this placeholder because not it's not Element but ElementV
                     return make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_q.data()), SmemLayoutP{});
                 }
                 else
@@ -1336,11 +1336,9 @@ namespace flash
             Layout warp_group_thread_layout = make_layout(make_shape(Int<MmaWarpGroups>{}),
                                                           make_stride(Int<cutlass::NumThreadsPerWarpGroup>{}));
 
-            // // DOR: cool way to hint the compiler to make this value a warp uniform
             // int warp_group_idx = __shfl_sync(0xFFFFFFFF, thread_idx / cutlass::NumThreadsPerWarpGroup, 0);
             TiledMmaQK tiled_mma_qk;
             TiledMmaPV tiled_mma_pv;
-            // DOR: why? do? we? need? this?
             TiledMmaQV tiled_mma_qv;
             // (thread_idx, value ) -> index in some op or memory
             auto wg_mma_qk = tiled_mma_qk.get_slice(warp_group_thread_layout(warp_group_idx));
@@ -1355,7 +1353,6 @@ namespace flash
             Tensor tSrK = wg_mma_qk.partition_fragment_B(sK);
             Tensor tOrV = wg_mma_pv.partition_fragment_B(sV);
             Tensor tOsP = wg_mma_pv.partition_fragment_A(sP);
-            // DOR: because there is an overlap in shared memory between V and Q (TOMER idea)
             Tensor tSrQv = wg_mma_qv.partition_fragment_A(sQv);
             Tensor tSrV = wg_mma_qv.partition_fragment_B(sVMmaQV);
             Tensor tPsP = smem_thr_copy_P.partition_D(cute::as_position_independent_swizzle_tensor(sP));
@@ -1526,11 +1523,13 @@ namespace flash
                 if constexpr (Is_INT8){
                     softmax.set_dequan_s(KDescaleSliced(n_block));
                 }
+                // TODO: update this to work with int32_t (pad to most negative value?)
                 mask.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS, m_block, n_block);
 
                 // Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
                 Tensor scores_scale = [&]
                 {
+                    // TODO: make sure we allowed to do max reduction on the int32_t
                     if constexpr (Is_skipable){
                         return softmax.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, /*Is_first=*/true, true>(
                             tSrS, params.qk_skip_mask_args.thr, skip_reader, m_block
@@ -1542,15 +1541,16 @@ namespace flash
                 }();
                 // Don't need to store scales to send to WG1 (in the case of LargeHeadDimV) since it's 1.f
 
+                // TODO: tSrS doesn't necessarily keep it's type! for example input int32_t output float
                 softmax.template online_softmax</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
-                if constexpr (Is_FP8 && !V_colmajor)
+                if constexpr (Is_8Bit && !V_colmajor)
                 {
                     flash::permute_Cregs_fp8(tSrS);
                 }
                 Tensor tOrP_acc = make_tensor(tSrS.data(), flash::convert_layout_acc_Aregs<TiledMmaPV>(tSrS.layout()));
-                Tensor tOrP = make_tensor_like<Element>(tOrP_acc);
+                Tensor tOrP = make_tensor_like<ElementV>(tOrP_acc);
                 convert_type_out(tOrP_acc, tOrP);
-                if constexpr (Is_FP8 && V_colmajor)
+                if constexpr (Is_8Bit && V_colmajor)
                 {
                     flash::permute_Aregs_fp8(tOrP);
                 }
@@ -1648,12 +1648,12 @@ namespace flash
                         warpgroup_wait<0>();
                         pipeline_v.consumer_release(smem_pipe_read_v); // release V
                     }
-                    if constexpr (Is_FP8 && !V_colmajor)
+                    if constexpr (Is_8Bit && !V_colmajor)
                     {
                         flash::permute_Cregs_fp8(tSrS);
                     }
                     convert_type_out(make_tensor(tSrS.data(), tOrP.layout()), tOrP);
-                    if constexpr (Is_FP8 && V_colmajor)
+                    if constexpr (Is_8Bit && V_colmajor)
                     {
                         flash::permute_Aregs_fp8(tOrP);
                     }
@@ -1745,17 +1745,11 @@ namespace flash
                 warpgroup_wait<0>();
                 pipeline_v.consumer_release(smem_pipe_read); // release V, otherwise producers will hang
                 softmax.rescale_o(tOrO, scores_scale);
-                if constexpr (Is_FP8 && !V_colmajor)
+                if constexpr (Is_8Bit && !V_colmajor)
                 {
                     flash::permute_output_fp8(tOrO);
                 }
                 ++smem_pipe_read;
-
-                // if constexpr (Is_skipable){
-                //     if(cute::elect_one_sync() && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0){
-                //         printf("consumer is done!\n");
-                //     }
-                // }
             }
             else
             { // No intra-WG overlap
@@ -1835,16 +1829,16 @@ namespace flash
 
                     softmax.template online_softmax<Is_first_iter, Check_inf>(tSrS);
 
-                    if constexpr (Is_FP8 && !V_colmajor)
+                    if constexpr (Is_8Bit && !V_colmajor)
                     {
                         flash::permute_Cregs_fp8(tSrS);
                     }
                     Tensor tOrP_acc = make_tensor(tSrS.data(), flash::convert_layout_acc_Aregs<TiledMmaPV>(tSrS.layout()));
-                    Tensor tOrP = make_tensor_like<Element>(tOrP_acc);
+                    Tensor tOrP = make_tensor_like<ElementV>(tOrP_acc);
 
                     convert_type_out(tOrP_acc, tOrP);
 
-                    if constexpr (Is_FP8 && V_colmajor)
+                    if constexpr (Is_8Bit && V_colmajor)
                     {
                         flash::permute_Aregs_fp8(tOrP);
                     }
@@ -1957,7 +1951,7 @@ namespace flash
                     cutlass::arch::NamedBarrier::arrive(NumMmaThreads, static_cast<uint32_t>(FwdNamedBarriers::PFull) /*id*/);
                 }
                 softmax.rescale_o(tOrO, scores_scale);
-                if constexpr (Is_FP8 && !V_colmajor)
+                if constexpr (Is_8Bit && !V_colmajor)
                 {
                     flash::permute_output_fp8(tOrO);
                 }
