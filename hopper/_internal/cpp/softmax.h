@@ -138,10 +138,16 @@ namespace flash
         // int const local_row_idx;
         int const seqlen_q;
         int const thread_idx;
+        float dequan_s;
 
         // CUTLASS_DEVICE Softmax(float const softmax_scale_log2_, int const row_mask_, int const local_row_idx_) : softmax_scale_log2(softmax_scale_log2_), row_mask(row_mask_), local_row_idx(local_row_idx_) {};
         CUTLASS_DEVICE Softmax(float const softmax_scale_log2_, int const seqlen_q_, int const thread_idx_) 
-            : softmax_scale_log2(softmax_scale_log2_), seqlen_q(seqlen_q_), thread_idx(thread_idx_) {};
+            : softmax_scale_log2(softmax_scale_log2_), seqlen_q(seqlen_q_), thread_idx(thread_idx_), dequan_s(softmax_scale_log2_) {};
+
+        void set_dequan_s(float const dequan_s_)
+        {
+            dequan_s = dequan_s_ * softmax_scale_log2;
+        }
 
         template <int kBlockM, typename TiledMma, bool const Is_first, bool const Check_inf = false, typename Tensor0>
         __forceinline__ __device__ TensorT max_get_scale_detect_qk_skip(
@@ -217,16 +223,16 @@ namespace flash
                         cur = row_max(mi);
                     }
                     float prev = scores_max_prev(mi);
-                    scores_scale(mi) = exp2f((prev - cur) * softmax_scale_log2);
+                    scores_scale(mi) = exp2f((prev - cur) * dequan_s);
                     row_sum(mi) *= scores_scale(mi);
 
-                    // do_qk |= (((scores_max_local(mi) - prev) * softmax_scale_log2) > thr) & row_not_out_of_bounds;
+                    // do_qk |= (((scores_max_local(mi) - prev) * dequan_s) > thr) & row_not_out_of_bounds;
 
                     // do_qk |= ((scores_max_local(mi) * thr) >= prev) & row_not_out_of_bounds;
 
                     // bool cond1 = (scores_max_local(mi) - prev + abs(scores_max_local(mi)) * 0.5f >= 0); // if the current max is at least 1.5 times the previous max
                     bool cond1 = true;
-                    bool cond2 = ((scores_max_local(mi) - prev) * softmax_scale_log2) > thr; // if the current max is more than thr times the previous max
+                    bool cond2 = ((scores_max_local(mi) - prev) * dequan_s) > thr; // if the current max is more than thr times the previous max
                     do_qk |= cond1 & cond2 & row_not_out_of_bounds; // if both conditions are true and the row is not out of bounds, then set do_qk to true
                 }
 
@@ -273,7 +279,7 @@ namespace flash
                         scores_max_cur = row_max(mi);
                     }
 
-                    scores_scale(mi) = exp2f((scores_max_prev(mi) - scores_max_cur) * softmax_scale_log2);
+                    scores_scale(mi) = exp2f((scores_max_prev(mi) - scores_max_cur) * dequan_s);
                     row_sum(mi) *= scores_scale(mi);
                 }
             }
@@ -286,7 +292,7 @@ namespace flash
             // Reshape acc_s from ((2, 2, V), MMA_M, MMA_N) to (nrow=(2, MMA_M), ncol=(2, V, MMA_N))
             Tensor scores = make_tensor(acc_s.data(), flash::convert_layout_acc_rowcol(acc_s.layout()));
             static_assert(CUTE_STATIC_V(size<0>(scores)) == kNRows);
-            flash::template scale_apply_exp2</*Scale_max=*/true, Check_inf, Max_offset>(scores, row_max, softmax_scale_log2);
+            flash::template scale_apply_exp2</*Scale_max=*/true, Check_inf, Max_offset>(scores, row_max, dequan_s);
             // We don't do the reduce across threads here since we don't need to use the row_sum.
             // We do that reduce at the end when we need to normalize the softmax.
             flash::reduce_sum</*zero_init=*/Is_first, /*warp_reduce=*/false>(scores, row_sum);
@@ -310,7 +316,7 @@ namespace flash
                     static constexpr float sum_scale = 1.f / float(1 << Max_offset);
                     sum *= sum_scale;
                 }
-                row_sum(mi) = ((sum == 0.f) | (sum != sum)) ? -INFINITY : row_max(mi) * (softmax_scale_log2 * float(M_LN2)) + __logf(sum);
+                row_sum(mi) = ((sum == 0.f) | (sum != sum)) ? -INFINITY : row_max(mi) * (dequan_s * float(M_LN2)) + __logf(sum);
             }
             return scores_scale;
         };

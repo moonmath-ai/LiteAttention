@@ -537,7 +537,11 @@ namespace flash
                         float const q_descale = params.mainloop.ptr_q_descale == nullptr ? 1.0f : params.mainloop.ptr_q_descale[bidb * get<0>(params.mainloop.stride_q_descale) + bidh_kv * get<1>(params.mainloop.stride_q_descale)];
                         float const k_descale = params.mainloop.ptr_k_descale == nullptr ? 1.0f : params.mainloop.ptr_k_descale[bidb * get<0>(params.mainloop.stride_k_descale) + bidh_kv * get<1>(params.mainloop.stride_k_descale)];
                         softmax_scale_log2 *= q_descale * k_descale;
-                    }                    
+                    }else if constexpr (Is_INT8){
+                        int const m_block = get<1>(block_coord);
+                        float const q_descale = QDescaleTensor(bidb, bidh, m_block);
+                        softmax_scale_log2 *= q_descale;
+                    }
                     const int thread_idx = threadIdx.x - MmaThreadOffset;
 
                     // // DOR: kNRows = 2 * (2 * 128 / 256) = 2

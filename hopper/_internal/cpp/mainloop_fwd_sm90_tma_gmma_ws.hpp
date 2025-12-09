@@ -1496,6 +1496,9 @@ namespace flash
                     flash::gemm</*zero_init=*/false, /*wg_wait=*/0>(tiled_mma_qv, tSrQv, tSrV(_, _, _, smem_pipe_read.index()), tSrS);
                 }
                 scoremod_premask_fn(tSrS);
+                if constexpr (Is_INT8){
+                    softmax.set_dequan_s(KDescaleTensor(bidb, bidh, n_block));
+                }
                 mask.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS, m_block, n_block);
 
                 // Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
@@ -1570,6 +1573,11 @@ namespace flash
                     }
 
                     flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS);
+
+                    if constexpr (Is_INT8){
+                        softmax.set_dequan_s(KDescaleTensor(bidb, bidh, new_n_block));
+                    }
+
                     if constexpr (RescaleOBeforeGemm)
                     {
                         softmax.rescale_o(tOrO, scores_scale);
