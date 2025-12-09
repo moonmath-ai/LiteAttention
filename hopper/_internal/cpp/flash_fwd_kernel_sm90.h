@@ -402,9 +402,10 @@ namespace flash
                 static constexpr bool SingleProducerWarp = NumProducerThreads == cutlass::NumThreadsPerWarp;
                 if constexpr (SingleProducerWarp)
                 {
-                    if (warp_idx_in_warpgroup != 0)
-                    {
-                        return;
+                    if constexpr (!Is_skipable){
+                        if (warp_idx_in_warpgroup != 0) return;
+                    }else{
+                        if (warp_idx_in_warpgroup > 1) return;
                     }
                 }
                 // DOR: why we exclude warp0 here? shoudn't it also init the consumer?
@@ -468,10 +469,21 @@ namespace flash
                         scheduler.prefetch_next_work(params.scheduler, work_tile_info);
                     };
 
-                    should_load_KV = mainloop.load(params.mainloop, pipeline_k, pipeline_v, pipeline_vt, smem_pipe_write,
-                                shared_storage, scheduler_prefetch, seqlen_info, block_coord, work_idx, skip_writer);
-                                // shared_storage, scheduler_prefetch, seqlen_info, block_coord, work_idx, shared_storage.skip_list_storage.writer);
-                                // shared_storage, scheduler_prefetch, seqlen_info, block_coord, work_idx, skip_reader, skip_writer);
+                    if constexpr (!Is_skipable){
+                        should_load_KV = mainloop.load(params.mainloop, pipeline_k, pipeline_v, pipeline_vt, smem_pipe_write,
+                                    shared_storage, scheduler_prefetch, seqlen_info, block_coord, work_idx, skip_writer);
+                                    // shared_storage, scheduler_prefetch, seqlen_info, block_coord, work_idx, shared_storage.skip_list_storage.writer);
+                                    // shared_storage, scheduler_prefetch, seqlen_info, block_coord, work_idx, skip_reader, skip_writer);
+                    }else{
+                        if(warp_idx_in_warpgroup == 0){
+                            should_load_KV = mainloop.load(params.mainloop, pipeline_k, pipeline_v, pipeline_vt, smem_pipe_write,
+                                        shared_storage, scheduler_prefetch, seqlen_info, block_coord, work_idx, skip_writer);
+                                        // shared_storage, scheduler_prefetch, seqlen_info, block_coord, work_idx, shared_storage.skip_list_storage.writer);
+                                        // shared_storage, scheduler_prefetch, seqlen_info, block_coord, work_idx, skip_reader, skip_writer);
+                        }else{
+                            mainloop.skip_consumer(params.mainloop, shared_storage, block_coord);
+                        }
+                    }
 
                 }
                 mainloop.load_tail(pipeline_k, pipeline_v, pipeline_vt, smem_pipe_write, shared_storage, work_idx, skip_writer, should_load_KV);

@@ -664,7 +664,6 @@ namespace flash
         // - block_coord: current block coordinates (m_block, head, batch, split)
         // - work_idx: current work iteration index
         template <typename SchedulerPrefetch, typename SharedStorage>
-        // CUTLASS_DEVICE void
         CUTLASS_DEVICE bool
         load(Params const &params,
              MainloopPipelineK pipeline_k,
@@ -1152,6 +1151,46 @@ namespace flash
             // At the end, all threads have the correct smem_pipe_write.
             ++work_idx;
             return should_load_KV;
+        }
+
+        template <typename SharedStorage>
+        CUTLASS_DEVICE bool
+        skip_consumer(Params const &params,
+                      SharedStorage &shared_storage,
+                      cute::tuple<int32_t, int32_t, int32_t, int32_t> block_coord)
+        {
+            // Initialize skip_reader with shared memory buffers
+            DelayedSkipListReader<kStages> skip_reader(
+                shared_storage.skip_list_storage.n_blocks_buffer,
+                shared_storage.skip_list_storage.skip_tests,
+                shared_storage.skip_list_storage.last_n_block
+            );
+
+            // // Initialize skip_writer in shared memory with shared memory buffers
+            // // Use placement new to initialize the writer that resides in shared memory
+            // new (&shared_storage.skip_list_storage.writer) DelayedSkipListWriter<CollectiveMainloop::kStages, ReverseSkipList, Phase, HasMustDoList>(
+            //     shared_storage.skip_list_storage.n_blocks_buffer,
+            //     shared_storage.skip_list_storage.end_range_buffer,
+            //     shared_storage.skip_list_storage.skip_tests
+            // );
+            // consider: move this to shared memory to reduce register pressure + not needing to worry about which thread been elected
+            // Initialize skip_writer with shared memory buffers
+            DelayedSkipListWriter<CollectiveMainloop::kStages, ReverseSkipList, Phase, HasMustDoList> skip_writer(
+                shared_storage.skip_list_storage.n_blocks_buffer,
+                shared_storage.skip_list_storage.end_range_buffer,
+                shared_storage.skip_list_storage.skip_tests
+            );
+            // TODO: producer_acquire for the skip_tests area needed in memory before
+            //       calling the init (or simply start the state already acquired)
+            skip_writer.template init<TileShape_MNK>(params, bidb, bidh, m_block);
+            // TODO: release all the states after the init
+
+            do{
+                // TODO: read next n_block
+                int n_block = skip_reader.next_n_block();
+                // TODO: 
+            }while(skip_reader.has_more(n_block));
+
         }
 
         template <typename SharedStorage>
