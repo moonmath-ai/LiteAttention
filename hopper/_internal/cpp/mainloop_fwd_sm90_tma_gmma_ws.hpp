@@ -1393,6 +1393,25 @@ namespace flash
                 float const k_descale = params.ptr_k_descale == nullptr ? 1.0f : params.ptr_k_descale[bidb * get<0>(params.stride_k_descale) + bidh_kv * get<1>(params.stride_k_descale)];
                 softcap_val *= q_descale * k_descale;
             }
+            
+            // For INT8: Create K descale tensor sliced by (bidb, bidh) for efficient n_block indexing
+            // Shape is (batch, head, n_blocks) with stride (head*n_blocks, n_blocks, 1)
+            // We slice once to get a 1D view indexed only by n_block
+            auto KDescaleSliced = [&]() {
+                if constexpr (Is_INT8) {
+                    // 3D stride: batch stride = get<0>, head stride = get<1>, n_block stride = 1
+                    auto stride_k_descale_3d = make_stride(get<0>(params.stride_k_descale), get<1>(params.stride_k_descale), _1{});
+                    // Shape: (batch, head_kv, n_block_max) - n_block_max can be any value >= actual n_blocks
+                    auto shape_k_descale_3d = make_shape(get<3>(params.shape_K), get<2>(params.shape_K), n_block_max);
+                    Tensor mKDescale = make_tensor(make_gmem_ptr(params.ptr_k_descale), shape_k_descale_3d, stride_k_descale_3d);
+                    // Slice by bidb and bidh_kv to get 1D tensor indexed by n_block
+                    return mKDescale(bidb, bidh_kv, _);
+                } else {
+                    // Placeholder for non-INT8 - won't be used
+                    return make_tensor(make_gmem_ptr(static_cast<float const*>(nullptr)), make_shape(_1{}));
+                }
+            }();
+
             // Softcapping needs to happen before masking since if we apply after masking, softcapping
             // can turn -inf to e.g. -50.0, which can affect the attention softmax.
             auto scoremod_premask_fn = [&](auto &tSrS)
@@ -1499,7 +1518,7 @@ namespace flash
                 }
                 scoremod_premask_fn(tSrS);
                 if constexpr (Is_INT8){
-                    softmax.set_dequan_s(KDescaleTensor(bidb, bidh, n_block));
+                    softmax.set_dequan_s(KDescaleSliced(n_block));
                 }
                 mask.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS, m_block, n_block);
 
@@ -1577,7 +1596,7 @@ namespace flash
                     flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS);
 
                     if constexpr (Is_INT8){
-                        softmax.set_dequan_s(KDescaleTensor(bidb, bidh, new_n_block));
+                        softmax.set_dequan_s(KDescaleSliced(new_n_block));
                     }
 
                     if constexpr (RescaleOBeforeGemm)
@@ -1788,6 +1807,9 @@ namespace flash
                     }
 
                     scoremod_premask_fn(tSrS);
+                    if constexpr (Is_INT8){
+                        softmax.set_dequan_s(KDescaleSliced(new_n_block));
+                    }
                     mask_fn(tSrS, new_n_block);
                     // Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
                     Tensor scores_scale = [&]
