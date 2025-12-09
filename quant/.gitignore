@@ -1,0 +1,28 @@
+# Build artifacts
+build/
+dist/
+
+# Python compiled files
+*.so
+*.pyc
+*.pyo
+__pycache__/
+
+# Package info
+*.egg-info/
+*.egg
+
+# IDE/Editor files
+.vscode/
+.clangd
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Log files
+*.log
+third_party/
