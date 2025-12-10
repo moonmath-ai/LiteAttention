@@ -441,7 +441,7 @@ void run_mha_fwd_combine(Flash_fwd_params &params, cudaStream_t stream, bool ena
 inline bool get_pagedkv_tma(Flash_fwd_params const& params) {
     if (params.arch < 90 || !params.page_table || params.leftpad_k || params.knew_ptr) { return false; }
     // This needs to match the kernel configs
-    auto kBlockMN_kernel_args_sm90 = tile_size_fwd_sm90(params.d_rounded, params.dv_rounded, params.is_causal, params.is_local, (params.is_e4m3 || params.is_int8) ? 1 : 2 /*element_size*/, false /*v_colmajor*/, false /*paged_kv_non_TMA*/, params.softcap > 0.f, params.is_skipable);
+    auto kBlockMN_kernel_args_sm90 = tile_size_fwd_sm90(params.d_rounded, params.dv_rounded, params.is_causal, params.is_local, (params.is_e4m3 || params.is_int8) ? 1 : 2 /*element_size*/, false /*v_colmajor*/, false /*paged_kv_non_TMA*/, params.softcap > 0.f, params.is_skipable, params.is_int8);
     int const kBlockM = std::get<0>(kBlockMN_kernel_args_sm90);
     int const kBlockN = std::get<1>(kBlockMN_kernel_args_sm90);
     // Heuristic: when seqlen_q <= kBlockM, we're not compute bound, and somehow using TMA is slower,
@@ -459,7 +459,7 @@ inline bool get_pack_gqa(Flash_fwd_params const& params) {
     // params.page_table must already be set
     if (params.h == params.h_k) { return false; }
     // This needs to match the kernel configs
-    auto kBlockMN_kernel_args_sm90 = tile_size_fwd_sm90(params.d_rounded, params.dv_rounded, params.is_causal, params.is_local, (params.is_e4m3 || params.is_int8) ? 1 : 2 /*element_size*/, false /*v_colmajor*/, params.page_table && !params.pagedkv_tma, params.softcap > 0.f, params.is_skipable);
+    auto kBlockMN_kernel_args_sm90 = tile_size_fwd_sm90(params.d_rounded, params.dv_rounded, params.is_causal, params.is_local, (params.is_e4m3 || params.is_int8) ? 1 : 2 /*element_size*/, false /*v_colmajor*/, params.page_table && !params.pagedkv_tma, params.softcap > 0.f, params.is_skipable, params.is_int8);
     int const kBlockM = std::get<0>(kBlockMN_kernel_args_sm90);
     return should_pack_gqa(params.cu_seqlens_q || params.seqused_q, params.seqlen_q, params.h / params.h_k, kBlockM);
     #endif
@@ -473,7 +473,7 @@ inline int get_num_splits(Flash_fwd_params const& params) {
     // params.page_table must already be set
     // This needs to match the kernel configs
     bool varlen = params.cu_seqlens_q || params.cu_seqlens_k || params.seqused_q || params.seqused_k || params.leftpad_k;
-    auto kBlockMN_kernel_args_sm90 = tile_size_fwd_sm90(params.d_rounded, params.dv_rounded, params.is_causal, params.is_local, (params.is_e4m3 || params.is_int8) ? 1 : 2 /*element_size*/, false /*v_colmajor*/, params.page_table && !params.pagedkv_tma, params.softcap > 0.f, params.is_skipable);
+    auto kBlockMN_kernel_args_sm90 = tile_size_fwd_sm90(params.d_rounded, params.dv_rounded, params.is_causal, params.is_local, (params.is_e4m3 || params.is_int8) ? 1 : 2 /*element_size*/, false /*v_colmajor*/, params.page_table && !params.pagedkv_tma, params.softcap > 0.f, params.is_skipable, params.is_int8);
     // Strictly speaking we need to pass in (varlen && params.num_splits > 1) but num_splits
     // has not been set here. It's OK though because we might just underestimate kBlockN a bit
     auto kBlockMN_kernel_args_sm8x = tile_size_fwd_sm8x(params.arch == 86 || params.arch == 89, params.d_rounded, params.dv_rounded, params.is_causal, params.is_local, (params.is_e4m3 || params.is_int8) ? 1 : 2 /*element_size*/, params.page_table, varlen, params.softcap > 0.f, params.knew_ptr);
@@ -677,7 +677,7 @@ mha_fwd_get_scheduler_metadata(
     }
 
     if (use_prepare_varlen) {
-        auto kBlockMN_kernel_args_sm90 = tile_size_fwd_sm90(params.d_rounded, params.dv_rounded, params.is_causal, params.is_local, (params.is_e4m3 || params.is_int8) ? 1 : 2 /*element_size*/, false /*v_colmajor*/, params.page_table && !params.pagedkv_tma, params.softcap > 0.f, params.is_skipable);
+        auto kBlockMN_kernel_args_sm90 = tile_size_fwd_sm90(params.d_rounded, params.dv_rounded, params.is_causal, params.is_local, (params.is_e4m3 || params.is_int8) ? 1 : 2 /*element_size*/, false /*v_colmajor*/, params.page_table && !params.pagedkv_tma, params.softcap > 0.f, params.is_skipable, params.is_int8);
         auto kBlockMN_kernel_args_sm8x = tile_size_fwd_sm8x(params.arch == 86 || params.arch == 89, params.d_rounded, params.dv_rounded, params.is_causal, params.is_local, (params.is_e4m3 || params.is_int8) ? 1 : 2 /*element_size*/, params.page_table, is_varlen && params.num_splits > 1, params.softcap > 0.f, params.knew_ptr);
         int const kBlockM = params.arch >= 90 ? std::get<0>(kBlockMN_kernel_args_sm90) : std::get<0>(kBlockMN_kernel_args_sm8x);
         int const kBlockN = params.arch >= 90 ? std::get<1>(kBlockMN_kernel_args_sm90) : std::get<1>(kBlockMN_kernel_args_sm8x);
@@ -1220,25 +1220,50 @@ mha_fwd(at::Tensor q,   // (b, s_q, h, d) or (total_q, h, d) if there is cu_seql
     }
 
     if (q_type == at::ScalarType::Float8_e4m3fn || q_type == torch::kInt8) {
+        bool const is_int8 = q_type == torch::kInt8;
         if (q_descale_.has_value()) {
             auto q_descale = q_descale_.value();
             CHECK_DEVICE(q_descale);
+            if (is_int8) {
+                // INT8: 3D tensor (batch, heads, m_blocks)
+                TORCH_CHECK(q_descale.dim() == 3, "q_descale must be 3D for INT8 (batch, heads, m_blocks)");
+                params.q_descale_ptr = q_descale.data_ptr<float>();
+                params.q_descale_batch_stride = q_descale.stride(0);
+                params.q_descale_head_stride = q_descale.stride(1);
+                params.q_descale_block_stride = q_descale.stride(2);
+            } else {
+                // FP8: 2D tensor (batch, heads)
             CHECK_SHAPE(q_descale, batch_size, num_heads_k);
             params.q_descale_ptr = q_descale.data_ptr<float>();
             params.q_descale_batch_stride = q_descale.stride(0);
             params.q_descale_head_stride = q_descale.stride(1);
+                params.q_descale_block_stride = 0;  // Not used for FP8
+            }
         } else {
             params.q_descale_ptr = nullptr;
+            params.q_descale_block_stride = 0;
         }
         if (k_descale_.has_value()) {
             auto k_descale = k_descale_.value();
             CHECK_DEVICE(k_descale);
+            if (is_int8) {
+                // INT8: 3D tensor (batch, heads, n_blocks)
+                TORCH_CHECK(k_descale.dim() == 3, "k_descale must be 3D for INT8 (batch, heads, n_blocks)");
+                params.k_descale_ptr = k_descale.data_ptr<float>();
+                params.k_descale_batch_stride = k_descale.stride(0);
+                params.k_descale_head_stride = k_descale.stride(1);
+                params.k_descale_block_stride = k_descale.stride(2);
+            } else {
+                // FP8: 2D tensor (batch, heads)
             CHECK_SHAPE(k_descale, batch_size, num_heads_k);
             params.k_descale_ptr = k_descale.data_ptr<float>();
             params.k_descale_batch_stride = k_descale.stride(0);
             params.k_descale_head_stride = k_descale.stride(1);
+                params.k_descale_block_stride = 0;  // Not used for FP8
+            }
         } else {
             params.k_descale_ptr = nullptr;
+            params.k_descale_block_stride = 0;
         }
         // v_descale only for FP8, not INT8 (INT8 has bf16 V)
         if (q_type == at::ScalarType::Float8_e4m3fn && v_descale_.has_value()) {
@@ -1776,6 +1801,18 @@ mha_combine(at::Tensor out_partial,         // num_splits x batch_size x seqlen 
     return {out, softmax_lse};
 }
 
+// Wrapper function to expose tile_size_fwd_sm90 to Python
+// Returns [kBlockM, kBlockN, MmaPV_is_RS, IntraWGOverlap]
+std::vector<int64_t> get_tile_size_fwd_sm90(
+        int64_t headdim, int64_t headdim_v, bool is_causal, bool is_local, int64_t element_size,
+        bool v_colmajor, bool paged_kv_non_TMA, bool softcap, bool is_skipable, bool is_int8) {
+    auto [kBlockM, kBlockN, MmaPV_is_RS, IntraWGOverlap] = tile_size_fwd_sm90(
+        static_cast<int>(headdim), static_cast<int>(headdim_v), is_causal, is_local, 
+        static_cast<int>(element_size), v_colmajor, paged_kv_non_TMA, softcap, is_skipable, is_int8);
+    return {static_cast<int64_t>(kBlockM), static_cast<int64_t>(kBlockN), 
+            static_cast<int64_t>(MmaPV_is_RS), static_cast<int64_t>(IntraWGOverlap)};
+}
+
 TORCH_LIBRARY(lite_attention, m) {
     m.def("fwd("
         "Tensor q,"
@@ -1873,6 +1910,17 @@ TORCH_LIBRARY(lite_attention, m) {
         "int num_splits = 0,"
         "bool? pack_gqa = None,"
         "int sm_margin = 0) -> Tensor");
+    m.def("get_tile_size_fwd_sm90("
+        "int headdim,"
+        "int headdim_v,"
+        "bool is_causal,"
+        "bool is_local,"
+        "int element_size = 2,"
+        "bool v_colmajor = False,"
+        "bool paged_kv_non_TMA = False,"
+        "bool softcap = False,"
+        "bool is_skipable = False,"
+        "bool is_int8 = False) -> int[]", &get_tile_size_fwd_sm90);
 }
 
 TORCH_LIBRARY_IMPL(lite_attention, CUDA, m) {

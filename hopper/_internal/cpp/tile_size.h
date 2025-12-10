@@ -9,7 +9,7 @@
 // Return {kBlockM, kBlockN, MmaPV_is_RS, IntraWGOverlap}
 constexpr std::tuple<int, int, bool, bool> tile_size_fwd_sm90(
         int headdim, int headdim_v, bool is_causal, bool is_local, int element_size=2,
-        bool v_colmajor=false, bool paged_kv_non_TMA=false, bool softcap=false, bool is_skipable=false) {
+        bool v_colmajor=false, bool paged_kv_non_TMA=false, bool softcap=false, bool is_skipable=false, bool is_int8 = false) {
     // DOR: change this to true to activate intra-warpgroup overlap again
     // const bool maybe_intra_wg_overlap = !is_skipable;
     const bool maybe_intra_wg_overlap = true;
@@ -58,16 +58,31 @@ constexpr std::tuple<int, int, bool, bool> tile_size_fwd_sm90(
             return {128, is_local ? 64 : 80, true, true && maybe_intra_wg_overlap};  // 128 x 80 hits the limit of smem
         }
     } else {
-        if (headdim <= 64) {
-            return {192, 160, true, true && maybe_intra_wg_overlap};
-        } else if (headdim <= 96) {
-            return {192, 128, true, true && maybe_intra_wg_overlap};
-        } else if (headdim <= 128) {
-            return {128, paged_kv_non_TMA ? 160 : (v_colmajor || (softcap && is_local) ? 192 : 224), true, true};
-        } else if (headdim <= 192) {
-            return {128, (paged_kv_non_TMA || softcap) && is_local ? 128 : 160, true, true && maybe_intra_wg_overlap};
-        } else {
-            return {128, is_local ? 64 : 128, true, !paged_kv_non_TMA && maybe_intra_wg_overlap};  // PagedKV uses more registers so we disabled IntraWGOverlap
+        if (is_int8){
+            if (headdim <= 64) {
+                return {128, 224, true, true && maybe_intra_wg_overlap};
+            } else if (headdim <= 96) {
+                return {128, 208, true, true && maybe_intra_wg_overlap};
+            } else if (headdim <= 128) {
+                bool const use_blockN_128 = is_causal || is_local || paged_kv_non_TMA;
+                return {128, use_blockN_128 ? 128 : 176, true, true && maybe_intra_wg_overlap};
+            } else if (headdim <= 192) {
+                return {128, paged_kv_non_TMA || is_local ? 96 : (headdim_v <= 128 ? 128 : 112), true, true && maybe_intra_wg_overlap};  // 128 x 112 hits the limit of smem
+            } else {
+                return {128, is_local ? 64 : 80, true, true && maybe_intra_wg_overlap};  // 128 x 80 hits the limit of smem
+            }
+        }else{
+            if (headdim <= 64) {
+                return {192, 160, true, true && maybe_intra_wg_overlap};
+            } else if (headdim <= 96) {
+                return {192, 128, true, true && maybe_intra_wg_overlap};
+            } else if (headdim <= 128) {
+                return {128, paged_kv_non_TMA ? 160 : (v_colmajor || (softcap && is_local) ? 192 : 224), true, true};
+            } else if (headdim <= 192) {
+                return {128, (paged_kv_non_TMA || softcap) && is_local ? 128 : 160, true, true && maybe_intra_wg_overlap};
+            } else {
+                return {128, is_local ? 64 : 128, true, !paged_kv_non_TMA && maybe_intra_wg_overlap};  // PagedKV uses more registers so we disabled IntraWGOverlap
+            }
         }
     }
 }
