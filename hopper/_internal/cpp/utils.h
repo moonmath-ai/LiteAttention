@@ -7,6 +7,7 @@
 #include <assert.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <limits>
 
 #include <cuda_fp16.h>
 
@@ -26,6 +27,20 @@
 namespace flash {
 
 using namespace cute;
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// Helper to get the mask value for a given element type
+// For floating point types: -INFINITY
+// For integer types: most negative value (e.g., INT32_MIN for int32_t)
+template <typename T>
+CUTLASS_HOST_DEVICE constexpr T get_mask_value() {
+    if constexpr (std::is_floating_point_v<T>) {
+        return -INFINITY;
+    } else {
+        return std::numeric_limits<T>::lowest();
+    }
+}
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
