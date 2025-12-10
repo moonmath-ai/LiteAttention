@@ -81,6 +81,10 @@ from typing import Optional, Tuple, Union
 
 from ._internal.flash_attn_interface import flash_attn_func
 
+# Import the C++ extension to register operators with PyTorch
+import lite_attention._C  # noqa: F401
+_lite_attention_ops = torch.ops.lite_attention
+
 
 class LiteAttention:
     """
@@ -248,7 +252,7 @@ class LiteAttention:
         return LiteAttention.calc_percentage_per_head(read_list).mean()
 
     @staticmethod
-    def get_MN(head_dim, element_size, v_colmajor=False):
+    def get_MN(head_dim, element_size, v_colmajor=False, is_int8=False):
         """
         Get the tile sizes (block dimensions) for attention computation.
         
@@ -256,50 +260,38 @@ class LiteAttention:
         for computation. Different head dimensions and data types require different
         tile sizes for optimal performance.
         
-        **Important**: This logic is designed to mirror the tile size selection in
-        `tile_size_fwd_sm90()` from `tile_size.h`. The if-statement structure and
-        tile size values should match to ensure consistency with the CUDA kernel.
+        This function directly calls the C++ `tile_size_fwd_sm90()` function from
+        `tile_size.h` to ensure consistency between Python and CUDA kernel tile sizes.
         
         Args:
             head_dim (int): Dimension of each attention head
             element_size (int): Size in bytes of each element (2 for fp16/bf16, 4 for fp32)
             v_colmajor (bool, optional): Whether value tensor is column-major. Defaults to False.
+            is_int8 (bool, optional): Whether using int8 quantization. Defaults to False.
         
         Returns:
             tuple[int, int]: (kBlockM, kBlockN) where:
                 - kBlockM: Number of rows per tile (query dimension)
                 - kBlockN: Number of columns per tile (key dimension)
-        
-        Note:
-        ----
-        If the C++ kernel's tile size logic is updated in `tile_size.h`, this Python
-        function must be updated to match the same branching structure and values.
         """
-        if element_size == 2:
-            if head_dim <= 64:
-                # return 192, 192
-                return 128, 224
-            elif head_dim <= 96:
-                # return 192, 144
-                return 128, 208
-            elif head_dim <= 128:
-                return 128, 176
-                # return 128, 192
-            elif head_dim <= 192:
-                return 128, 112
-            else:
-                return 128, 80
-        else:
-            if head_dim <= 64:
-                return 192, 160
-            elif head_dim <= 96:
-                return 192, 128
-            elif head_dim <= 128:
-                return 128, (192 if v_colmajor else 224)
-            elif head_dim <= 192:
-                return 128, 160
-            else:
-                return 128, 128
+        # Call C++ tile_size_fwd_sm90 function
+        # Arguments: headdim, headdim_v, is_causal, is_local, element_size, 
+        #            v_colmajor, paged_kv_non_TMA, softcap, is_skipable, is_int8
+        # Returns: [kBlockM, kBlockN, MmaPV_is_RS, IntraWGOverlap]
+        result = _lite_attention_ops.get_tile_size_fwd_sm90(
+            head_dim,           # headdim
+            head_dim,           # headdim_v (same as headdim for standard attention)
+            False,              # is_causal (not relevant for skipable case)
+            False,              # is_local
+            element_size,       # element_size (2 for fp16/bf16, 4 for fp32)
+            v_colmajor,         # v_colmajor
+            False,              # paged_kv_non_TMA
+            False,              # softcap
+            True,               # is_skipable (always True for LiteAttention skip list)
+            is_int8             # is_int8
+        )
+        kBlockM, kBlockN = result[0], result[1]
+        return kBlockM, kBlockN
 
     @staticmethod
     def init_skip_list(batch, seq_len, heads, head_dim, v_colmajor, dtype, device, must_skip_list: list = None, reverse_skip_list: bool = True) -> torch.Tensor:

@@ -1801,6 +1801,18 @@ mha_combine(at::Tensor out_partial,         // num_splits x batch_size x seqlen 
     return {out, softmax_lse};
 }
 
+// Wrapper function to expose tile_size_fwd_sm90 to Python
+// Returns [kBlockM, kBlockN, MmaPV_is_RS, IntraWGOverlap]
+std::vector<int64_t> get_tile_size_fwd_sm90(
+        int64_t headdim, int64_t headdim_v, bool is_causal, bool is_local, int64_t element_size,
+        bool v_colmajor, bool paged_kv_non_TMA, bool softcap, bool is_skipable, bool is_int8) {
+    auto [kBlockM, kBlockN, MmaPV_is_RS, IntraWGOverlap] = tile_size_fwd_sm90(
+        static_cast<int>(headdim), static_cast<int>(headdim_v), is_causal, is_local, 
+        static_cast<int>(element_size), v_colmajor, paged_kv_non_TMA, softcap, is_skipable, is_int8);
+    return {static_cast<int64_t>(kBlockM), static_cast<int64_t>(kBlockN), 
+            static_cast<int64_t>(MmaPV_is_RS), static_cast<int64_t>(IntraWGOverlap)};
+}
+
 TORCH_LIBRARY(lite_attention, m) {
     m.def("fwd("
         "Tensor q,"
@@ -1898,6 +1910,17 @@ TORCH_LIBRARY(lite_attention, m) {
         "int num_splits = 0,"
         "bool? pack_gqa = None,"
         "int sm_margin = 0) -> Tensor");
+    m.def("get_tile_size_fwd_sm90("
+        "int headdim,"
+        "int headdim_v,"
+        "bool is_causal,"
+        "bool is_local,"
+        "int element_size = 2,"
+        "bool v_colmajor = False,"
+        "bool paged_kv_non_TMA = False,"
+        "bool softcap = False,"
+        "bool is_skipable = False,"
+        "bool is_int8 = False) -> int[]", &get_tile_size_fwd_sm90);
 }
 
 TORCH_LIBRARY_IMPL(lite_attention, CUDA, m) {
