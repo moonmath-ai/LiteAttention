@@ -386,7 +386,7 @@ def test_flash_attn_cluster(seqlen_q, seqlen_k, d, causal, dtype):
 
 
 # @pytest.mark.parametrize("dtype", ([torch.float16] if is_sm75 else [torch.float16, torch.bfloat16]))
-@pytest.mark.skip(reason="Skipping this test due to memory issues")
+@pytest.mark.skip(reason="Skip for now")
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
 @pytest.mark.parametrize("causal", [False, True])
 # @pytest.mark.parametrize('causal', [False])
@@ -512,8 +512,8 @@ def test_flash3_bw_compatibility() -> None:
     # for downstream libaries, users, and exported models.
     # 1/ Instead of removing arguments, error out if their value is no longer supported
     # 2/ When adding arguments, add them at the end with a default value
-    assert torch.ops.flash_attn_3.fwd.default._schema.is_backward_compatible_with(parse_schema(
-        "flash_attn_3::fwd(Tensor q, Tensor k, Tensor v, Tensor(k_new!)? k_new=None, "
+    assert torch.ops.lite_attention.fwd.default._schema.is_backward_compatible_with(parse_schema(
+        "lite_attention::fwd(Tensor q, Tensor k, Tensor v, Tensor(k_new!)? k_new=None, "
         "Tensor(v_new!)? v_new=None, Tensor? q_v=None, Tensor(out!)? out=None, "
         "Tensor? cu_seqlens_q=None, Tensor? cu_seqlens_k=None, "
         "Tensor? cu_seqlens_k_new=None, Tensor? seqused_q=None, Tensor? seqused_k=None, "
@@ -525,20 +525,20 @@ def test_flash3_bw_compatibility() -> None:
         "Tensor? scheduler_metadata=None, int num_splits=0, bool? pack_gqa=None, int sm_margin=0) "
         "-> (Tensor(out!), Tensor, Tensor, Tensor)"
     ))
-    assert torch.ops.flash_attn_3.bwd.default._schema.is_backward_compatible_with(parse_schema(
-        "flash_attn_3::bwd(Tensor dout, Tensor q, Tensor k, Tensor v, Tensor out, Tensor softmax_lse, "
+    assert torch.ops.lite_attention.bwd.default._schema.is_backward_compatible_with(parse_schema(
+        "lite_attention::bwd(Tensor dout, Tensor q, Tensor k, Tensor v, Tensor out, Tensor softmax_lse, "
         "Tensor(dq!)? dq=None, Tensor(dk!)? dk=None, Tensor(dv!)? dv=None, Tensor? cu_seqlens_q=None, "
         "Tensor? cu_seqlens_k=None, Tensor? seqused_q=None, Tensor? seqused_k=None, int? max_seqlen_q=None, "
         "int? max_seqlen_k=None, float? softmax_scale=None, bool is_causal=False, int window_size_left=-1, "
         "int window_size_right=-1, float softcap=0., bool deterministic=False, int sm_margin=0) "
         "-> (Tensor(dq!), Tensor(dk!), Tensor(dv!), Tensor, Tensor, Tensor, Tensor, Tensor)"
     ))
-    assert torch.ops.flash_attn_3.fwd_combine.default._schema.is_backward_compatible_with(parse_schema(
-        "flash_attn_3::fwd_combine(Tensor out_partial, Tensor lse_partial, Tensor(out!)? out=None, "
+    assert torch.ops.lite_attention.fwd_combine.default._schema.is_backward_compatible_with(parse_schema(
+        "lite_attention::fwd_combine(Tensor out_partial, Tensor lse_partial, Tensor(out!)? out=None, "
         "ScalarType? out_dtype=None) -> (Tensor(out!), Tensor)"
     ))
-    assert torch.ops.flash_attn_3.get_scheduler_metadata.default._schema.is_backward_compatible_with(parse_schema(
-        "flash_attn_3::get_scheduler_metadata(int batch_size, int max_seqlen_q, int max_seqlen_k, "
+    assert torch.ops.lite_attention.get_scheduler_metadata.default._schema.is_backward_compatible_with(parse_schema(
+        "lite_attention::get_scheduler_metadata(int batch_size, int max_seqlen_q, int max_seqlen_k, "
         "int num_heads, int num_heads_k, int headdim, int headdim_v, ScalarType qkv_dtype, Tensor seqused_k, "
         "Tensor? cu_seqlens_q=None, Tensor? cu_seqlens_k=None, Tensor? cu_seqlens_k_new=None, "
         "Tensor? seqused_q=None, Tensor? leftpad_k=None, int? page_size=None, int max_seqlen_k_new=0, "
