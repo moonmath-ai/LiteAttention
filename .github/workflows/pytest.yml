@@ -8,7 +8,7 @@ on:
 jobs:
   test:
     name: Run LiteAttention Tests
-    runs-on: [self-hosted]
+    runs-on: [self-hosted, gpu]
 
     steps:
       - name: Checkout code
@@ -25,12 +25,11 @@ jobs:
           push: false
           load: true
           tags: liteattention-test:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
       - name: Run pytest tests
         run: |
           docker run --rm \
+            -gpus=all \
             -v ${{ github.workspace }}:/workspace \
             -w /workspace/hopper \
             liteattention-test:latest \
