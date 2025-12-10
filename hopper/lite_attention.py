@@ -627,8 +627,33 @@ class LiteAttention:
     def _quantize_query_key(self, query: torch.Tensor, key: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         if self.int8_mode:
             kBlockM, kBlockN = LiteAttention.get_MN(query.shape[-1], torch.int8)
-            # TODO: fill this @tarik
-            return query, key, q_descale, k_descale
+            batch, seq_len, heads, head_dim = query.shape
+            
+            # Quantize query per kBlockM tokens
+            num_q_blocks = self.ceil_div(seq_len, kBlockM)
+            q_padded_len = num_q_blocks * kBlockM
+            q_pad = q_padded_len - seq_len
+            query_padded = torch.nn.functional.pad(query, (0, 0, 0, 0, 0, q_pad)) if q_pad > 0 else query
+            q_reshaped = query_padded.view(batch, num_q_blocks, kBlockM, heads, head_dim)
+            q_amax = q_reshaped.abs().amax(dim=(2, 4)).clamp(min=1e-7)  # [batch, num_q_blocks, heads]
+            q_scale = q_amax / 127.0
+            q_int8 = (q_reshaped / q_scale[:, :, None, :, None]).round().clamp(-128, 127).to(torch.int8)
+            q_int8 = q_int8.view(batch, q_padded_len, heads, head_dim)[:, :seq_len]
+            q_descale = q_scale.permute(0, 2, 1).contiguous()  # [batch, heads, num_q_blocks]
+            
+            # Quantize key per kBlockN tokens
+            num_k_blocks = self.ceil_div(seq_len, kBlockN)
+            k_padded_len = num_k_blocks * kBlockN
+            k_pad = k_padded_len - seq_len
+            key_padded = torch.nn.functional.pad(key, (0, 0, 0, 0, 0, k_pad)) if k_pad > 0 else key
+            k_reshaped = key_padded.view(batch, num_k_blocks, kBlockN, heads, head_dim)
+            k_amax = k_reshaped.abs().amax(dim=(2, 4)).clamp(min=1e-7)  # [batch, num_k_blocks, heads]
+            k_scale = k_amax / 127.0
+            k_int8 = (k_reshaped / k_scale[:, :, None, :, None]).round().clamp(-128, 127).to(torch.int8)
+            k_int8 = k_int8.view(batch, k_padded_len, heads, head_dim)[:, :seq_len]
+            k_descale = k_scale.permute(0, 2, 1).contiguous()  # [batch, heads, num_k_blocks]
+            
+            return q_int8, k_int8, q_descale, k_descale
         else:
             return query, key, None, None
     
