@@ -76,17 +76,20 @@ namespace flash
         // Tile shape for Q@V multiplication when HasQv is true
         using TileShape_MNK_QV = Shape<decltype(get<0>(TileShape_MNK{})), decltype(get<1>(TileShape_MNK{})), Int<kHeadDimV>>;
         using Element = Element_;
-        using ElementV = std::conditional_t<Is_INT8, cute::bfloat16_t, Element>;
-        using ElementAccum = ElementAccum_;
-        using ElementAccumQK = std::conditional_t<Is_INT8, int32_t, ElementAccum>;
-        using ArchTag = ArchTag_;
-
-        // Check if using FP8 data types (either E4M3 or E5M2)
+        
+        // Check if using FP8 data types (either E4M3 or E5M2) - must be defined before ElementV
         static constexpr bool Is_FP8 = cute::is_same_v<Element, cutlass::float_e4m3_t> || cute::is_same_v<Element, cutlass::float_e5m2_t>;
-        // Check if using INT8 data type
+        // Check if using INT8 data type - must be defined before ElementV
         static constexpr bool Is_INT8 = cute::is_same_v<Element, int8_t>;
         // Combined check for any 8-bit type
         static constexpr bool Is_8Bit = Is_FP8 || Is_INT8;
+        
+        // For INT8, V uses bfloat16 (not int8) to maintain precision
+        using ElementV = std::conditional_t<Is_INT8, cute::bfloat16_t, Element>;
+        using ElementAccum = ElementAccum_;
+        // For INT8, QK accumulation uses int32 for precision
+        using ElementAccumQK = std::conditional_t<Is_INT8, int32_t, ElementAccum>;
+        using ArchTag = ArchTag_;
         static constexpr bool Is_causal = Is_causal_;
         static constexpr bool Is_local = Is_local_;
         static constexpr bool Has_softcap = Has_softcap_;
@@ -166,7 +169,7 @@ namespace flash
                                                     TileShape_MNK_PV, GMMA::Major::K, MmaMajorV>())>{},
             AtomLayoutPV{}));
         using TiledMmaQV = decltype(cute::make_tiled_mma(
-            cute::GMMA::ss_op_selector<Element, Element, ElementAccum, TileShape_MNK_QV>(),
+            cute::GMMA::ss_op_selector<ElementV, ElementV, ElementAccum, TileShape_MNK_QV>(),
             AtomLayoutQK{}));
         // For hdim64,512, WG1 can use RS but WG2 must use SS
         using TiledMmaPV_RS = decltype(cute::make_tiled_mma(
@@ -205,10 +208,12 @@ namespace flash
             make_shape(Int<kHeadDimV>{}, shape<2>(TileShape_MNK_PV{}), Int<kStages>{}),
             std::conditional_t<MmaMajorV == GMMA::Major::K, cute::Step<_1, _2, _3>, cute::Step<_2, _1, _3>>{}));
 
-        using SmemLayoutAtomQv = decltype(cutlass::gemm::collective::detail::ss_smem_selector<GMMA::Major::K, Element,
+        // Use ElementV for Qv shared memory layout to match TiledMmaQV which uses ElementV
+        using SmemLayoutAtomQv = decltype(cutlass::gemm::collective::detail::ss_smem_selector<GMMA::Major::K, ElementV,
                                                                                               decltype(cute::get<0>(TileShape_MNK_QV{})), decltype(cute::get<2>(TileShape_MNK_QV{}))>());
         using SmemLayoutQv = decltype(tile_to_shape(SmemLayoutAtomQv{}, select<0, 2>(TileShape_MNK_QV{})));
-        using SmemLayoutAtomVMmaQV = decltype(cutlass::gemm::collective::detail::ss_smem_selector<GMMA::Major::K, Element,
+        // Use ElementV for VMmaQV shared memory layout to match TiledMmaQV which uses ElementV for both operands
+        using SmemLayoutAtomVMmaQV = decltype(cutlass::gemm::collective::detail::ss_smem_selector<GMMA::Major::K, ElementV,
                                                                                                   decltype(cute::get<1>(TileShape_MNK_QV{})), decltype(cute::get<2>(TileShape_MNK_QV{}))>());
         using SmemLayoutVMmaQV = decltype(tile_to_shape(
             SmemLayoutAtomVMmaQV{},
@@ -323,9 +328,10 @@ namespace flash
             select<1, 2>(TileShape_MNK_PV{}),
             size<0>(ClusterShape{}))); // mcast along M mode for this N load, if any
 
+        // Use ElementV for Qv TMA to match SmemLayoutQv and TiledMmaQV
         using TMA_Qv_ = decltype(make_tma_copy_A_sm90(
             GmemTiledCopyQ{},
-            make_tensor(make_gmem_ptr(static_cast<Element const *>(nullptr)), ShapeQKV{}, StrideQK{}),
+            make_tensor(make_gmem_ptr(static_cast<ElementV const *>(nullptr)), ShapeQKV{}, StrideQK{}),
             SmemLayoutQv{},
             TileShape_MNK_QV{},
             ClusterShape{}));
@@ -335,7 +341,7 @@ namespace flash
         static constexpr uint32_t TmaTransactionBytesQ = static_cast<uint32_t>(size(SmemLayoutQ{}) * cutlass::sizeof_bits_v<Element> / 8);
         static constexpr uint32_t TmaTransactionBytesK = static_cast<uint32_t>(size(take<0, 2>(SmemLayoutK{})) * cutlass::sizeof_bits_v<Element> / 8);
         static constexpr uint32_t TmaTransactionBytesV = static_cast<uint32_t>(size(take<0, 2>(SmemLayoutVt{})) * cutlass::sizeof_bits_v<ElementV> / 8);
-        static constexpr uint32_t TmaTransactionBytesQv = static_cast<uint32_t>(size(SmemLayoutQv{}) * cutlass::sizeof_bits_v<Element> / 8);
+        static constexpr uint32_t TmaTransactionBytesQv = static_cast<uint32_t>(size(SmemLayoutQv{}) * cutlass::sizeof_bits_v<ElementV> / 8);
 
         using PipelineTmaAsync = std::conditional_t<CUTE_STATIC_V(size(ClusterShape{})) == 1, typename cutlass::PipelineTmaAsyncNoCluster<kStages>, typename cutlass::PipelineTmaAsync<kStages>>;
         using MainloopPipelineK = std::conditional_t<Use_TMA_KV, PipelineTmaAsync, typename cutlass::PipelineAsync<kStages>>;
@@ -358,7 +364,8 @@ namespace flash
 
         using SmemP_t = std::conditional_t<MmaPV_is_RS, cute::array<ElementV, 0>, cute::array_aligned<ElementV, cute::cosize_v<SmemLayoutP>, SmemAlignmentP>>;
         using SmemScale_t = std::conditional_t<!LargeHeadDimV, cute::array<float, 0>, cute::array_aligned<float, cute::cosize_v<SmemLayoutScale>, 128>>;
-        using SmemQv_t = std::conditional_t<!HasQv, cute::array<Element, 0>, cute::array_aligned<Element, cute::cosize_v<SmemLayoutQv>, SmemAlignmentQv>>;
+        // Use ElementV for Qv shared memory storage to match SmemLayoutQv and TiledMmaQV
+        using SmemQv_t = std::conditional_t<!HasQv, cute::array<ElementV, 0>, cute::array_aligned<ElementV, cute::cosize_v<SmemLayoutQv>, SmemAlignmentQv>>;
         // Sometimes even with SmemP_t = cute::array<Element, 0>, putting it in the TensorStorage struct causes
         // smem size to go from 227KB to 228KB and we get "invalid argument".
 
@@ -433,7 +440,7 @@ namespace flash
             Element const *const ptr_K_new;
             ShapeQKV const shape_K_new;
             StrideQK const stride_K_new;
-            Element const *const ptr_V_new;
+            ElementV const *const ptr_V_new;  // Use ElementV for V (bfloat16 for INT8)
             StrideV const stride_V_new;
             Element const *const ptr_Qv;
             StrideQK const stride_Qv;
@@ -821,8 +828,8 @@ namespace flash
             // This is used to index into the batch dimension of mK and mV
             int const bidb_kv_idx = !is_varlen_k && !params.ptr_pagetable ? bidb_kv : 0;
 
-            // TODO: maybe modify this struct to support ElementV as well as Element? (only if we get compile errors)
-            using PagedKVManager_t = PagedKVManager<get<1>(TileShape_MNK{}), get<2>(TileShape_MNK{}), get<1>(TileShape_MNK_PV{}), NumProducerThreads, Element, Transpose_V || !IntraWGOverlap /*KV_Same_Iter*/>;
+            // Use ElementV for V operations (bfloat16 for INT8 mode)
+            using PagedKVManager_t = PagedKVManager<get<1>(TileShape_MNK{}), get<2>(TileShape_MNK{}), get<1>(TileShape_MNK_PV{}), NumProducerThreads, Element, ElementV, Transpose_V || !IntraWGOverlap /*KV_Same_Iter*/>;
             PagedKVManager_t paged_kv_manager(
                 params.ptr_pagetable, params.shape_pagetable, params.stride_pagetable,
                 params.ptr_K, params.shape_K, params.stride_K,
@@ -1306,8 +1313,8 @@ namespace flash
                 if constexpr (MmaPV_is_RS)
                 {
                     // We might not have smem_p if !MmaPV_is_RS, just use smem_q as a placeholder since we don't use it
-                    // TODO: we maybe would need to change this placeholder because not it's not Element but ElementV
-                    return make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_q.data()), SmemLayoutP{});
+                    // Cast to ElementV* since SmemLayoutP expects ElementV type (this placeholder is never actually used)
+                    return make_tensor(make_smem_ptr(reinterpret_cast<ElementV*>(shared_storage.tensors.mainloop.smem_q.data())), SmemLayoutP{});
                 }
                 else
                 {
@@ -1326,6 +1333,7 @@ namespace flash
                 }
             }();
             Tensor sQv = make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_qv.data()), SmemLayoutQv{});
+            // SmemLayoutVMmaQV now uses ElementV to match TiledMmaQV, and smem_v also uses ElementV
             Tensor sVMmaQV = make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_v.data()), SmemLayoutVMmaQV{});
 
             if constexpr (!MmaQK_is_RS)
@@ -2271,7 +2279,7 @@ namespace flash
             // This is used to index into the batch dimension of mK and mV
             int const bidb_kv_idx = !is_varlen_k && !params.ptr_pagetable ? bidb_kv : 0;
 
-            using PagedKVManager_t = PagedKVManager<get<1>(TileShape_MNK{}), get<2>(TileShape_MNK{}), get<1>(TileShape_MNK_PV{}), NumMmaThreads, Element, true /*KV_Same_Iter*/, 2 /*LoadsPerRow_LB*/>;
+            using PagedKVManager_t = PagedKVManager<get<1>(TileShape_MNK{}), get<2>(TileShape_MNK{}), get<1>(TileShape_MNK_PV{}), NumMmaThreads, Element, ElementV, true /*KV_Same_Iter*/, 2 /*LoadsPerRow_LB*/>;
             PagedKVManager_t paged_kv_manager(
                 params.ptr_pagetable, params.shape_pagetable, params.stride_pagetable,
                 params.ptr_K, params.shape_K, params.stride_K,

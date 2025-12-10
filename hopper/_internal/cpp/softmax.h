@@ -144,7 +144,7 @@ namespace flash
         CUTLASS_DEVICE Softmax(float const softmax_scale_log2_, int const seqlen_q_, int const thread_idx_) 
             : softmax_scale_log2(softmax_scale_log2_), seqlen_q(seqlen_q_), thread_idx(thread_idx_), dequan_s(softmax_scale_log2_) {};
 
-        void set_dequan_s(float const dequan_s_)
+        CUTLASS_DEVICE void set_dequan_s(float const dequan_s_)
         {
             dequan_s = dequan_s_ * softmax_scale_log2;
         }

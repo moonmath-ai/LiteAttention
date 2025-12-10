@@ -62,7 +62,10 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream)
     // Type traits using CuTe's type system for FP8/INT8 detection
     static constexpr bool Is_FP8 = cute::is_same_v<Element, cutlass::float_e4m3_t> || cute::is_same_v<Element, cutlass::float_e5m2_t>;
     static constexpr bool Is_INT8 = cute::is_same_v<Element, int8_t>;
-    static constexpr bool Is_8Bit = Is_FP8 || Is_INT8;  // For Q/K operations
+
+    // For INT8, V uses bfloat16 (not int8) to maintain precision
+    using ElementV = std::conditional_t<Is_INT8, cute::bfloat16_t, Element>;
+
     // For INT8, V is bf16, so no transpose needed (only FP8 has 8-bit V)
     static constexpr bool FP8_TransposeV = Is_FP8 && !V_colmajor;
     using ArchTag = std::conditional_t<Arch >= 90, cutlass::arch::Sm90, cutlass::arch::Sm80>;
@@ -222,7 +225,7 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream)
         // stride_K
         {params.k_row_stride, _1{}, params.k_head_stride, !is_varlen_k ? params.k_batch_stride : 0}, // stride_K: CuTe stride pattern
         // ptr_V
-        static_cast<Element *>(params.v_ptr),
+        static_cast<ElementV *>(params.v_ptr),
         // headdim_v
         params.dv, // headdim_v: V tensor head dimension (can differ from Q/K)
         // stride_V
@@ -234,7 +237,7 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream)
         // stride_K_new
         {params.knew_row_stride, _1{}, params.knew_head_stride, !is_varlen_k_new ? params.knew_batch_stride : 0}, // stride_K_new: CuTe stride pattern
         // ptr_V_new
-        static_cast<Element const *>(params.vnew_ptr),
+        static_cast<ElementV const *>(params.vnew_ptr),
         // stride_V_new
         {params.vnew_row_stride, _1{}, params.vnew_head_stride, !is_varlen_k_new ? params.vnew_batch_stride : 0}, // stride_V_new: CuTe stride pattern for new V tensor
         // ptr_Qv
