@@ -8,7 +8,7 @@ on:
 jobs:
   test:
     name: Run LiteAttention Tests
-    runs-on: [self-hosted, gpu]
+    runs-on: [self-hosted]
 
     steps:
       - name: Checkout code
