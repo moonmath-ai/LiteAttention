@@ -299,7 +299,8 @@ namespace flash
         using StridePageTable = cute::Stride<int64_t, _1>;
         using ShapeRotary = cute::Shape<int32_t, int32_t>; // (seqlen_ro, rotary_dim // 2)
         using StrideRotary = cute::Stride<int64_t, _1>;
-        using StrideDescale = cute::Stride<int64_t, int64_t>;
+        using StrideDescale = cute::Stride<int64_t, int64_t>;       // (batch_stride, head_stride) for FP8
+        using StrideDescaleINT8 = cute::Stride<int64_t, int64_t, int64_t>;  // (batch_stride, head_stride, block_stride) for INT8
 
         using TMA_Q = decltype(make_tma_copy_A_sm90(
             GmemTiledCopyQ{},
@@ -448,6 +449,7 @@ namespace flash
             float const softmax_scale;
             float const *ptr_q_descale, *ptr_k_descale, *ptr_v_descale;
             StrideDescale const stride_q_descale, stride_k_descale, stride_v_descale;
+            StrideDescaleINT8 const stride_q_descale_int8, stride_k_descale_int8;  // For INT8 per-block descaling
             int const window_size_left = -1, window_size_right = -1, attention_chunk = 0;
             float const softcap_val;
             int const num_splits;
@@ -506,6 +508,7 @@ namespace flash
             float const softmax_scale_log2;
             float const *ptr_q_descale, *ptr_k_descale, *ptr_v_descale;
             StrideDescale const stride_q_descale, stride_k_descale, stride_v_descale;
+            StrideDescaleINT8 const stride_q_descale_int8, stride_k_descale_int8;  // For INT8 per-block descaling
             float const softcap_val;
             int const window_size_left, window_size_right;
             cutlass::FastDivmod attention_chunk_divmod;
@@ -628,6 +631,7 @@ namespace flash
                     !Has_softcap ? float(args.softmax_scale * M_LOG2E) : float(args.softcap_val * M_LOG2E),
                     args.ptr_q_descale, args.ptr_k_descale, args.ptr_v_descale,
                     args.stride_q_descale, args.stride_k_descale, args.stride_v_descale,
+                    args.stride_q_descale_int8, args.stride_k_descale_int8,
                     !Has_softcap ? 0.f : args.softmax_scale / args.softcap_val,
                     args.window_size_left, args.window_size_right, attention_chunk_divmod,
                     !Split ? 1 : args.num_splits,
@@ -1398,15 +1402,16 @@ namespace flash
             }
             
             // For INT8: Create K descale tensor sliced by (bidb, bidh) for efficient n_block indexing
-            // Shape is (batch, head, n_blocks) with stride (head*n_blocks, n_blocks, 1)
+            // Shape is (batch, head, n_blocks) with stride from params
             // We slice once to get a 1D view indexed only by n_block
             auto KDescaleSliced = [&]() {
                 if constexpr (Is_INT8) {
-                    // 3D stride: batch stride = get<0>, head stride = get<1>, n_block stride = 1
-                    auto stride_k_descale_3d = make_stride(get<0>(params.stride_k_descale), get<1>(params.stride_k_descale), _1{});
+                    // Use the INT8-specific stride from params
                     // Shape: (batch, head_kv, n_block_max) - n_block_max can be any value >= actual n_blocks
+                    // TODO: pass the shape as a param?
                     auto shape_k_descale_3d = make_shape(get<3>(params.shape_K), get<2>(params.shape_K), n_block_max);
-                    Tensor mKDescale = make_tensor(make_gmem_ptr(params.ptr_k_descale), shape_k_descale_3d, stride_k_descale_3d);
+                    // TODO: in the future make assume mKDescale contiguous and don't specify the stride
+                    Tensor mKDescale = make_tensor(make_gmem_ptr(params.ptr_k_descale), shape_k_descale_3d, params.stride_k_descale_int8);
                     // Slice by bidb and bidh_kv to get 1D tensor indexed by n_block
                     return mKDescale(bidb, bidh_kv, _);
                 } else {

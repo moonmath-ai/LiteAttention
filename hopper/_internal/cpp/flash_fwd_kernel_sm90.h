@@ -541,11 +541,10 @@ namespace flash
                     }else if constexpr (Is_INT8){
                         int const m_block = get<0>(block_coord);
                         // For INT8: Create Q descale tensor with shape (num_batches, num_heads, num_m_blocks)
-                        // 3D stride: batch stride = get<0>, head stride = get<1>, m_block stride = 1
-                        auto stride_q_descale_3d = make_stride(get<0>(params.mainloop.stride_q_descale), get<1>(params.mainloop.stride_q_descale), _1{});
+                        // Use the INT8-specific stride from params
                         int const num_m_blocks = cute::ceil_div(seqlen_info.seqlen_q, kBlockM);
                         auto shape_q_descale_3d = make_shape(get<3>(params.mainloop.shape_Q), get<2>(params.mainloop.shape_Q), num_m_blocks);
-                        Tensor mQDescale = make_tensor(make_gmem_ptr(params.mainloop.ptr_q_descale), shape_q_descale_3d, stride_q_descale_3d);
+                        Tensor mQDescale = make_tensor(make_gmem_ptr(params.mainloop.ptr_q_descale), shape_q_descale_3d, params.mainloop.stride_q_descale_int8);
                         // Slice by bidb and bidh to get scalar value for this m_block
                         float const q_descale = mQDescale(bidb, bidh, m_block);
                         softmax_scale_log2 *= q_descale;

@@ -70,8 +70,10 @@ struct Flash_fwd_params : public Qkv_params
     float *__restrict__ v_descale_ptr;
     index_t q_descale_batch_stride;
     index_t q_descale_head_stride;
+    index_t q_descale_block_stride;  // Only used for INT8 (per m_block descaling)
     index_t k_descale_batch_stride;
     index_t k_descale_head_stride;
+    index_t k_descale_block_stride;  // Only used for INT8 (per n_block descaling)
     index_t v_descale_batch_stride;
     index_t v_descale_head_stride;
 
