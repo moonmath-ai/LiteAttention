@@ -30,7 +30,6 @@ jobs:
         run: |
           docker run --rm \
             --gpus=all \
-            -v ${{ github.workspace }}:/workspace \
-            -w /workspace/hopper \
+            -w /lite-attention/hopper \
             liteattention-test:latest \
             pytest tests
