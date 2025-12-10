@@ -626,6 +626,7 @@ class LiteAttention:
     # TODO: consider passing the scale as well so to not need to multiply by it inside the kernel
     def _quantize_query_key(self, query: torch.Tensor, key: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         if self.int8_mode:
+            kBlockM, kBlockN = LiteAttention.get_MN(query.shape[-1], torch.int8)
             # TODO: fill this @tarik
             return query, key, q_descale, k_descale
         else:
