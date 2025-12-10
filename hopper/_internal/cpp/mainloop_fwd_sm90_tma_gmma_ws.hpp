@@ -1503,16 +1503,30 @@ namespace flash
                 shared_storage.skip_list_storage.last_n_block
             );
 
+            // Helper to convert QK accumulator to ElementAccum (only needed when tSrS is int32_t in INT8 mode)
+            auto convert_qk_accum_to_float = [&](auto& tSrS_ambiguous_type) {
+                if constexpr (Is_INT8) {
+                    Tensor tSrS_converted = make_tensor_like<ElementAccum>(tSrS_ambiguous_type);
+                    convert_type_out(tSrS_ambiguous_type, tSrS_converted);
+                    return tSrS_converted;
+                } else {
+                    return tSrS_ambiguous_type;
+                }
+            };
+
             if constexpr (IntraWGOverlap)
             {
-                Tensor tSrS = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
+                Tensor tSrS_ambiguous_type = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
                 consumer_wait(pipeline_k, smem_pipe_read);
                 if constexpr (Is_skipable){
                     n_block = skip_reader.next_n_block();
                 }
-                flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS);
+                flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
                 warpgroup_wait<0>();
                 pipeline_k.consumer_release(smem_pipe_read);
+
+                auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
+
                 if constexpr (HasQv)
                 {
                     shared_storage.pipelines.barrier_Qv.wait(work_idx % 2);
@@ -1573,7 +1587,7 @@ namespace flash
                     static constexpr bool Check_inf = decltype(check_inf_type)::value;
                     PipelineState smem_pipe_read_v(smem_pipe_read.index(), smem_pipe_read.phase(), smem_pipe_read.count());
                     ++smem_pipe_read;
-                    Tensor tSrS = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
+                    Tensor tSrS_ambiguous_type = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
                     // if constexpr (!UseSchedulerBarrier || warp_group_idx == 0)
                     if(!UseSchedulerBarrier || warp_group_idx == 0){
                         consumer_wait(pipeline_k, smem_pipe_read);
@@ -1598,7 +1612,9 @@ namespace flash
                         has_more = skip_reader.has_more(new_n_block);
                     }
 
-                    flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS);
+                    flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
+
+                    auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
 
                     if constexpr (Is_INT8){
                         softmax.set_dequan_s(KDescaleSliced(new_n_block));
@@ -1623,7 +1639,7 @@ namespace flash
                         warpgroup_wait<0>();
                         pipeline_v.consumer_release(smem_pipe_read_v); // release V
                         consumer_wait(pipeline_v, smem_pipe_read);
-                        flash::gemm</*zero_init=*/false, /*wg_wait=*/0>(tiled_mma_qv, tSrQv, tSrV(_, _, _, smem_pipe_read.index()), tSrS);
+                        flash::gemm</*zero_init=*/false, /*wg_wait=*/0>(tiled_mma_qv, tSrQv, tSrV(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
                     }
                     scoremod_premask_fn(tSrS);
                     // mask_fn(tSrS, n_block);
@@ -1767,7 +1783,7 @@ namespace flash
                         ++smem_pipe_read;
                     }
 
-                    Tensor tSrS = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
+                    Tensor tSrS_ambiguous_type = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
                     consumer_wait(pipeline_k, smem_pipe_read);
                     
                     // int new_n_block = n_block;
@@ -1783,7 +1799,7 @@ namespace flash
                         has_more = skip_reader.has_more(new_n_block);
                     }
 
-                    flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS);
+                    flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
 
                     if constexpr (!HasQv)
                     {
@@ -1798,12 +1814,14 @@ namespace flash
                             shared_storage.pipelines.barrier_Qv.wait(work_idx % 2);
                         }
                         consumer_wait(pipeline_v, smem_pipe_read);
-                        flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_qv, tSrQv, tSrV(_, _, _, smem_pipe_read.index()), tSrS);
+                        flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_qv, tSrQv, tSrV(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
                         warp_scheduler_barrier_arrive();
                         warpgroup_wait<1>();
                         pipeline_k.consumer_release(smem_pipe_read); // release K
                         warpgroup_wait<0>();
                     }
+
+                    auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
 
                     scoremod_premask_fn(tSrS);
                     if constexpr (Is_INT8){
