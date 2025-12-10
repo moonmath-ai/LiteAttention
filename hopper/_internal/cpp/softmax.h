@@ -152,7 +152,7 @@ namespace flash
         template <int kBlockM, typename TiledMma, bool const Is_first, bool const Check_inf = false, typename Tensor0>
         __forceinline__ __device__ TensorT max_get_scale_detect_qk_skip(
             Tensor0 &acc_s,
-            const float thr,
+            const float threshold,
             auto &skip_reader,
             const int m_block)
         {
@@ -232,7 +232,7 @@ namespace flash
 
                     // bool cond1 = (scores_max_local(mi) - prev + abs(scores_max_local(mi)) * 0.5f >= 0); // if the current max is at least 1.5 times the previous max
                     bool cond1 = true;
-                    bool cond2 = ((scores_max_local(mi) - prev) * dequan_s) > thr; // if the current max is more than thr times the previous max
+                    bool cond2 = ((scores_max_local(mi) - prev) * dequan_s) > threshold; // if the current max is more than threshold times the previous max
                     do_qk |= cond1 & cond2 & row_not_out_of_bounds; // if both conditions are true and the row is not out of bounds, then set do_qk to true
                 }
 
