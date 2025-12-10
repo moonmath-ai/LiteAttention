@@ -75,7 +75,7 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream)
 
     // SM90+ tile configuration: returns (BlockM, BlockN, MmaPV_is_RS, IntraWGOverlap)
     static constexpr std::tuple<int, int, bool, bool> kBlockMN_RS_IntraWGOverlap =
-        tile_size_fwd_sm90(kHeadDim, kHeadDimV, Is_causal, Is_local, sizeof(Element) /*element_size*/, V_colmajor, PagedKVNonTMA, Has_softcap, Is_skipable);
+        tile_size_fwd_sm90(kHeadDim, kHeadDimV, Is_causal, Is_local, sizeof(Element) /*element_size*/, V_colmajor, PagedKVNonTMA, Has_softcap, Is_skipable, Is_INT8);
 
     // SM80-89 tile configuration: returns (BlockM, BlockN, NWarps, Stages, Q_in_regs)
     static constexpr std::tuple<int, int, int, int, bool> kBlockMN_kNWarps_Stages_RS =
@@ -395,7 +395,7 @@ void run_mha_fwd_(Flash_fwd_params &params, cudaStream_t stream)
                     APPENDKV_SWITCH(params.knew_ptr, AppendKV, [&] {
                         BOOL_SWITCH(params.is_skipable, Is_skipable, [&] {
                             // Only needed here to decide if we should use cluster
-                            static constexpr int kBlockM = Arch >= 90 ? std::get<0>(tile_size_fwd_sm90(kHeadDim, kHeadDimV, Is_causal, Is_local, sizeof(T) /*element_size*/, V_colmajor, PagedKVNonTMA, Has_softcap, Is_skipable)) : 128;
+                            static constexpr int kBlockM = Arch >= 90 ? std::get<0>(tile_size_fwd_sm90(kHeadDim, kHeadDimV, Is_causal, Is_local, sizeof(T) /*element_size*/, V_colmajor, PagedKVNonTMA, Has_softcap, Is_skipable, Is_INT8)) : 128;
                             // DOR: in our case this is always true since kHeadDim == 128, Arch == 90 ...
                             static constexpr bool Enable_cluster = Arch == 90 && (sizeof(T) == 2 ? (kHeadDim >= 128) : (kHeadDim == 192)) && !Is_causal && !Is_local && !Split && !PagedKVNonTMA && !Varlen;
                             // Only use Cluster if number of tiles along seqlen_q is even and not varlen
