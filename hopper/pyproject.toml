@@ -13,18 +13,15 @@ name = "lite_attention"
 description = "Lite Attention"
 readme = {file = "./README.md", content-type = "text/markdown"}
 requires-python = ">=3.8"
-license = {text = "Apache-2.0"}
+license = {file = "LICENSE"}
 authors = [
-    {name = "Jay Shah"},
-    {name = "Ganesh Bikshandi"},
-    {name = "Ying Zhang"},
-    {name = "Vijay Thakkar"},
-    {name = "Pradeep Ramani"},
-    {name = "Tri Dao"},
+    {name = "Tri Dao", email = "trid@cs.stanford.edu"},
+    {name = "Moonmath AI"},
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: Apache Software License",
+    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: BSD License",
     "Operating System :: Unix",
 ]
 dynamic = ["version"]
@@ -51,6 +48,7 @@ Repository = "https://github.com/moonmath-ai/LiteAttention"
 
 [tool.setuptools]
 packages = ["lite_attention", "lite_attention._internal", "lite_attention.utils"]
+license-files = ["LICENSE", "LICENSE-BSD", "LICENSE-MIT"]
 
 [tool.setuptools.package-dir]
 lite_attention = "."
