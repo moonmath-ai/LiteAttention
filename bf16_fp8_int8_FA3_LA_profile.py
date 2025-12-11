@@ -55,103 +55,104 @@ def main():
     # Compute softmax scale
     softmax_scale = 1.0 / math.sqrt(headdim)
     
-    # ============================================================================
-    # BF16 Forward Pass
-    # ============================================================================
-    print("\n" + "="*70)
-    print("Running BF16 forward pass...")
-    print("="*70)
-    torch.cuda.synchronize()
-    out_bf16 = flash_attn_func(
-        q,
-        k,
-        v,
-        softmax_scale=softmax_scale,
-        causal=causal,
-        window_size=(-1, -1),
-    )
-    torch.cuda.synchronize()
-    
-    print(f"BF16 Output shape: {out_bf16.shape}")
-    print(f"BF16 Output dtype: {out_bf16.dtype}")
+    if True:
+        # ============================================================================
+        # BF16 Forward Pass
+        # ============================================================================
+        print("\n" + "="*70)
+        print("Running BF16 forward pass...")
+        print("="*70)
+        torch.cuda.synchronize()
+        out_bf16 = flash_attn_func(
+            q,
+            k,
+            v,
+            softmax_scale=softmax_scale,
+            causal=causal,
+            window_size=(-1, -1),
+        )
+        torch.cuda.synchronize()
+        
+        print(f"BF16 Output shape: {out_bf16.shape}")
+        print(f"BF16 Output dtype: {out_bf16.dtype}")
 
-    # ============================================================================
-    # BF16 Forward Pass (LiteAttention)
-    # ============================================================================
-    print("\n" + "="*70)
-    print("Running BF16 forward pass (LiteAttention)...")
-    print("="*70)
-    lite_attn = LiteAttention(enable_skipping=False)
-    torch.cuda.synchronize()
-    out_bf16 = lite_attn(
-        q,
-        k,
-        v,
-        scale=softmax_scale,
-    )
-    torch.cuda.synchronize()
-    
-    print(f"BF16 Output shape: {out_bf16.shape}")
-    print(f"BF16 Output dtype: {out_bf16.dtype}")
-    
-    # ============================================================================
-    # FP8 Forward Pass (without descale)
-    # ============================================================================
-    print("\n" + "="*70)
-    print("Running FP8 forward pass (without descale)...")
-    print("="*70)
-    
-    # Convert to FP8
-    q_fp8 = q.to(torch.float8_e4m3fn)
-    k_fp8 = k.to(torch.float8_e4m3fn)
-    v_fp8 = v.to(torch.float8_e4m3fn)
-    
-    torch.cuda.synchronize()
-    out_fp8_no_descale = flash_attn_func(
-        q_fp8,
-        k_fp8,
-        v_fp8,
-        softmax_scale=softmax_scale,
-        causal=causal,
-        window_size=(-1, -1),
-    )
-    torch.cuda.synchronize()
-    
-    print(f"FP8 (no descale) Output shape: {out_fp8_no_descale.shape}")
-    print(f"FP8 (no descale) Output dtype: {out_fp8_no_descale.dtype}")
-    
-    # ============================================================================
-    # FP8 Forward Pass (with descale)
-    # ============================================================================
-    print("\n" + "="*70)
-    print("Running FP8 forward pass (with descale)...")
-    print("="*70)
-    
-    # Create descale tensors (required for FP8)
-    # These are scaling factors for dequantization
-    # Shape must be (batch_size, num_heads_k)
-    # For standard attention, num_heads_k = num_heads
-    num_heads_k = num_heads  # For GQA/MQA, this would be different
-    descale_q = torch.ones(batch_size, num_heads_k, dtype=torch.float32, device=device)
-    descale_k = torch.ones(batch_size, num_heads_k, dtype=torch.float32, device=device)
-    descale_v = torch.ones(batch_size, num_heads_k, dtype=torch.float32, device=device)
-    
-    torch.cuda.synchronize()
-    out_fp8_with_descale = flash_attn_func(
-        q_fp8,
-        k_fp8,
-        v_fp8,
-        softmax_scale=softmax_scale,
-        causal=causal,
-        window_size=(-1, -1),
-        q_descale=descale_q,
-        k_descale=descale_k,
-        v_descale=descale_v,
-    )
-    torch.cuda.synchronize()
-    
-    print(f"FP8 (with descale) Output shape: {out_fp8_with_descale.shape}")
-    print(f"FP8 (with descale) Output dtype: {out_fp8_with_descale.dtype}")
+        # ============================================================================
+        # BF16 Forward Pass (LiteAttention)
+        # ============================================================================
+        print("\n" + "="*70)
+        print("Running BF16 forward pass (LiteAttention)...")
+        print("="*70)
+        lite_attn = LiteAttention(enable_skipping=False)
+        torch.cuda.synchronize()
+        out_bf16 = lite_attn(
+            q,
+            k,
+            v,
+            scale=softmax_scale,
+        )
+        torch.cuda.synchronize()
+        
+        print(f"BF16 Output shape: {out_bf16.shape}")
+        print(f"BF16 Output dtype: {out_bf16.dtype}")
+        
+        # ============================================================================
+        # FP8 Forward Pass (without descale)
+        # ============================================================================
+        print("\n" + "="*70)
+        print("Running FP8 forward pass (without descale)...")
+        print("="*70)
+        
+        # Convert to FP8
+        q_fp8 = q.to(torch.float8_e4m3fn)
+        k_fp8 = k.to(torch.float8_e4m3fn)
+        v_fp8 = v.to(torch.float8_e4m3fn)
+        
+        torch.cuda.synchronize()
+        out_fp8_no_descale = flash_attn_func(
+            q_fp8,
+            k_fp8,
+            v_fp8,
+            softmax_scale=softmax_scale,
+            causal=causal,
+            window_size=(-1, -1),
+        )
+        torch.cuda.synchronize()
+        
+        print(f"FP8 (no descale) Output shape: {out_fp8_no_descale.shape}")
+        print(f"FP8 (no descale) Output dtype: {out_fp8_no_descale.dtype}")
+        
+        # ============================================================================
+        # FP8 Forward Pass (with descale)
+        # ============================================================================
+        print("\n" + "="*70)
+        print("Running FP8 forward pass (with descale)...")
+        print("="*70)
+        
+        # Create descale tensors (required for FP8)
+        # These are scaling factors for dequantization
+        # Shape must be (batch_size, num_heads_k)
+        # For standard attention, num_heads_k = num_heads
+        num_heads_k = num_heads  # For GQA/MQA, this would be different
+        descale_q = torch.ones(batch_size, num_heads_k, dtype=torch.float32, device=device)
+        descale_k = torch.ones(batch_size, num_heads_k, dtype=torch.float32, device=device)
+        descale_v = torch.ones(batch_size, num_heads_k, dtype=torch.float32, device=device)
+        
+        torch.cuda.synchronize()
+        out_fp8_with_descale = flash_attn_func(
+            q_fp8,
+            k_fp8,
+            v_fp8,
+            softmax_scale=softmax_scale,
+            causal=causal,
+            window_size=(-1, -1),
+            q_descale=descale_q,
+            k_descale=descale_k,
+            v_descale=descale_v,
+        )
+        torch.cuda.synchronize()
+        
+        print(f"FP8 (with descale) Output shape: {out_fp8_with_descale.shape}")
+        print(f"FP8 (with descale) Output dtype: {out_fp8_with_descale.dtype}")
     
     # ============================================================================
     # INT8 Forward Pass (LiteAttention with int8 enabled)
@@ -185,3 +186,7 @@ def main():
 if __name__ == "__main__":
     main()
 
+
+'''
+ncu -o bf16_fp8_int8_FA3_LA_profile --kernel-name device_kernel --set full python bf16_fp8_int8_FA3_LA_profile.py
+'''
