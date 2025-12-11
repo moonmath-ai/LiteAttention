@@ -639,7 +639,7 @@ class LiteAttention:
             q_scale = q_amax / 127.0
             q_int8 = (q_reshaped / q_scale[:, :, None, :, None]).round().clamp(-128, 127).to(torch.int8)
             q_int8 = q_int8.view(batch, q_padded_len, heads, head_dim)[:, :seq_len]
-            q_descale = q_scale.permute(0, 2, 1).contiguous()  # [batch, heads, num_q_blocks]
+            q_descale = q_scale.permute(0, 2, 1).contiguous().to(torch.float32)  # [batch, heads, num_q_blocks]
             
             # Quantize key per kBlockN tokens
             num_k_blocks = self.ceil_div(seq_len, kBlockN)
@@ -651,7 +651,7 @@ class LiteAttention:
             k_scale = k_amax / 127.0
             k_int8 = (k_reshaped / k_scale[:, :, None, :, None]).round().clamp(-128, 127).to(torch.int8)
             k_int8 = k_int8.view(batch, k_padded_len, heads, head_dim)[:, :seq_len]
-            k_descale = k_scale.permute(0, 2, 1).contiguous()  # [batch, heads, num_k_blocks]
+            k_descale = k_scale.permute(0, 2, 1).contiguous().to(torch.float32)  # [batch, heads, num_k_blocks]
             
             return q_int8, k_int8, q_descale, k_descale
         else:
