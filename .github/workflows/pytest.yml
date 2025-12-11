@@ -40,7 +40,7 @@ jobs:
 
           torch_label = None
           if cuda_version:
-              match = re.match(r"(\\d+)\\.(\\d+)", cuda_version)
+              match = re.match(r"(\d+)\.(\d+)", cuda_version)
               if match:
                   major, minor = match.groups()
                   torch_label = f"cu{int(major):d}{int(minor):02d}"
