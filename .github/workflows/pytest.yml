@@ -5,6 +5,10 @@ on:
     branches:
       - main
 
+env:
+  BUILDX_CACHE_DIR: /tmp/.buildx-cache
+  BUILDX_CACHE_DIR_NEW: /tmp/.buildx-cache-new
+
 jobs:
   test:
     name: Run LiteAttention Tests
@@ -14,8 +18,26 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Restore pip cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-cache-${{ runner.os }}-${{ hashFiles('**/requirements.txt', '**/pyproject.toml', '**/poetry.lock') }}
+          restore-keys: |
+            pip-cache-${{ runner.os }}-
+      
+      - name: Restore buildx cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.BUILDX_CACHE_DIR }}
+          key: buildx-${{ runner.os }}-${{ hashFiles('**/Dockerfile', '**/requirements.txt', '**/pyproject.toml', '**/poetry.lock') }}
+          restore-keys: |
+            buildx-${{ runner.os }}-
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          buildkitd-flags: --debug
 
       - name: Build Docker image
         uses: docker/build-push-action@v5
@@ -25,6 +47,17 @@ jobs:
           push: false
           load: true
           tags: liteattention-test:latest
+          cache-from: type=local,src=${{ env.BUILDX_CACHE_DIR }}
+          cache-to: type=local,dest=${{ env.BUILDX_CACHE_DIR_NEW }},mode=max
+
+      - name: Replace buildx cache dir with new cache
+        run: |
+          if [ -d "${BUILDX_CACHE_DIR_NEW}" ]; then
+            rm -rf "${BUILDX_CACHE_DIR}" || true
+            mv "${BUILDX_CACHE_DIR_NEW}" "${BUILDX_CACHE_DIR}"
+          else
+            echo "No new buildx cache produced (BUILDX_CACHE_DIR_NEW missing)."
+          fi
 
       - name: Run pytest tests
         run: |
