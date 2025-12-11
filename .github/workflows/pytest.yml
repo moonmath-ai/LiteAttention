@@ -43,7 +43,7 @@ jobs:
               match = re.match(r"(\d+)\.(\d+)", cuda_version)
               if match:
                   major, minor = match.groups()
-                  torch_label = f"cu{int(major):d}{int(minor):02d}"
+                  torch_label = f"cu{major}{minor}"
 
           index_url = f"https://download.pytorch.org/whl/{torch_label}" if torch_label else "https://download.pytorch.org/whl/cpu"
 
