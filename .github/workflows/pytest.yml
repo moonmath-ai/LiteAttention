@@ -38,22 +38,12 @@ jobs:
           except Exception as exc:  # noqa: BLE001
               print(f"Could not detect CUDA version: {exc}")
 
-          mapping = {
-              "12.4": "cu124",
-              "12.3": "cu123",
-              "12.2": "cu122",
-              "12.1": "cu121",
-              "12.0": "cu120",
-              "11.8": "cu118",
-              "11.7": "cu117",
-          }
-
           torch_label = None
           if cuda_version:
-              torch_label = mapping.get(cuda_version)
-              if not torch_label:
-                  major_minor = ".".join(cuda_version.split(".")[:2])
-                  torch_label = mapping.get(major_minor)
+              match = re.match(r"(\\d+)\\.(\\d+)", cuda_version)
+              if match:
+                  major, minor = match.groups()
+                  torch_label = f"cu{major}{minor}"
 
           if torch_label:
               index_url = f"https://download.pytorch.org/whl/{torch_label}"
