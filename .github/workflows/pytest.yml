@@ -5,10 +5,6 @@ on:
     branches:
       - main
 
-env:
-  BUILDX_CACHE_DIR: /tmp/.buildx-cache
-  BUILDX_CACHE_DIR_NEW: /tmp/.buildx-cache-new
-
 jobs:
   test:
     name: Run LiteAttention Tests
@@ -18,51 +14,77 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Restore pip cache
-        uses: actions/cache@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          path: ~/.cache/pip
-          key: pip-cache-${{ runner.os }}-${{ hashFiles('**/requirements.txt', '**/pyproject.toml', '**/poetry.lock') }}
-          restore-keys: |
-            pip-cache-${{ runner.os }}-
-      
-      - name: Restore buildx cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.BUILDX_CACHE_DIR }}
-          key: buildx-${{ runner.os }}-${{ hashFiles('**/Dockerfile', '**/requirements.txt', '**/pyproject.toml', '**/poetry.lock') }}
-          restore-keys: |
-            buildx-${{ runner.os }}-
+          python-version: "3.10"
+          cache: "pip"
+          cache-dependency-path: |
+            **/requirements.txt
+            **/pyproject.toml
+            **/poetry.lock
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-        with:
-          buildkitd-flags: --debug
+      - name: Create virtual environment
+        run: python -m venv .venv
 
-      - name: Build Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./Dockerfile
-          push: false
-          load: true
-          tags: liteattention-test:latest
-          cache-from: type=local,src=${{ env.BUILDX_CACHE_DIR }}
-          cache-to: type=local,dest=${{ env.BUILDX_CACHE_DIR_NEW }},mode=max
-
-      - name: Replace buildx cache dir with new cache
+      - name: Detect CUDA version for PyTorch index
         run: |
-          if [ -d "${BUILDX_CACHE_DIR_NEW}" ]; then
-            rm -rf "${BUILDX_CACHE_DIR}" || true
-            mv "${BUILDX_CACHE_DIR_NEW}" "${BUILDX_CACHE_DIR}"
-          else
-            echo "No new buildx cache produced (BUILDX_CACHE_DIR_NEW missing)."
-          fi
+          ./.venv/bin/python - <<'PY'
+          import os
+          import re
+          import subprocess
+
+          cuda_version = None
+          try:
+              output = subprocess.check_output(["nvidia-smi"], text=True)
+              match = re.search(r"CUDA Version:\s*([0-9.]+)", output)
+              if match:
+                  cuda_version = match.group(1)
+          except Exception as exc:  # noqa: BLE001
+              print(f"Could not detect CUDA version: {exc}")
+
+          mapping = {
+              "12.4": "cu124",
+              "12.3": "cu123",
+              "12.2": "cu122",
+              "12.1": "cu121",
+              "12.0": "cu120",
+              "11.8": "cu118",
+              "11.7": "cu117",
+          }
+
+          torch_label = None
+          if cuda_version:
+              torch_label = mapping.get(cuda_version)
+              if not torch_label:
+                  major_minor = ".".join(cuda_version.split(".")[:2])
+                  torch_label = mapping.get(major_minor)
+
+          if torch_label:
+              index_url = f"https://download.pytorch.org/whl/{torch_label}"
+          else:
+              index_url = "https://download.pytorch.org/whl/cpu"
+
+          print(f"Detected CUDA version: {cuda_version}, using index: {index_url}")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as fh:
+              fh.write(f"TORCH_INDEX_URL={index_url}\n")
+          PY
+
+      - name: Install PyTorch
+        run: |
+          source .venv/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install packaging wheel
+          python -m pip install --extra-index-url "${TORCH_INDEX_URL}" torch
+
+      - name: Install project with dev extras
+        working-directory: hopper
+        run: |
+          source ../.venv/bin/activate
+          FLASH_ATTENTION_FORCE_CXX11_ABI=FALSE python -m pip install .[dev] --no-build-isolation
 
       - name: Run pytest tests
+        working-directory: hopper
         run: |
-          docker run --rm \
-            --gpus=all \
-            -w /lite-attention/hopper \
-            liteattention-test:latest \
-            pytest tests
+          source ../.venv/bin/activate
+          pytest tests
