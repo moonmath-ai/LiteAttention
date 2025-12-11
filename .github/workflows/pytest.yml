@@ -43,12 +43,9 @@ jobs:
               match = re.match(r"(\\d+)\\.(\\d+)", cuda_version)
               if match:
                   major, minor = match.groups()
-                  torch_label = f"cu{major}{minor}"
+                  torch_label = f"cu{int(major):d}{int(minor):02d}"
 
-          if torch_label:
-              index_url = f"https://download.pytorch.org/whl/{torch_label}"
-          else:
-              index_url = "https://download.pytorch.org/whl/cpu"
+          index_url = f"https://download.pytorch.org/whl/{torch_label}" if torch_label else "https://download.pytorch.org/whl/cpu"
 
           print(f"Detected CUDA version: {cuda_version}, using index: {index_url}")
           with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as fh:
