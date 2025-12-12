@@ -287,10 +287,10 @@ namespace flash
 
             static_assert(is_same_v<PipelineParamsK, PipelineParamsVt>);
             PipelineParamsVt pipeline_params_vt = pipeline_params_k;
-            if constexpr (Use_TMA_KV && !SameHeadDim)
+            if constexpr (Use_TMA_KV)
             {
                 pipeline_params_vt.transaction_bytes = CollectiveMainloop::TmaTransactionBytesV;
-                if constexpr (LargeHeadDimV)
+                if constexpr (LargeHeadDimV && !SameHeadDim)
                 {
                     pipeline_params_vt.num_consumers = NumMmaThreads;
                 }
