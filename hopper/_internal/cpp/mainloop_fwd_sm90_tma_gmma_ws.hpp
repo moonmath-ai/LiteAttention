@@ -1538,14 +1538,15 @@ namespace flash
                 warpgroup_wait<0>();
                 pipeline_k.consumer_release(smem_pipe_read);
 
-                auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
 
                 if constexpr (HasQv)
                 {
                     shared_storage.pipelines.barrier_Qv.wait(work_idx % 2);
                     consumer_wait(pipeline_v, smem_pipe_read);
-                    flash::gemm</*zero_init=*/false, /*wg_wait=*/0>(tiled_mma_qv, tSrQv, tSrV(_, _, _, smem_pipe_read.index()), tSrS);
+                    flash::gemm</*zero_init=*/false, /*wg_wait=*/0>(tiled_mma_qv, tSrQv, tSrV(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
                 }
+
+                auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
                 scoremod_premask_fn(tSrS);
                 if constexpr (Is_INT8){
                     softmax.set_dequan_s(KDescaleSliced(n_block));
@@ -1569,14 +1570,14 @@ namespace flash
 
                 // TODO: tSrS doesn't necessarily keep it's type! for example input int32_t output float
                 softmax.template online_softmax</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
-                if constexpr (Is_8Bit && !V_colmajor)
+                if constexpr (Is_FP8 && !V_colmajor)
                 {
                     flash::permute_Cregs_fp8(tSrS);
                 }
                 Tensor tOrP_acc = make_tensor(tSrS.data(), flash::convert_layout_acc_Aregs<TiledMmaPV>(tSrS.layout()));
                 Tensor tOrP = make_tensor_like<ElementV>(tOrP_acc);
                 convert_type_out(tOrP_acc, tOrP);
-                if constexpr (Is_8Bit && V_colmajor)
+                if constexpr (Is_FP8 && V_colmajor)
                 {
                     flash::permute_Aregs_fp8(tOrP);
                 }
@@ -1627,8 +1628,6 @@ namespace flash
 
                     flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
 
-                    auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
-
                     if constexpr (Is_INT8){
                         softmax.set_dequan_s(KDescaleSliced(new_n_block));
                     }
@@ -1654,6 +1653,7 @@ namespace flash
                         consumer_wait(pipeline_v, smem_pipe_read);
                         flash::gemm</*zero_init=*/false, /*wg_wait=*/0>(tiled_mma_qv, tSrQv, tSrV(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
                     }
+                    auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
                     scoremod_premask_fn(tSrS);
                     // mask_fn(tSrS, n_block);
                     mask_fn(tSrS, new_n_block);
@@ -1676,12 +1676,12 @@ namespace flash
                         warpgroup_wait<0>();
                         pipeline_v.consumer_release(smem_pipe_read_v); // release V
                     }
-                    if constexpr (Is_8Bit && !V_colmajor)
+                    if constexpr (Is_FP8 && !V_colmajor)
                     {
                         flash::permute_Cregs_fp8(tSrS);
                     }
                     convert_type_out(make_tensor(tSrS.data(), tOrP.layout()), tOrP);
-                    if constexpr (Is_8Bit && V_colmajor)
+                    if constexpr (Is_FP8 && V_colmajor)
                     {
                         flash::permute_Aregs_fp8(tOrP);
                     }
@@ -1773,7 +1773,7 @@ namespace flash
                 warpgroup_wait<0>();
                 pipeline_v.consumer_release(smem_pipe_read); // release V, otherwise producers will hang
                 softmax.rescale_o(tOrO, scores_scale);
-                if constexpr (Is_8Bit && !V_colmajor)
+                if constexpr (Is_FP8 && !V_colmajor)
                 {
                     flash::permute_output_fp8(tOrO);
                 }
@@ -1859,7 +1859,7 @@ namespace flash
 
                     softmax.template online_softmax<Is_first_iter, Check_inf>(tSrS);
 
-                    if constexpr (Is_8Bit && !V_colmajor)
+                    if constexpr (Is_FP8 && !V_colmajor)
                     {
                         flash::permute_Cregs_fp8(tSrS);
                     }
@@ -1868,7 +1868,7 @@ namespace flash
 
                     convert_type_out(tOrP_acc, tOrP);
 
-                    if constexpr (Is_8Bit && V_colmajor)
+                    if constexpr (Is_FP8 && V_colmajor)
                     {
                         flash::permute_Aregs_fp8(tOrP);
                     }
@@ -1981,7 +1981,7 @@ namespace flash
                     cutlass::arch::NamedBarrier::arrive(NumMmaThreads, static_cast<uint32_t>(FwdNamedBarriers::PFull) /*id*/);
                 }
                 softmax.rescale_o(tOrO, scores_scale);
-                if constexpr (Is_8Bit && !V_colmajor)
+                if constexpr (Is_FP8 && !V_colmajor)
                 {
                     flash::permute_output_fp8(tOrO);
                 }

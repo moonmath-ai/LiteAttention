@@ -136,12 +136,12 @@ class LiteAttention:
         >>> output = lite_attn(query, key, value)
     """
     
-    def __init__(self, enable_skipping: bool = True, threshold: float = -10.0, max_batch_size: int = 2, reverse_skip_list: bool = True, int8_mode: bool = False):
+    def __init__(self, enable_skipping: bool = True, threshold: float = -10.0, max_batch_size: int = 2, reverse_skip_list: bool = True, use_int8: bool = False):
         # Internal skip list management
         self._skip_list = None  # Shape: [2, max_batch_size, heads, qtiles, ktiles+1]
         self._phase = 0  # Alternates between 0 and 1 for double-buffering
         self.reverse_skip_list = reverse_skip_list  # Controls skip list format
-        self.int8_mode = int8_mode  # Whether using int8 quantization
+        self.use_int8 = use_int8  # Whether using int8 quantization
         
         # Cache of last tensor properties (used to detect when reinitialization is needed)
         self._last_batch_size = None  # Actual batch size used (not max_batch_size)
@@ -625,7 +625,7 @@ class LiteAttention:
     
     # TODO: consider passing the scale as well so to not need to multiply by it inside the kernel
     def _quantize_query_key(self, query: torch.Tensor, key: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        if self.int8_mode:
+        if self.use_int8:
             kBlockM, kBlockN = LiteAttention.get_MN(query.shape[-1], torch.int8)
             batch, seq_len, heads, head_dim = query.shape
             
@@ -639,7 +639,7 @@ class LiteAttention:
             q_scale = q_amax / 127.0
             q_int8 = (q_reshaped / q_scale[:, :, None, :, None]).round().clamp(-128, 127).to(torch.int8)
             q_int8 = q_int8.view(batch, q_padded_len, heads, head_dim)[:, :seq_len]
-            q_descale = q_scale.permute(0, 2, 1).contiguous()  # [batch, heads, num_q_blocks]
+            q_descale = q_scale.permute(0, 2, 1).contiguous().to(torch.float32)  # [batch, heads, num_q_blocks]
             
             # Quantize key per kBlockN tokens
             num_k_blocks = self.ceil_div(seq_len, kBlockN)
@@ -651,7 +651,7 @@ class LiteAttention:
             k_scale = k_amax / 127.0
             k_int8 = (k_reshaped / k_scale[:, :, None, :, None]).round().clamp(-128, 127).to(torch.int8)
             k_int8 = k_int8.view(batch, k_padded_len, heads, head_dim)[:, :seq_len]
-            k_descale = k_scale.permute(0, 2, 1).contiguous()  # [batch, heads, num_k_blocks]
+            k_descale = k_scale.permute(0, 2, 1).contiguous().to(torch.float32)  # [batch, heads, num_k_blocks]
             
             return q_int8, k_int8, q_descale, k_descale
         else:
@@ -1076,10 +1076,10 @@ class SeqParallelLiteAttention:
     >>> # Node 1 processes its portion
     >>> output_1 = seq_parallel_attn(q_1, k_1, v_1, split_idx=1)
     """
-    def __init__(self, num_nodes: int, enable_skipping: bool = True, threshold: float = -10.0, max_batch_size: int = 2, int8_mode: bool = False):
+    def __init__(self, num_nodes: int, enable_skipping: bool = True, threshold: float = -10.0, max_batch_size: int = 2, use_int8: bool = False):
         self.num_nodes = num_nodes
         # Create separate LiteAttention instance for each node
-        self.lite_attention = [LiteAttention(enable_skipping, threshold, max_batch_size, int8_mode) for _ in range(num_nodes)]
+        self.lite_attention = [LiteAttention(enable_skipping, threshold, max_batch_size, use_int8) for _ in range(num_nodes)]
         self.set_threshold(threshold)
 
     def __call__(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, split_idx: int,
