@@ -446,4 +446,15 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # main()
+
+    head_dim=256
+    batch=2
+    seq_len=18200
+    heads=32
+    attn = LiteAttention(True, calibration_mode = True, l1_calib_target=0.2)
+    q, k, v = generate_test_tensors(batch, seq_len, heads, head_dim)
+    output = attn(q, k, v)
+    print(attn.calibrated_th)
+
+    

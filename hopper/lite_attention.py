@@ -80,6 +80,7 @@ import os
 from typing import Optional, Tuple, Union
 
 from ._internal.flash_attn_interface import flash_attn_func
+import torch.nn.functional as F
 
 
 class LiteAttention:
@@ -132,7 +133,7 @@ class LiteAttention:
         >>> output = lite_attn(query, key, value)
     """
     
-    def __init__(self, enable_skipping: bool = True, threshold: float = -10.0, max_batch_size: int = 2, reverse_skip_list: bool = True):
+    def __init__(self, enable_skipping: bool = True, threshold: float = -10.0, max_batch_size: int = 2, reverse_skip_list: bool = True, calibration_mode: bool = False, l1_calib_target: float = 0.1):
         # Internal skip list management
         self._skip_list = None  # Shape: [2, max_batch_size, heads, qtiles, ktiles+1]
         self._phase = 0  # Alternates between 0 and 1 for double-buffering
@@ -154,6 +155,11 @@ class LiteAttention:
         self.enable_skipping = enable_skipping
         self.set_threshold(threshold)
         self.max_batch_size = max_batch_size
+
+        self.calibration_mode = calibration_mode
+        if calibration_mode:
+            self.l1_calib_target = l1_calib_target
+            self.calibrated_th = 0
 
 
     @staticmethod
@@ -230,7 +236,7 @@ class LiteAttention:
         real_not_skipped_per_head = torch.gather(not_skipped_per_head, dim=-1, index=skip_list_sizes.unsqueeze(-1)).squeeze(-1)
         
         # Calculate percentage: (tiles computed) / (total tiles)
-        num_of_k_tiles = read_list.shape[-1] - 1
+        num_of_k_tiles = read_list.shape[-1] - 1        #fixme: this is wrong when we use max_len
         return real_not_skipped_per_head / num_of_k_tiles
 
     @staticmethod
@@ -246,6 +252,20 @@ class LiteAttention:
                 Value ranges from 0.0 (all skipped) to 1.0 (none skipped)
         """
         return LiteAttention.calc_percentage_per_head(read_list).mean()
+
+    @staticmethod
+    def calc_error(quant_o, fa2_o, verbose=True, round_num=4): 
+        if quant_o.shape[-2] > 200000:
+            quant_o, fa2_o = quant_o.cpu(), fa2_o.cpu()
+        x, xx = quant_o.float(), fa2_o.float() 
+        sim = F.cosine_similarity(x.reshape(1, -1), xx.reshape(1, -1)).item()
+        l1 =   ( (x - xx).abs().sum() / xx.abs().sum() ).item()
+        rmse = torch.sqrt(torch.mean((x -xx) ** 2)).item()
+        sim = round(sim, round_num)
+        l1 = round(l1, round_num)
+        rmse = round(rmse, round_num)
+        if verbose: print(f'Cossim: {sim:.6f}, L1: {l1:.6f}, RMSE:{rmse:.6f}')
+        return {"Cossim": sim, "L1": l1, "RMSE": rmse}
 
     @staticmethod
     def get_MN(head_dim, element_size, v_colmajor=False):
@@ -629,6 +649,44 @@ class LiteAttention:
             else: merged += [s, e]; s, e = a, b
 
         return merged + [s, e]
+
+
+    def inside_call(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, 
+                 scale: Optional[float] = None, return_softmax_lse: bool = False, must_do_list: list = None, must_skip_list: list = None) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        
+        # Get read and write lists (internal mask management)
+        read_list, write_list = self._get_read_write_lists(query, value, must_skip_list) 
+
+        # TODO: this should happen only at the first call
+        if self.enable_skipping and (must_do_list is not None):
+            # handle must-do list - expand the 1d list to a list per head per batch per qi
+            must_do_list_expanded = self._expand_must_do_list(must_do_list, write_list.shape, query, value)
+        else:
+            must_do_list_expanded = None
+
+        # Perform flash attention 3 with skip lists
+        output = flash_attn_func(
+            q=query,
+            k=key, 
+            v=value,
+            softmax_scale=scale,
+            attn_read_list=read_list,
+            attn_must_do_list=must_do_list_expanded,
+            attn_write_list=write_list,
+            thr=self.threshold,
+            return_softmax_lse=return_softmax_lse,
+            reverse_skip_list=self.reverse_skip_list,
+            # self._phase == 1 because we changed it in _get_read_write_lists!
+            phase=(self._phase == 1) if self.reverse_skip_list else False,
+        )
+
+        # Calculate and store statistics if enabled
+        if self.enable_skipping and os.getenv("LITE_ATTENTION_VERBOSE", "FALSE") != "FALSE":
+            real_batch_size = query.shape[0]
+            self._last_percentage = self.calc_percentage(read_list[:real_batch_size])
+            print(f"[Info]: Percentage of tiles skipped: {1.0 - self._last_percentage:.2%}")
+        
+        return output
     
     def __call__(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, 
                  scale: Optional[float] = None, return_softmax_lse: bool = False, must_do_list: list = None, must_skip_list: list = None) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
@@ -684,40 +742,130 @@ class LiteAttention:
         >>> # Force computation for positions [0, 128) and [500, 640) (exclusive end)
         >>> output = lite_attn(q, k, v, must_do_list=[0, 128, 500, 640])
         """
-        # Get read and write lists (internal mask management)
-        read_list, write_list = self._get_read_write_lists(query, value, must_skip_list)
 
-        if self.enable_skipping and (must_do_list is not None):
-            # handle must-do list - expand the 1d list to a list per head per batch per qi
-            must_do_list_expanded = self._expand_must_do_list(must_do_list, write_list.shape, query, value)
+        if not self.calibration_mode:
+            return self.inside_call(query, key, value, scale, return_softmax_lse, must_do_list, must_skip_list)
         else:
-            must_do_list_expanded = None
+            read_list, write_list = self._get_read_write_lists(query, value, must_skip_list)
+            temp_list = read_list.clone() #fix
+            reached_calib_target = False
+            low = -20.0
+            high = 0.0
+            # curr_th = -1.0
+            while not reached_calib_target:
+                # read_list = temp_list #fix
+                curr_th = (low + high) / 2
+                # curr_th += 0.01
+                print(f"testing th {curr_th}")
+                ref = flash_attn_func(
+                    q=query,
+                    k=key, 
+                    v=value,
+                    softmax_scale=scale,
+                    attn_read_list=read_list,
+                    attn_must_do_list=None,
+                    attn_write_list=write_list,
+                    thr=curr_th,
+                    return_softmax_lse=return_softmax_lse,
+                    reverse_skip_list=self.reverse_skip_list,
+                    # self._phase == 1 because we changed it in _get_read_write_lists!
+                    phase=(self._phase == 1) if self.reverse_skip_list else False,
+                )
+                print(f"skip percentage {self.calc_percentage(write_list)}")
+                read_list, write_list = self._get_read_write_lists(query, value, must_skip_list)
+                output = flash_attn_func(
+                    q=query,
+                    k=key, 
+                    v=value,
+                    softmax_scale=scale,
+                    attn_read_list=read_list,
+                    attn_must_do_list=None,
+                    attn_write_list=temp_list,
+                    thr=curr_th,
+                    return_softmax_lse=return_softmax_lse,
+                    reverse_skip_list=self.reverse_skip_list,
+                    # self._phase == 1 because we changed it in _get_read_write_lists!
+                    phase=(self._phase == 1) if self.reverse_skip_list else False,
+                )
+                curr_error = self.calc_error(output, ref)["L1"]
+                error_diff = self.l1_calib_target - curr_error
+                if curr_error < 1.1* self.l1_calib_target and curr_error > 0.9* self.l1_calib_target:
+                    reached_calib_target = True
+                elif error_diff < 0:
+                    high = curr_th
+                else:
+                    low = curr_th
+            self.calibrated_th = curr_th
+            print(f"found calibrated threshold: {self.calibrated_th}")
+            return output            
 
-        # print("must_do_list_expanded", must_do_list_expanded.shape)
-        
-        # Perform flash attention 3 with skip lists
-        output = flash_attn_func(
-            q=query,
-            k=key, 
-            v=value,
-            softmax_scale=scale,
-            attn_read_list=read_list,
-            attn_must_do_list=must_do_list_expanded,
-            attn_write_list=write_list,
-            thr=self.threshold,
-            return_softmax_lse=return_softmax_lse,
-            reverse_skip_list=self.reverse_skip_list,
-            # self._phase == 1 because we changed it in _get_read_write_lists!
-            phase=(self._phase == 1) if self.reverse_skip_list else False,
-        )
 
-        # Calculate and store statistics if enabled
-        if self.enable_skipping and os.getenv("LITE_ATTENTION_VERBOSE", "FALSE") != "FALSE":
-            real_batch_size = query.shape[0]
-            self._last_percentage = self.calc_percentage(read_list[:real_batch_size])
-            print(f"[Info]: Percentage of tiles skipped: {1.0 - self._last_percentage:.2%}")
-        
-        return output
+
+
+     
+        # if self.calibration_mode:
+        #     ref = flash_attn_func(
+        #             q=query,
+        #             k=key, 
+        #             v=value,
+        #             softmax_scale=scale,
+        #             attn_read_list=read_list,
+        #             attn_must_do_list=must_do_list_expanded,
+        #             attn_write_list=write_list,
+        #             thr=float('-inf'),
+        #             return_softmax_lse=return_softmax_lse,
+        #             reverse_skip_list=self.reverse_skip_list,
+        #             # self._phase == 1 because we changed it in _get_read_write_lists!
+        #             phase=(self._phase == 1) if self.reverse_skip_list else False,
+        #     )
+        #     temp_list = write_list.clone()
+        #     reached_calib_target = False
+        #     low = -20.0
+        #     high = 0.0
+        #     while not reached_calib_target:
+        #         curr_th = (low + high) / 2
+        #         print(f"testing th {curr_th}")
+        #         # Perform flash attention 3 with skip lists
+        #         output = flash_attn_func(
+        #             q=query,
+        #             k=key, 
+        #             v=value,
+        #             softmax_scale=scale,
+        #             attn_read_list=read_list,
+        #             attn_must_do_list=must_do_list_expanded,
+        #             attn_write_list=write_list,
+        #             thr=curr_th,
+        #             return_softmax_lse=return_softmax_lse,
+        #             reverse_skip_list=self.reverse_skip_list,
+        #             # self._phase == 1 because we changed it in _get_read_write_lists!
+        #             phase=(self._phase == 1) if self.reverse_skip_list else False,
+        #         )
+        #         print(f"skip percentage {self.calc_percentage(write_list)}")
+        #         output = flash_attn_func(
+        #             q=query,
+        #             k=key, 
+        #             v=value,
+        #             softmax_scale=scale,
+        #             attn_read_list=write_list,
+        #             attn_must_do_list=must_do_list_expanded,
+        #             attn_write_list=temp_list,
+        #             thr=curr_th,
+        #             return_softmax_lse=return_softmax_lse,
+        #             reverse_skip_list=self.reverse_skip_list,
+        #             # self._phase == 1 because we changed it in _get_read_write_lists!
+        #             phase=(self._phase == 1) if self.reverse_skip_list else False,
+        #         )
+        #         curr_error = self.calc_error(output, ref)["L1"]
+        #         error_diff = self.l1_calib_target - curr_error
+        #         if error_diff < 0.01 and error_diff > -0.01:
+        #             reached_calib_target = True
+        #         elif error_diff < 0:
+        #             high = curr_th
+        #         else:
+        #             low = curr_th
+        #     self.calibrated_th = curr_th
+        #     print(f"found calibrated threshold: {self.calibrated_th}")
+        # else:
     
     def reset_skip_state(self):
         """
