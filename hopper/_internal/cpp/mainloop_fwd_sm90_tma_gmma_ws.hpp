@@ -1517,10 +1517,14 @@ namespace flash
             );
 
             // Helper to convert QK accumulator to ElementAccum (only needed when tSrS is int32_t in INT8 mode)
+            // In INT8 mode: converts int32 to float and multiplies by dequan_s to dequantize
             auto convert_qk_accum_to_float = [&](auto& tSrS_ambiguous_type) {
                 if constexpr (Is_INT8) {
                     Tensor tSrS_converted = make_tensor_like<ElementAccum>(tSrS_ambiguous_type);
-                    convert_type_out(tSrS_ambiguous_type, tSrS_converted);
+                    float dequan_s = softmax.dequan_s;
+                    // Convert int32 to float and multiply by dequantization scale
+                    // Uses automatic type promotion: int32 * float -> float
+                    flash::convert_int32_to_float_scaled(tSrS_ambiguous_type, tSrS_converted, dequan_s);
                     return tSrS_converted;
                 } else {
                     return tSrS_ambiguous_type;
