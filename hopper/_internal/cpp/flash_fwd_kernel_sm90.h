@@ -287,7 +287,7 @@ namespace flash
 
             static_assert(is_same_v<PipelineParamsK, PipelineParamsVt>);
             PipelineParamsVt pipeline_params_vt = pipeline_params_k;
-            if constexpr (Use_TMA_KV)
+            if constexpr (Use_TMA_KV && (!SameHeadDim || Is_INT8))
             {
                 pipeline_params_vt.transaction_bytes = CollectiveMainloop::TmaTransactionBytesV;
                 if constexpr (LargeHeadDimV && !SameHeadDim)
@@ -548,6 +548,7 @@ namespace flash
                         // Slice by bidb and bidh to get scalar value for this m_block
                         float const q_descale = mQDescale(bidb, bidh, m_block);
                         softmax_scale_log2 *= q_descale;
+                        // softmax_scale_log2 = q_descale;
                     }
                     const int thread_idx = threadIdx.x - MmaThreadOffset;
 
