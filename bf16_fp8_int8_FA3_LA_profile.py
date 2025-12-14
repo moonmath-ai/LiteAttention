@@ -25,7 +25,7 @@ from lite_attention import LiteAttention
 def main():
     # Configuration
     device = 'cuda'
-    batch_size = 3
+    batch_size = 2
     seqlen = 16384  # ~16k as requested
     num_heads = 32  # Adjust based on your model
     headdim = 128   # As requested
