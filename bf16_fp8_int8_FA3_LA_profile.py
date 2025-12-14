@@ -12,6 +12,75 @@ Configuration:
 import torch
 import math
 
+def compute_error_metrics(output, reference, name):
+    """Compute and print error metrics between output and reference."""
+    # Convert both to float32 for accurate error computation
+    out_f32 = output.float()
+    ref_f32 = reference.float()
+    
+    # Absolute errors
+    abs_diff = (out_f32 - ref_f32).abs()
+    max_abs_error = abs_diff.max().item()
+    mean_abs_error = abs_diff.mean().item()
+    
+    # Relative errors (avoid division by zero)
+    ref_abs = ref_f32.abs().clamp(min=1e-7)
+    rel_diff = abs_diff / ref_abs
+    max_rel_error = rel_diff.max().item()
+    mean_rel_error = rel_diff.mean().item()
+    
+    # RMSE
+    rmse = torch.sqrt((abs_diff ** 2).mean()).item()
+    
+    # Cosine similarity (flatten and compute)
+    out_flat = out_f32.flatten()
+    ref_flat = ref_f32.flatten()
+    cosine_sim = torch.nn.functional.cosine_similarity(out_flat.unsqueeze(0), ref_flat.unsqueeze(0)).item()
+    
+    print(f"\n  Error metrics for {name} vs BF16 FA3 reference:")
+    print(f"    Max Absolute Error:  {max_abs_error:.6e}")
+    print(f"    Mean Absolute Error: {mean_abs_error:.6e}")
+    print(f"    Max Relative Error:  {max_rel_error:.6e}")
+    print(f"    Mean Relative Error: {mean_rel_error:.6e}")
+    print(f"    RMSE:                {rmse:.6e}")
+    print(f"    Cosine Similarity:   {cosine_sim:.8f}")
+
+
+def quantize_to_fp8(tensor, fp8_dtype=torch.float8_e4m3fn):
+    """
+    Quantize a tensor to FP8 with proper per-head scaling.
+    
+    Args:
+        tensor: Input tensor of shape (batch, seqlen, num_heads, headdim)
+        fp8_dtype: FP8 dtype to use (default: torch.float8_e4m3fn)
+    
+    Returns:
+        fp8_tensor: Quantized FP8 tensor
+        descale: Per-head descale factors of shape (batch, num_heads) for dequantization
+    """
+    FP8_MAX = torch.finfo(fp8_dtype).max  # 448.0 for e4m3fn
+    
+    # Compute per-head max absolute values
+    # Input shape: (batch, seqlen, num_heads, headdim)
+    # Output shape: (batch, num_heads)
+    amax = tensor.abs().amax(dim=(1, 3))
+    
+    # Compute scale factor (to map max value to FP8 range)
+    scale = (amax / FP8_MAX).clamp(min=1e-12)  # [batch, num_heads]
+    
+    # Scale input before FP8 conversion
+    # Reshape scale for broadcasting: [batch, 1, num_heads, 1]
+    scale_bc = scale[:, None, :, None]
+    tensor_scaled = tensor / scale_bc
+    
+    # Convert to FP8
+    fp8_tensor = tensor_scaled.to(fp8_dtype)
+    
+    # Descale is the same as scale (used to multiply back after FP8 ops)
+    descale = scale.to(torch.float32)
+    
+    return fp8_tensor, descale
+
 try:
     from flash_attn_interface import flash_attn_func
 except ImportError:
@@ -55,104 +124,106 @@ def main():
     # Compute softmax scale
     softmax_scale = 1.0 / math.sqrt(headdim)
     
-    if True:
-        # ============================================================================
-        # BF16 Forward Pass
-        # ============================================================================
-        print("\n" + "="*70)
-        print("Running BF16 forward pass...")
-        print("="*70)
-        torch.cuda.synchronize()
-        out_bf16 = flash_attn_func(
-            q,
-            k,
-            v,
-            softmax_scale=softmax_scale,
-            causal=causal,
-            window_size=(-1, -1),
-        )
-        torch.cuda.synchronize()
-        
-        print(f"BF16 Output shape: {out_bf16.shape}")
-        print(f"BF16 Output dtype: {out_bf16.dtype}")
+    # ============================================================================
+    # BF16 Forward Pass (Reference - Vanilla Flash Attention 3)
+    # ============================================================================
+    print("\n" + "="*70)
+    print("Running BF16 forward pass (Reference - Vanilla FA3)...")
+    print("="*70)
+    torch.cuda.synchronize()
+    out_bf16_ref = flash_attn_func(
+        q,
+        k,
+        v,
+        softmax_scale=softmax_scale,
+        causal=causal,
+        window_size=(-1, -1),
+    )
+    torch.cuda.synchronize()
+    
+    print(f"BF16 Reference Output shape: {out_bf16_ref.shape}")
+    print(f"BF16 Reference Output dtype: {out_bf16_ref.dtype}")
 
-        # ============================================================================
-        # BF16 Forward Pass (LiteAttention)
-        # ============================================================================
-        print("\n" + "="*70)
-        print("Running BF16 forward pass (LiteAttention)...")
-        print("="*70)
-        lite_attn = LiteAttention(enable_skipping=False)
-        torch.cuda.synchronize()
-        out_bf16 = lite_attn(
-            q,
-            k,
-            v,
-            scale=softmax_scale,
-        )
-        torch.cuda.synchronize()
-        
-        print(f"BF16 Output shape: {out_bf16.shape}")
-        print(f"BF16 Output dtype: {out_bf16.dtype}")
-        
-        # ============================================================================
-        # FP8 Forward Pass (without descale)
-        # ============================================================================
-        print("\n" + "="*70)
-        print("Running FP8 forward pass (without descale)...")
-        print("="*70)
-        
-        # Convert to FP8
-        q_fp8 = q.to(torch.float8_e4m3fn)
-        k_fp8 = k.to(torch.float8_e4m3fn)
-        v_fp8 = v.to(torch.float8_e4m3fn)
-        
-        torch.cuda.synchronize()
-        out_fp8_no_descale = flash_attn_func(
-            q_fp8,
-            k_fp8,
-            v_fp8,
-            softmax_scale=softmax_scale,
-            causal=causal,
-            window_size=(-1, -1),
-        )
-        torch.cuda.synchronize()
-        
-        print(f"FP8 (no descale) Output shape: {out_fp8_no_descale.shape}")
-        print(f"FP8 (no descale) Output dtype: {out_fp8_no_descale.dtype}")
-        
-        # ============================================================================
-        # FP8 Forward Pass (with descale)
-        # ============================================================================
-        print("\n" + "="*70)
-        print("Running FP8 forward pass (with descale)...")
-        print("="*70)
-        
-        # Create descale tensors (required for FP8)
-        # These are scaling factors for dequantization
-        # Shape must be (batch_size, num_heads_k)
-        # For standard attention, num_heads_k = num_heads
-        num_heads_k = num_heads  # For GQA/MQA, this would be different
-        descale_q = torch.ones(batch_size, num_heads_k, dtype=torch.float32, device=device)
-        descale_k = torch.ones(batch_size, num_heads_k, dtype=torch.float32, device=device)
-        descale_v = torch.ones(batch_size, num_heads_k, dtype=torch.float32, device=device)
-        
-        torch.cuda.synchronize()
-        out_fp8_with_descale = flash_attn_func(
-            q_fp8,
-            k_fp8,
-            v_fp8,
-            softmax_scale=softmax_scale,
-            causal=causal,
-            window_size=(-1, -1),
-            q_descale=descale_q,
-            k_descale=descale_k,
-            v_descale=descale_v,
-        )
-        torch.cuda.synchronize()
-        
-        print(f"FP8 (with descale) Output shape: {out_fp8_with_descale.shape}")
-        print(f"FP8 (with descale) Output dtype: {out_fp8_with_descale.dtype}")
+    # ============================================================================
+    # BF16 Forward Pass (LiteAttention)
+    # ============================================================================
+    print("\n" + "="*70)
+    print("Running BF16 forward pass (LiteAttention)...")
+    print("="*70)
+    lite_attn = LiteAttention(enable_skipping=False)
+    torch.cuda.synchronize()
+    out_bf16_lite = lite_attn(
+        q,
+        k,
+        v,
+        scale=softmax_scale,
+    )
+    torch.cuda.synchronize()
+    
+    print(f"BF16 LiteAttention Output shape: {out_bf16_lite.shape}")
+    print(f"BF16 LiteAttention Output dtype: {out_bf16_lite.dtype}")
+    compute_error_metrics(out_bf16_lite, out_bf16_ref, "BF16 LiteAttention")
+    
+    # ============================================================================
+    # FP8 Forward Pass (without descale - naive conversion)
+    # ============================================================================
+    print("\n" + "="*70)
+    print("Running FP8 forward pass (without descale - naive conversion)...")
+    print("="*70)
+    
+    # Naive conversion to FP8 (no scaling, values may clip)
+    q_fp8_naive = q.to(torch.float8_e4m3fn)
+    k_fp8_naive = k.to(torch.float8_e4m3fn)
+    v_fp8_naive = v.to(torch.float8_e4m3fn)
+    
+    torch.cuda.synchronize()
+    out_fp8_no_descale = flash_attn_func(
+        q_fp8_naive,
+        k_fp8_naive,
+        v_fp8_naive,
+        softmax_scale=softmax_scale,
+        causal=causal,
+        window_size=(-1, -1),
+    )
+    torch.cuda.synchronize()
+    
+    print(f"FP8 (no descale) Output shape: {out_fp8_no_descale.shape}")
+    print(f"FP8 (no descale) Output dtype: {out_fp8_no_descale.dtype}")
+    compute_error_metrics(out_fp8_no_descale, out_bf16_ref, "FP8 (no descale)")
+    
+    # ============================================================================
+    # FP8 Forward Pass (with proper quantization and descale)
+    # ============================================================================
+    print("\n" + "="*70)
+    print("Running FP8 forward pass (with proper quantization and descale)...")
+    print("="*70)
+    
+    # Quantize Q, K, V to FP8 with proper per-head scaling
+    q_fp8, descale_q = quantize_to_fp8(q)
+    k_fp8, descale_k = quantize_to_fp8(k)
+    v_fp8, descale_v = quantize_to_fp8(v)
+    
+    print(f"  Q descale range: [{descale_q.min().item():.6f}, {descale_q.max().item():.6f}]")
+    print(f"  K descale range: [{descale_k.min().item():.6f}, {descale_k.max().item():.6f}]")
+    print(f"  V descale range: [{descale_v.min().item():.6f}, {descale_v.max().item():.6f}]")
+    
+    torch.cuda.synchronize()
+    out_fp8_with_descale = flash_attn_func(
+        q_fp8,
+        k_fp8,
+        v_fp8,
+        softmax_scale=softmax_scale,
+        causal=causal,
+        window_size=(-1, -1),
+        q_descale=descale_q,
+        k_descale=descale_k,
+        v_descale=descale_v,
+    )
+    torch.cuda.synchronize()
+    
+    print(f"FP8 (with descale) Output shape: {out_fp8_with_descale.shape}")
+    print(f"FP8 (with descale) Output dtype: {out_fp8_with_descale.dtype}")
+    compute_error_metrics(out_fp8_with_descale, out_bf16_ref, "FP8 (with descale)")
     
     # ============================================================================
     # INT8 Forward Pass (LiteAttention with int8 enabled)
@@ -175,6 +246,37 @@ def main():
     
     print(f"INT8 Output shape: {out_int8.shape}")
     print(f"INT8 Output dtype: {out_int8.dtype}")
+    compute_error_metrics(out_int8, out_bf16_ref, "INT8 LiteAttention")
+    
+    # ============================================================================
+    # Summary of all error metrics
+    # ============================================================================
+    print("\n" + "="*70)
+    print("ERROR SUMMARY (vs BF16 FA3 Reference)")
+    print("="*70)
+    
+    results = [
+        ("BF16 LiteAttention", out_bf16_lite),
+        ("FP8 (no descale)", out_fp8_no_descale),
+        ("FP8 (with descale)", out_fp8_with_descale),
+        ("INT8 LiteAttention", out_int8),
+    ]
+    
+    print(f"\n{'Method':<25} {'Max Abs Err':<14} {'Mean Abs Err':<14} {'RMSE':<14} {'Cosine Sim':<12}")
+    print("-" * 80)
+    
+    for name, output in results:
+        out_f32 = output.float()
+        ref_f32 = out_bf16_ref.float()
+        abs_diff = (out_f32 - ref_f32).abs()
+        max_abs = abs_diff.max().item()
+        mean_abs = abs_diff.mean().item()
+        rmse = torch.sqrt((abs_diff ** 2).mean()).item()
+        cosine = torch.nn.functional.cosine_similarity(
+            out_f32.flatten().unsqueeze(0), 
+            ref_f32.flatten().unsqueeze(0)
+        ).item()
+        print(f"{name:<25} {max_abs:<14.6e} {mean_abs:<14.6e} {rmse:<14.6e} {cosine:<12.8f}")
     
     print("\n" + "="*70)
     print("All forward passes completed successfully!")
@@ -188,5 +290,5 @@ if __name__ == "__main__":
 
 
 '''
-ncu -o bf16_fp8_int8_FA3_LA_profile --kernel-name device_kernel --set full python bf16_fp8_int8_FA3_LA_profile.py
+ncu -o bf16_fp8_int8_FA3_LA_profile%i --kernel-name device_kernel --set full python bf16_fp8_int8_FA3_LA_profile.py
 '''
