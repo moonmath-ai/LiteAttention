@@ -81,15 +81,16 @@ def quantize_to_fp8(tensor, fp8_dtype=torch.float8_e4m3fn):
     
     return fp8_tensor, descale
 
-try:
-    from flash_attn_interface import flash_attn_func
-except ImportError:
-    try:
-        from flash_attn.flash_attn_interface import flash_attn_func
-    except ImportError:
-        raise ImportError("Could not import flash_attn_func. Make sure flash-attention is properly installed.")
+# try:
+#     from flash_attn_interface import flash_attn_func
+# except ImportError:
+#     try:
+#         from flash_attn.flash_attn_interface import flash_attn_func
+#     except ImportError:
+#         raise ImportError("Could not import flash_attn_func. Make sure flash-attention is properly installed.")
 
 from lite_attention import LiteAttention
+from flash_attn_interface import flash_attn_func
 
 def main():
     # Configuration
@@ -123,6 +124,39 @@ def main():
     
     # Compute softmax scale
     softmax_scale = 1.0 / math.sqrt(headdim)
+    
+    # ============================================================================
+    # Warmup Phase
+    # ============================================================================
+    print("\n" + "="*70)
+    print("Running warmup phase...")
+    print("="*70)
+    
+    warmup_iters = 1
+    
+    # Initialize LiteAttention instances for warmup
+    lite_attn_warmup = LiteAttention(enable_skipping=False)
+    lite_attn_int8_warmup = LiteAttention(enable_skipping=False, use_int8=True)
+    
+    # Prepare FP8 tensors for warmup
+    q_fp8_warmup, descale_q_warmup = quantize_to_fp8(q)
+    k_fp8_warmup, descale_k_warmup = quantize_to_fp8(k)
+    v_fp8_warmup, descale_v_warmup = quantize_to_fp8(v)
+    
+    for i in range(warmup_iters):
+        # BF16 FA3
+        _ = flash_attn_func(q, k, v, softmax_scale=softmax_scale, causal=causal, window_size=(-1, -1))
+        # BF16 LiteAttention
+        _ = lite_attn_warmup(q, k, v, scale=softmax_scale)
+        # FP8 FA3
+        _ = flash_attn_func(q_fp8_warmup, k_fp8_warmup, v_fp8_warmup, softmax_scale=softmax_scale, 
+                           causal=causal, window_size=(-1, -1), 
+                           q_descale=descale_q_warmup, k_descale=descale_k_warmup, v_descale=descale_v_warmup)
+        # INT8 LiteAttention
+        _ = lite_attn_int8_warmup(q, k, v, scale=softmax_scale)
+    
+    torch.cuda.synchronize()
+    print(f"Warmup completed ({warmup_iters} iterations per kernel)")
     
     # ============================================================================
     # BF16 Forward Pass (Reference - Vanilla Flash Attention 3)
@@ -290,5 +324,5 @@ if __name__ == "__main__":
 
 
 '''
-ncu -o bf16_fp8_int8_FA3_LA_profile%i --kernel-name device_kernel --set full python bf16_fp8_int8_FA3_LA_profile.py
+ncu -o bf16_fp8_int8_FA3_LA_profile%i --kernel-name device_kernel --launch-skip 4 --set full python bf16_fp8_int8_FA3_LA_profile.py
 '''
