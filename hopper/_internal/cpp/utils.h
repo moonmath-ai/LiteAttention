@@ -81,6 +81,12 @@ struct MaxOp<float> {
 __device__ __forceinline__ float operator()(float const &x, float const &y) { return max(x, y); }
 };
 
+template <>
+struct MaxOp<int32_t> {
+// This is slightly faster
+__device__ __forceinline__ int32_t operator()(int32_t const &x, int32_t const &y) { return max(x, y); }
+};
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T>

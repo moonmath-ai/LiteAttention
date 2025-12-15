@@ -42,7 +42,7 @@ namespace flash
         }
     }
 
-    template <bool const zero_init = true, typename Engine0, typename Layout0, typename Engine1, typename Layout1, typename Operator>
+    template <bool const zero_init = true, typename Engine0, typename Layout0, typename Engine1, typename Layout1>
     __device__ __forceinline__ void thread_reduce_dequantize_(Tensor<Engine0, Layout0> const &tensor, Tensor<Engine1, Layout1> &summary, float const dequan_s)
     {
         MaxOp<float> op;
@@ -66,7 +66,7 @@ namespace flash
     }
 
     template <typename Engine0, typename Layout0, typename Engine1, typename Layout1, typename Operator>
-    __device__ __forceinline__ void quad_allreduce_(Tensor<Engine0, Layout0> &dst, Tensor<Engine1, Layout1> &src, Operator &op)
+    __device__ __forceinline__ void quad_allreduce_(Tensor<Engine0, Layout0> &dst, Tensor<Engine1, Layout1> const &src, Operator &op)
     {
         CUTE_STATIC_ASSERT_V(size(dst) == size(src));
 #pragma unroll
@@ -96,7 +96,7 @@ namespace flash
         MaxOp<int32_t> max_op;
         // generate tensor of int32_t for results (instead of the max tensor)
         Tensor max_converted = make_tensor_like<int32_t>(tensor);
-        quad_allreduce_(tensor, max_converted, max_op);
+        quad_allreduce_(max_converted, tensor, max_op);
         thread_reduce_dequantize_<zero_init>(max_converted, max, dequan_s);
     }
 
