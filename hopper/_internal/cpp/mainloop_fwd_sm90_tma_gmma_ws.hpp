@@ -1518,10 +1518,9 @@ namespace flash
 
             // Helper to convert QK accumulator to ElementAccum (only needed when tSrS is int32_t in INT8 mode)
             // In INT8 mode: converts int32 to float and multiplies by dequan_s to dequantize
-            auto convert_qk_accum_to_float = [&](auto& tSrS_ambiguous_type) {
+            auto convert_qk_accum_to_float = [&](auto& tSrS_ambiguous_type, float dequan_s) {
                 if constexpr (Is_INT8) {
                     Tensor tSrS_converted = make_tensor_like<ElementAccum>(tSrS_ambiguous_type);
-                    float dequan_s = softmax.dequan_s;
                     // Convert int32 to float and multiply by dequantization scale
                     // Uses automatic type promotion: int32 * float -> float
                     flash::convert_int32_to_float_scaled(tSrS_ambiguous_type, tSrS_converted, dequan_s);
@@ -1550,11 +1549,11 @@ namespace flash
                     flash::gemm</*zero_init=*/false, /*wg_wait=*/0>(tiled_mma_qv, tSrQv, tSrV(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
                 }
 
-                auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
-                scoremod_premask_fn(tSrS);
                 if constexpr (Is_INT8){
                     softmax.set_dequan_s(KDescaleSliced(n_block));
                 }
+                auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type, softmax.dequan_s);
+                scoremod_premask_fn(tSrS);
                 mask.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS, m_block, n_block);
 
                 // Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
@@ -1838,12 +1837,12 @@ namespace flash
                         warpgroup_wait<0>();
                     }
 
-                    auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
-
-                    scoremod_premask_fn(tSrS);
                     if constexpr (Is_INT8){
                         softmax.set_dequan_s(KDescaleSliced(new_n_block));
                     }
+                    auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type, softmax.dequan_s);
+
+                    scoremod_premask_fn(tSrS);
                     mask_fn(tSrS, new_n_block);
                     // Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
                     Tensor scores_scale = [&]
