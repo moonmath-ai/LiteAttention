@@ -239,6 +239,25 @@ CUTLASS_DEVICE void convert_type_out(Tensor<Engine, Layout> const &tensor, Tenso
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+// Convert int32 tensor to float by multiplying with a scalar (dequantization scale).
+// Leverages automatic type promotion: int32 * float -> float
+template <typename Engine, typename Layout, typename EngineOut>
+CUTLASS_DEVICE void convert_int32_to_float_scaled(Tensor<Engine, Layout> const &tensor, 
+                                                   Tensor<EngineOut, Layout> &out, 
+                                                   float scale) {
+    static_assert(std::is_same_v<typename Engine::value_type, int32_t>, 
+                  "Input tensor must be int32_t");
+    static_assert(std::is_same_v<typename EngineOut::value_type, float>, 
+                  "Output tensor must be float");
+    CUTLASS_PRAGMA_UNROLL
+    for (int i = 0; i < size(tensor); ++i) {
+        // int32 * float -> float (automatic type promotion)
+        out(i) = tensor(i) * scale;
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
 // Blocks until all but N previous cp.async.commit_group operations have committed.
 // This differs from cute::cp_async_wait in that when N = 0 we don't call cp.async.wait_all
 // (which is equivalent to commit_group then wait_group 0).

@@ -287,7 +287,7 @@ namespace flash
 
             static_assert(is_same_v<PipelineParamsK, PipelineParamsVt>);
             PipelineParamsVt pipeline_params_vt = pipeline_params_k;
-            if constexpr (Use_TMA_KV)
+            if constexpr (Use_TMA_KV && (!SameHeadDim || Is_INT8))
             {
                 pipeline_params_vt.transaction_bytes = CollectiveMainloop::TmaTransactionBytesV;
                 if constexpr (LargeHeadDimV && !SameHeadDim)
@@ -531,6 +531,7 @@ namespace flash
                     }
                     // If there's tanh softcap, the scaling will be done before tanh.
                     float softmax_scale_log2 = params.mainloop.softmax_scale_log2;
+                    float q_descale = 1.0f;
                     int const bidh = get<1>(block_coord);
                     int const bidh_kv = !PackGQA ? params.mainloop.qhead_per_khead_divmod.divide(bidh) : bidh;
                     if constexpr (Is_FP8 && !Has_softcap)
@@ -546,15 +547,16 @@ namespace flash
                         auto shape_q_descale_3d = make_shape(get<3>(params.mainloop.shape_Q), get<2>(params.mainloop.shape_Q), num_m_blocks);
                         Tensor mQDescale = make_tensor(make_gmem_ptr(params.mainloop.ptr_q_descale), shape_q_descale_3d, params.mainloop.stride_q_descale_int8);
                         // Slice by bidb and bidh to get scalar value for this m_block
-                        float const q_descale = mQDescale(bidb, bidh, m_block);
-                        softmax_scale_log2 *= q_descale;
+                        q_descale = mQDescale(bidb, bidh, m_block);
+                        // softmax_scale_log2 *= q_descale;
+                        // softmax_scale_log2 = q_descale;
                     }
                     const int thread_idx = threadIdx.x - MmaThreadOffset;
 
                     // // DOR: kNRows = 2 * (2 * 128 / 256) = 2
                     // flash::Softmax<!LargeHeadDimV ? 2 * (2 * kBlockM / NumMmaThreads) : 2, /*Max_offset=*/!Is_8Bit ? 0 : 8> softmax(softmax_scale_log2, row_mask, local_row_idx);
                     // DOR: kNRows = 2 * (2 * 128 / 256) = 2
-                    flash::Softmax<!LargeHeadDimV ? 2 * (2 * kBlockM / NumMmaThreads) : 2, /*Max_offset=*/!Is_FP8 ? 0 : 8> softmax(softmax_scale_log2, seqlen_info.seqlen_q, thread_idx);
+                    flash::Softmax<!LargeHeadDimV ? 2 * (2 * kBlockM / NumMmaThreads) : 2, /*Max_offset=*/!Is_FP8 ? 0 : 8> softmax(softmax_scale_log2, q_descale, seqlen_info.seqlen_q, thread_idx);
 
                     /*
                     taken from the answer here: https://youtu.be/JwUcZwPOCpA?t=3152

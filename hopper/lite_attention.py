@@ -625,11 +625,19 @@ class LiteAttention:
     
     # TODO: consider passing the scale as well so to not need to multiply by it inside the kernel
     def _quantize_query_key(self, query: torch.Tensor, key: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        SageAttention-style quantization for Q and K:
+        - Q: per-block quantization (kBlockM tokens share a scale per head)
+        - K: smooth by subtracting channel-wise mean (per head_dim element), then per-block quantization
+        
+        The K smoothing reduces channel-wise outliers without affecting attention scores
+        (since softmax is shift-invariant along the K dimension).
+        """
         if self.use_int8:
             kBlockM, kBlockN = LiteAttention.get_MN(query.shape[-1], torch.int8)
             batch, seq_len, heads, head_dim = query.shape
             
-            # Quantize query per kBlockM tokens
+            # === SageAttention Q quantization: per-block (per kBlockM tokens) ===
             num_q_blocks = self.ceil_div(seq_len, kBlockM)
             q_padded_len = num_q_blocks * kBlockM
             q_pad = q_padded_len - seq_len
@@ -641,11 +649,18 @@ class LiteAttention:
             q_int8 = q_int8.view(batch, q_padded_len, heads, head_dim)[:, :seq_len]
             q_descale = q_scale.permute(0, 2, 1).contiguous().to(torch.float32)  # [batch, heads, num_q_blocks]
             
-            # Quantize key per kBlockN tokens
+            # === SageAttention K quantization: smooth_k + per-block ===
+            # Step 1: Smooth K by subtracting channel-wise mean (per head_dim element across all tokens)
+            # This reduces outliers in the head_dim channels without affecting softmax output
+            # (since softmax(Q @ K^T) is invariant to adding a constant to K along token dim)
+            k_mean_per_channel = key.mean(dim=1, keepdim=True)  # [batch, 1, heads, head_dim]
+            key_smoothed = key - k_mean_per_channel
+            
+            # Step 2: Per-block quantization (per kBlockN tokens)
             num_k_blocks = self.ceil_div(seq_len, kBlockN)
             k_padded_len = num_k_blocks * kBlockN
             k_pad = k_padded_len - seq_len
-            key_padded = torch.nn.functional.pad(key, (0, 0, 0, 0, 0, k_pad)) if k_pad > 0 else key
+            key_padded = torch.nn.functional.pad(key_smoothed, (0, 0, 0, 0, 0, k_pad)) if k_pad > 0 else key_smoothed
             k_reshaped = key_padded.view(batch, num_k_blocks, kBlockN, heads, head_dim)
             k_amax = k_reshaped.abs().amax(dim=(2, 4)).clamp(min=1e-7)  # [batch, num_k_blocks, heads]
             k_scale = k_amax / 127.0
