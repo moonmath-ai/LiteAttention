@@ -1518,12 +1518,13 @@ namespace flash
 
             // Helper to convert QK accumulator to ElementAccum (only needed when tSrS is int32_t in INT8 mode)
             // In INT8 mode: converts int32 to float and multiplies by dequan_s to dequantize
-            auto convert_qk_accum_to_float = [&](auto& tSrS_ambiguous_type, float dequan_s) {
+            // auto convert_qk_accum_to_float = [&](auto& tSrS_ambiguous_type, float dequan_s) {
+            auto convert_qk_accum_to_float = [&](auto& tSrS_ambiguous_type) {
                 if constexpr (Is_INT8) {
                     Tensor tSrS_converted = make_tensor_like<ElementAccum>(tSrS_ambiguous_type);
-                    // Convert int32 to float and multiply by dequantization scale
-                    // Uses automatic type promotion: int32 * float -> float
-                    flash::convert_int32_to_float_scaled(tSrS_ambiguous_type, tSrS_converted, dequan_s);
+                    // // Convert int32 to float and multiply by dequantization scale
+                    // // Uses automatic type promotion: int32 * float -> float
+                    // flash::convert_int32_to_float_scaled(tSrS_ambiguous_type, tSrS_converted, dequan_s);
                     return tSrS_converted;
                 } else {
                     return tSrS_ambiguous_type;
@@ -1552,9 +1553,11 @@ namespace flash
                 if constexpr (Is_INT8){
                     softmax.set_dequan_s(KDescaleSliced(n_block));
                 }
-                auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type, softmax.dequan_s);
-                scoremod_premask_fn(tSrS);
-                mask.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS, m_block, n_block);
+                auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
+                if constexpr (!Is_INT8){
+                    scoremod_premask_fn(tSrS_ambiguous_type);
+                }
+                mask.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS_ambiguous_type, m_block, n_block);
 
                 // Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
                 Tensor scores_scale = [&]
@@ -1562,17 +1565,22 @@ namespace flash
                     // TODO: make sure we allowed to do max reduction on the int32_t
                     if constexpr (Is_skipable){
                         return softmax.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, /*Is_first=*/true, true>(
-                            tSrS, params.qk_skip_mask_args.thr, skip_reader, m_block
+                            tSrS_ambiguous_type, params.qk_skip_mask_args.thr, skip_reader, m_block
                         );
                     }
                     else{
-                        return softmax.template max_get_scale</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
+                        return softmax.template max_get_scale</*Is_first=*/true, /*Check_inf=*/true>(tSrS_ambiguous_type);
                     }
                 }();
                 // Don't need to store scales to send to WG1 (in the case of LargeHeadDimV) since it's 1.f
 
-                // TODO: tSrS doesn't necessarily keep it's type! for example input int32_t output float
-                softmax.template online_softmax</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
+                // // TODO: tSrS doesn't necessarily keep it's type! for example input int32_t output float
+                // softmax.template online_softmax</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
+                if constexpr (!Is_INT8){
+                    softmax.template online_softmax</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
+                } else {
+                    softmax.template online_softmax_dequantize</*Is_first=*/true, /*Check_inf=*/true>(tSrS_ambiguous_type, tSrS);
+                }
                 if constexpr (Is_FP8 && !V_colmajor)
                 {
                     flash::permute_Cregs_fp8(tSrS);
@@ -1657,23 +1665,29 @@ namespace flash
                         flash::gemm</*zero_init=*/false, /*wg_wait=*/0>(tiled_mma_qv, tSrQv, tSrV(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
                     }
                     auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
-                    scoremod_premask_fn(tSrS);
+                    if constexpr (!Is_INT8){
+                        scoremod_premask_fn(tSrS_ambiguous_type);
+                    }
                     // mask_fn(tSrS, n_block);
-                    mask_fn(tSrS, new_n_block);
+                    mask_fn(tSrS_ambiguous_type, new_n_block);
                     if constexpr (Is_skipable){
                         cute::copy(
                             softmax.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, /*Is_first=*/false, Check_inf>(
-                                tSrS, params.qk_skip_mask_args.thr, skip_reader, m_block),
+                                tSrS_ambiguous_type, params.qk_skip_mask_args.thr, skip_reader, m_block),
                             scores_scale);
                     }else{
-                        cute::copy(softmax.template max_get_scale</*Is_first=*/false, Check_inf>(tSrS), scores_scale);
+                        cute::copy(softmax.template max_get_scale</*Is_first=*/false, Check_inf>(tSrS_ambiguous_type), scores_scale);
                     }
 
                     if constexpr (LargeHeadDimV)
                     {
                         store_scales(scores_scale, smem_pipe_read_v.index());
                     }
-                    softmax.template online_softmax</*Is_first=*/false, Check_inf>(tSrS);
+                    if constexpr (!Is_INT8){
+                        softmax.template online_softmax</*Is_first=*/false, Check_inf>(tSrS);
+                    } else {
+                        softmax.template online_softmax_dequantize</*Is_first=*/false, Check_inf>(tSrS_ambiguous_type, tSrS);
+                    }
                     if constexpr (!HasQv)
                     {
                         warpgroup_wait<0>();
@@ -1840,18 +1854,20 @@ namespace flash
                     if constexpr (Is_INT8){
                         softmax.set_dequan_s(KDescaleSliced(new_n_block));
                     }
-                    auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type, softmax.dequan_s);
+                    auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
 
-                    scoremod_premask_fn(tSrS);
-                    mask_fn(tSrS, new_n_block);
+                    if constexpr (!Is_INT8){
+                        scoremod_premask_fn(tSrS_ambiguous_type);
+                    }
+                    mask_fn(tSrS_ambiguous_type, new_n_block);
                     // Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
                     Tensor scores_scale = [&]
                     {
                         if constexpr (Is_skipable){
-                            return softmax.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, Is_first_iter, Check_inf>(tSrS, params.qk_skip_mask_args.thr, skip_reader, m_block);
+                            return softmax.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, Is_first_iter, Check_inf>(tSrS_ambiguous_type, params.qk_skip_mask_args.thr, skip_reader, m_block);
                         }
                         else{
-                            return softmax.template max_get_scale<Is_first_iter, Check_inf>(tSrS);
+                            return softmax.template max_get_scale<Is_first_iter, Check_inf>(tSrS_ambiguous_type);
                         }
                     }();
 
@@ -1860,7 +1876,11 @@ namespace flash
                         store_scales(scores_scale, smem_pipe_read_prev.index());
                     }
 
-                    softmax.template online_softmax<Is_first_iter, Check_inf>(tSrS);
+                    if constexpr (!Is_INT8){
+                        softmax.template online_softmax<Is_first_iter, Check_inf>(tSrS);
+                    } else {
+                        softmax.template online_softmax_dequantize<Is_first_iter, Check_inf>(tSrS_ambiguous_type, tSrS);
+                    }
 
                     if constexpr (Is_FP8 && !V_colmajor)
                     {

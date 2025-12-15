@@ -644,7 +644,7 @@ class LiteAttention:
             query_padded = torch.nn.functional.pad(query, (0, 0, 0, 0, 0, q_pad)) if q_pad > 0 else query
             q_reshaped = query_padded.view(batch, num_q_blocks, kBlockM, heads, head_dim)
             q_amax = q_reshaped.abs().amax(dim=(2, 4)).clamp(min=1e-7)  # [batch, num_q_blocks, heads]
-            q_scale = q_amax / 127.0
+            q_scale = (q_amax / 127.0) * (torch.log2(torch.e) / torch.sqrt(head_dim))
             q_int8 = (q_reshaped / q_scale[:, :, None, :, None]).round().clamp(-128, 127).to(torch.int8)
             q_int8 = q_int8.view(batch, q_padded_len, heads, head_dim)[:, :seq_len]
             q_descale = q_scale.permute(0, 2, 1).contiguous().to(torch.float32)  # [batch, heads, num_q_blocks]
