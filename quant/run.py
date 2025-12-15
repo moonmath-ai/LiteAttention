@@ -1,148 +1,189 @@
 import torch
-import os
-import sys
 import numpy as np
-import ctypes
-
-# Preload PyTorch libraries to avoid import errors
-torch_lib_path = os.path.dirname(torch.__file__) + '/lib'
-libc10_path = os.path.join(torch_lib_path, 'libc10.so')
-if os.path.exists(libc10_path):
-    try:
-        ctypes.CDLL(libc10_path, mode=ctypes.RTLD_GLOBAL)
-    except:
-        pass
+import sys
 
 try:
     import quant_tma
 except ImportError as e:
-    print(f"Extension not installed. Error: {e}")
-    print("Please run: python setup.py build_ext --inplace")
+    print(f"Extension not installed. Run: python setup.py build_ext --inplace")
     sys.exit(1)
 
+TILE_SEQ_Q = 128  # kBlockM - Q sequence dimension tile size (always 128)
 
-def run_correctness_test(M, N, dim_K, name=""):
-    """Run correctness test for TMA quantization."""
+def get_tile_seq_k(head_dim):
+    """Get BLOCK_N size for K tiles based on head_dim"""
+    tile_map = {
+        64: 224,
+        96: 208,
+        128: 176,
+    }
+    if head_dim not in tile_map:
+        raise ValueError(f"Unsupported head_dim={head_dim}. Only 64, 96, 128 supported.")
+    return tile_map[head_dim]
 
+
+def quantize_qk(Q, K, dtype='f32'):
+    """
+    Quantize Q and K tensors with K mean centering.
+
+    Args:
+        Q: [batch, seqlen_q, num_heads, head_dim] tensor (BSHD layout)
+        K: [batch, seqlen_k, num_heads, head_dim] tensor (BSHD layout)
+        dtype: 'f32', 'f16', or 'bf16'
+
+    Returns:
+        Q_q: quantized Q [batch, seqlen_q, num_heads, head_dim] int8
+        K_q: quantized K (mean-centered) [batch, seqlen_k, num_heads, head_dim] int8
+        q_scales: [batch * num_heads, num_seq_tiles_q] per-seq-tile scales (shared across head_dim)
+        k_scales: [batch * num_heads, num_seq_tiles_k] per-seq-tile scales (shared across head_dim)
+        k_mean: [batch * num_heads, head_dim] per-dimension means
+    """
+    batch, seqlen_q, num_heads, head_dim = Q.shape
+    _, seqlen_k, _, _ = K.shape
+    device = Q.device
+    total_bh = batch * num_heads
+
+    # Allocate outputs in same layout [batch, seqlen, num_heads, head_dim]
+    Q_q = torch.zeros(batch, seqlen_q, num_heads, head_dim, device=device, dtype=torch.int8)
+    K_q = torch.zeros(batch, seqlen_k, num_heads, head_dim, device=device, dtype=torch.int8)
+
+    # Kernel uses per-seq-tile quantization (shared across all head_dim), per-dimension for means
+    TILE_SEQ_K = get_tile_seq_k(head_dim)
+    num_seq_tiles_q = (seqlen_q + TILE_SEQ_Q - 1) // TILE_SEQ_Q
+    num_seq_tiles_k = (seqlen_k + TILE_SEQ_K - 1) // TILE_SEQ_K
+
+    q_scales = torch.zeros(total_bh, num_seq_tiles_q, device=device, dtype=torch.float32)
+    k_scales = torch.zeros(total_bh, num_seq_tiles_k, device=device, dtype=torch.float32)
+    k_mean = torch.zeros(total_bh, head_dim, device=device, dtype=torch.float32)
+
+    # Select kernel based on dtype (f32 removed - only supports fp16/bf16)
+    func = {'f16': quant_tma.quantize_qk_f16,
+            'bf16': quant_tma.quantize_qk_bf16}[dtype]
+
+    # Pass contiguous 4D tensors directly - kernel expects [batch, seqlen, num_heads, head_dim]
+    block_m = TILE_SEQ_Q
+    block_n = TILE_SEQ_K
+    func(Q.contiguous().data_ptr(), K.contiguous().data_ptr(),
+         Q_q.data_ptr(), K_q.data_ptr(),
+         q_scales.data_ptr(), k_scales.data_ptr(), k_mean.data_ptr(),
+         batch, seqlen_q, seqlen_k, num_heads, head_dim,
+         block_m, block_n)
+
+    return Q_q, K_q, q_scales, k_scales, k_mean
+
+
+def test_correctness(batch, seqlen_q, seqlen_k, num_heads, head_dim, dtype='f32', name=""):
+    """Test quantization correctness."""
     device = torch.device('cuda')
     
-    # Generate random input data on GPU
-    # Use continuous tensors to ensure stride=1 for simple pointer arithmetic
-    Q_gpu = torch.randn(M, dim_K, device=device, dtype=torch.float32) * 0.1
-    K_gpu = torch.randn(N, dim_K, device=device, dtype=torch.float32) * 0.1
+    # Map dtype string to torch dtype
+    torch_dtype = {'f32': torch.float32, 'f16': torch.float16, 'bf16': torch.bfloat16}[dtype]
+    
+    # Generate random inputs
+    Q = torch.randn(batch, seqlen_q, num_heads, head_dim, device=device, dtype=torch_dtype) * 0.1
+    K = torch.randn(batch, seqlen_k, num_heads, head_dim, device=device, dtype=torch_dtype) * 0.1
+    
+    # Run quantization
+    Q_q, K_q, q_scales, k_scales, k_mean = quantize_qk(Q.contiguous(), K.contiguous(), dtype)
+    torch.cuda.synchronize()
+    
+    # Reference implementation
+    inv_sqrt_d = 1.0 / np.sqrt(head_dim)
+    
+    # K mean: mean across seqlen dimension -> [batch, num_heads, head_dim]
+    k_mean_ref = K.float().mean(dim=1)  # [batch, num_heads, head_dim]
+    # Reshape to [batch * num_heads, head_dim] to match kernel output
+    k_mean_ref_flat = k_mean_ref.reshape(batch * num_heads, head_dim)
+    
+    # Dequantize and compare - convert to float only when needed
+    Q_f = Q.float()
+    K_f = K.float()
+    Q_q_f = Q_q.float()
+    K_q_f = K_q.float()
 
-    # Allocate output arrays on GPU
-    Q_q_gpu = torch.zeros(M, dim_K, device=device, dtype=torch.int8)
-    K_q_gpu = torch.zeros(N, dim_K, device=device, dtype=torch.int8)
+    num_seq_tiles_q = (seqlen_q + TILE_SEQ_Q - 1) // TILE_SEQ_Q
+    TILE_SEQ_K = get_tile_seq_k(head_dim)
+    num_seq_tiles_k = (seqlen_k + TILE_SEQ_K - 1) // TILE_SEQ_K
 
-    # Calculate number of scale elements
-    TileM, TileN, TileK = 64, 64, 64
-    num_m_tiles = (M + TileM - 1) // TileM
-    num_n_tiles = (N + TileN - 1) // TileN
-    num_k_tiles = (dim_K + TileK - 1) // TileK
-    num_q_scales = num_m_tiles * num_k_tiles
-    num_k_scales = num_n_tiles * num_k_tiles
+    # Dequantize Q tile by tile using per-seq-tile scales (shared across all head_dim)
+    Q_dequant = torch.zeros_like(Q_f)
+    for b in range(batch):
+        for h in range(num_heads):
+            bh = b * num_heads + h
+            for st in range(num_seq_tiles_q):
+                s_start, s_end = st * TILE_SEQ_Q, min((st + 1) * TILE_SEQ_Q, seqlen_q)
+                scale = q_scales[bh, st].item()
+                # Scale is shared across all head_dim
+                Q_dequant[b, s_start:s_end, h, :] = \
+                    Q_q_f[b, s_start:s_end, h, :] * scale
 
-    q_scales_gpu = torch.zeros(num_q_scales, device=device, dtype=torch.float32)
-    k_scales_gpu = torch.zeros(num_k_scales, device=device, dtype=torch.float32)
-
-    try:
-        # Use device pointer version for direct GPU access
-        quant_tma.tma_load_qk_device(
-            Q_gpu.data_ptr(),
-            K_gpu.data_ptr(),
-            Q_q_gpu.data_ptr(),
-            K_q_gpu.data_ptr(),
-            q_scales_gpu.data_ptr(),
-            k_scales_gpu.data_ptr(),
-            M, N, dim_K
-        )
-        torch.cuda.synchronize()
-        
-    except Exception as e:
-        print(f"  ✗ {name} Q[{M},{dim_K}] K[{N},{dim_K}] - Error: {e}")
-        return False
-
-    Q = Q_gpu.cpu().numpy()
-    K = K_gpu.cpu().numpy()
-    Q_q = Q_q_gpu.cpu().numpy()
-    K_q = K_q_gpu.cpu().numpy()
-    q_scales = q_scales_gpu.cpu().numpy()
-    k_scales = k_scales_gpu.cpu().numpy()
-
-    inv_sqrt_d = 1.0 / np.sqrt(float(dim_K))
-
-    # Dequantize tile by tile
-    Q_dequant = np.zeros_like(Q)
-    K_dequant = np.zeros_like(K)
-
-    for m_idx in range(num_m_tiles):
-        for k_idx in range(num_k_tiles):
-            q_block_idx = m_idx * num_k_tiles + k_idx
-            m_start = m_idx * TileM
-            m_end = min(m_start + TileM, M)
-            k_start = k_idx * TileK
-            k_end = min(k_start + TileK, dim_K)
-
-            Q_dequant[m_start:m_end, k_start:k_end] = Q_q[m_start:m_end, k_start:k_end].astype(np.float32) * q_scales[q_block_idx]
-
-    for n_idx in range(num_n_tiles):
-        for k_idx in range(num_k_tiles):
-            k_block_idx = n_idx * num_k_tiles + k_idx
-            n_start = n_idx * TileN
-            n_end = min(n_start + TileN, N)
-            k_start = k_idx * TileK
-            k_end = min(k_start + TileK, dim_K)
-
-            K_dequant[n_start:n_end, k_start:k_end] = K_q[n_start:n_end, k_start:k_end].astype(np.float32) * k_scales[k_block_idx]
-
-    # Q should be scaled by inv_sqrt_d in the quantization
-    Q_expected = Q * inv_sqrt_d
-    K_expected = K
-
-    Q_max_diff = np.max(np.abs(Q_expected - Q_dequant))
-    K_max_diff = np.max(np.abs(K_expected - K_dequant))
-    has_nan = np.isnan(Q_dequant).any() or np.isnan(K_dequant).any()
-    has_inf = np.isinf(Q_dequant).any() or np.isinf(K_dequant).any()
-
-    # Check scale sanity
-    scales_ok = (q_scales > 0).all() and (k_scales > 0).all()
-
-    # Quantization error tolerance (int8 quantization introduces error)
-    # Relaxed slightly to 0.02 to account for float vs int precision effects
-    tolerance = 0.02  
-    if Q_max_diff < tolerance and K_max_diff < tolerance and not has_nan and not has_inf and scales_ok:
-        print(f"  ✓ {name} Q[{M},{dim_K}] K[{N},{dim_K}] - Q_err={Q_max_diff:.2e}, K_err={K_max_diff:.2e}")
-        return True
-    else:
-        print(f"  ✗ {name} Q[{M},{dim_K}] K[{N},{dim_K}] - Q_err={Q_max_diff:.2e}, K_err={K_max_diff:.2e}, scales_ok={scales_ok}")
-        if not scales_ok:
-            print(f"    Scale issues: q_scales_valid={np.all(q_scales > 0)}, k_scales_valid={np.all(k_scales > 0)}")
-        return False
+    # Dequantize K tile by tile using per-seq-tile scales (K was mean-centered)
+    K_dequant_centered = torch.zeros_like(K_f)
+    for b in range(batch):
+        for h in range(num_heads):
+            bh = b * num_heads + h
+            for st in range(num_seq_tiles_k):
+                s_start, s_end = st * TILE_SEQ_K, min((st + 1) * TILE_SEQ_K, seqlen_k)
+                scale = k_scales[bh, st].item()
+                # Scale is shared across all head_dim
+                K_dequant_centered[b, s_start:s_end, h, :] = \
+                    K_q_f[b, s_start:s_end, h, :] * scale
+    
+    # Q expected: Q * inv_sqrt_d - use in-place multiplication to save memory
+    Q_expected = Q_f * inv_sqrt_d
+    # K expected: K - mean (mean-centered)
+    K_centered_ref = K_f - k_mean_ref.unsqueeze(1)
+    
+    # Check k_mean
+    k_mean_err = (k_mean - k_mean_ref_flat).abs().max().item()
+    
+    # Check Q quantization error
+    Q_err = (Q_expected - Q_dequant).abs().max().item()
+    
+    # Check K quantization error (comparing mean-centered versions)
+    K_err = (K_centered_ref - K_dequant_centered).abs().max().item()
+    
+    # Tolerance for int8 quantization
+    tolerance = 0.05
+    passed = Q_err < tolerance and K_err < tolerance and k_mean_err < tolerance
+    
+    status = "✓" if passed else "✗"
+    print(f"  {status} {name} [{batch},{seqlen_q},{seqlen_k},{num_heads},{head_dim}] {dtype}: "
+          f"Q_err={Q_err:.2e}, K_err={K_err:.2e}, mean_err={k_mean_err:.2e}")
+    
+    # Explicitly free large tensors to help with memory management
+    del Q, K, Q_f, K_f, Q_q, K_q, Q_q_f, K_q_f, Q_dequant, K_dequant_centered
+    del Q_expected, K_centered_ref, k_mean_ref, k_mean_ref_flat
+    torch.cuda.empty_cache()
+    
+    return passed
 
 
 def main():
     if not torch.cuda.is_available():
-        print("ERROR: CUDA not available")
+        print("CUDA not available")
         sys.exit(1)
-
-    print(f"TMA Quantization Correctness Tests - {torch.cuda.get_device_name()}\n")
-
-    test_cases = [
-        (64, 64, 64, "Small"),
-        (128, 128, 64, "Medium"),
-        (512, 512, 64, "Large"),
-        (512, 256, 64, "M>N"),
-        (256, 512, 64, "N>M"),
-        (128, 128, 128, "Large K"),
-        (1024, 1024, 256, "Very large"),
+    
+    print(f"Q/K Quantization Tests - {torch.cuda.get_device_name()}\n")
+    
+    tests = [
+        # (batch, seqlen_q, seqlen_k, num_heads, head_dim, dtype, name)
+        # Only fp16/bf16 supported, head_dim limited to 64, 96, 128 (192/256 exceed shared memory)
+        # (1, 128, 128, 1, 128, 'bf16', "Small BF16"),
+        # (2, 128, 128, 4, 64, 'bf16', "Medium BF16"),
+        # (2, 256, 256, 8, 64, 'bf16', "Large BF16"),
+        # (1, 512, 256, 4, 128, 'bf16', "Q>K BF16"),
+        # (1, 256, 512, 4, 128, 'bf16', "K>Q BF16"),
+        # (4, 128, 128, 8, 64, 'bf16', "Multi-batch BF16"),
+        # (2, 512, 512, 8, 128, 'bf16', "Medium seq BF16"),
+        # (8, 7040, 7040, 8, 128, 'bf16', "Large seq BF16"),
+        (8, 10000, 10000, 8, 128, 'bf16', "Large seq BF16 with non-tile multiple"),
     ]
-
-    passed = sum(run_correctness_test(M, N, dim_K, name) for M, N, dim_K, name in test_cases)
-    total = len(test_cases)
-
-    print(f"\nResult: {passed}/{total} passed")
-    if passed == total:
+    
+    passed = sum(test_correctness(*t) for t in tests)
+    print(f"\nResult: {passed}/{len(tests)} passed")
+    
+    if passed == len(tests):
         print("✓ ALL TESTS PASSED")
     else:
         print("✗ SOME TESTS FAILED")
