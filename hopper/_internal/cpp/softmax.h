@@ -224,7 +224,8 @@ namespace flash
 
         CUTLASS_DEVICE void set_dequan_s(float const dequan_k)
         {
-            dequan_s = dequan_k * softmax_scale_log2;
+            // dequan_s = dequan_k * softmax_scale_log2;
+            dequan_s = __shfl_sync(0xffffffff, dequan_k * softmax_scale_log2, 0);
         }
 
         template <int kBlockM, typename TiledMma, bool const Is_first, bool const Check_inf = false, typename Tensor0>
