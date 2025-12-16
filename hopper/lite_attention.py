@@ -644,21 +644,23 @@ class LiteAttention:
             q_pad = q_padded_len - seq_len
             query_padded = torch.nn.functional.pad(query, (0, 0, 0, 0, 0, q_pad)) if q_pad > 0 else query
             q_reshaped = query_padded.view(batch, num_q_blocks, kBlockM, heads, head_dim)
-            q_amax = q_reshaped.abs().amax(dim=(2, 4)).clamp(min=1e-7)  # [batch, num_q_blocks, heads]
+            q_amax = q_reshaped.abs().amax(dim=(2, 4)).clamp(min=1e-7).to(torch.float64)  # [batch, num_q_blocks, heads]
             # q_scale = (q_amax  * (math.log2(math.e) / math.sqrt(head_dim))) / 127.0
-            q_scale = 127.0 / q_amax
-            q_descale = q_amax * (math.log2(math.e) / (127.0 * math.sqrt(head_dim)))
+            q_scale = torch.tensor(127.0, dtype=torch.float64, device=q_amax.device) / q_amax
+            constant_term = math.log2(math.e) / math.sqrt(head_dim * (127 ** 2))
+            # q_descale = q_amax * (math.log2(math.e) / (127.0 * math.sqrt(head_dim)))
+            q_descale = q_amax * constant_term
             # q_int8 = (q_reshaped / q_scale[:, :, None, :, None]).round().clamp(-128, 127).to(torch.int8)
             q_int8 = (q_reshaped * q_scale[:, :, None, :, None]).round().clamp(-128, 127).to(torch.int8)
             q_int8 = q_int8.view(batch, q_padded_len, heads, head_dim)[:, :seq_len]
             # q_descale = q_scale.permute(0, 2, 1).contiguous().to(torch.float32)  # [batch, heads, num_q_blocks]
-            q_descale = q_descale.permute(0, 2, 1).contiguous().to(torch.float32)  # [batch, heads, num_q_blocks]
+            q_descale = q_descale.permute(0, 2, 1).contiguous()  # [batch, heads, num_q_blocks]
             
             # === SageAttention K quantization: smooth_k + per-block ===
             # Step 1: Smooth K by subtracting channel-wise mean (per head_dim element across all tokens)
             # This reduces outliers in the head_dim channels without affecting softmax output
             # (since softmax(Q @ K^T) is invariant to adding a constant to K along token dim)
-            k_mean_per_channel = key.mean(dim=1, keepdim=True)  # [batch, 1, heads, head_dim]
+            k_mean_per_channel = key.to(torch.float64).mean(dim=1, keepdim=True)  # [batch, 1, heads, head_dim]
             key_smoothed = key - k_mean_per_channel
             
             # Step 2: Per-block quantization (per kBlockN tokens)
@@ -667,11 +669,12 @@ class LiteAttention:
             k_pad = k_padded_len - seq_len
             key_padded = torch.nn.functional.pad(key_smoothed, (0, 0, 0, 0, 0, k_pad)) if k_pad > 0 else key_smoothed
             k_reshaped = key_padded.view(batch, num_k_blocks, kBlockN, heads, head_dim)
-            k_amax = k_reshaped.abs().amax(dim=(2, 4)).clamp(min=1e-7)  # [batch, num_k_blocks, heads]
+            k_amax = k_reshaped.abs().amax(dim=(2, 4)).clamp(min=1e-7).to(torch.float64)  # [batch, num_k_blocks, heads]
             k_scale = k_amax / 127.0
             k_int8 = (k_reshaped / k_scale[:, :, None, :, None]).round().clamp(-128, 127).to(torch.int8)
             k_int8 = k_int8.view(batch, k_padded_len, heads, head_dim)[:, :seq_len]
-            k_descale = k_scale.permute(0, 2, 1).contiguous().to(torch.float32)  # [batch, heads, num_k_blocks]
+            # k_descale = k_scale.permute(0, 2, 1).contiguous().to(torch.float32)  # [batch, heads, num_k_blocks]
+            k_descale = k_scale.permute(0, 2, 1).contiguous()  # [batch, heads, num_k_blocks]
             
             return q_int8, k_int8, q_descale, k_descale
         else:

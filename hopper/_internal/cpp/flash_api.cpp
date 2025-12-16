@@ -1233,10 +1233,10 @@ mha_fwd(at::Tensor q,   // (b, s_q, h, d) or (total_q, h, d) if there is cu_seql
                 params.q_descale_block_stride = q_descale.stride(2);
             } else {
                 // FP8: 2D tensor (batch, heads)
-            CHECK_SHAPE(q_descale, batch_size, num_heads_k);
-            params.q_descale_ptr = q_descale.data_ptr<float>();
-            params.q_descale_batch_stride = q_descale.stride(0);
-            params.q_descale_head_stride = q_descale.stride(1);
+                CHECK_SHAPE(q_descale, batch_size, num_heads_k);
+                params.q_descale_ptr = q_descale.data_ptr<float>();
+                params.q_descale_batch_stride = q_descale.stride(0);
+                params.q_descale_head_stride = q_descale.stride(1);
                 params.q_descale_block_stride = 0;  // Not used for FP8
             }
         } else {

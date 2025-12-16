@@ -1419,7 +1419,7 @@ namespace flash
                     // TODO: pass the shape as a param?
                     auto shape_k_descale_3d = make_shape(get<3>(params.shape_K), get<2>(params.shape_K), n_block_max);
                     // TODO: in the future make assume mKDescale contiguous and don't specify the stride
-                    Tensor mKDescale = make_tensor(make_gmem_ptr(params.ptr_k_descale), shape_k_descale_3d, params.stride_k_descale_int8);
+                    Tensor mKDescale = make_tensor(make_gmem_ptr(reinterpret_cast<const double*>(params.ptr_k_descale)), shape_k_descale_3d, params.stride_k_descale_int8);
                     // Slice by bidb and bidh_kv to get 1D tensor indexed by n_block
                     return mKDescale(bidb, bidh_kv, _);
                 } else {
@@ -1521,13 +1521,17 @@ namespace flash
             // auto convert_qk_accum_to_float = [&](auto& tSrS_ambiguous_type, float dequan_s) {
             auto convert_qk_accum_to_float = [&](auto& tSrS_ambiguous_type) {
                 if constexpr (Is_INT8) {
+                    Tensor tSrS_converted = make_tensor_like<double>(tSrS_ambiguous_type);
                     // // Tensor tSrS_converted = make_tensor_like<ElementAccum>(tSrS_ambiguous_type);
-                    // Reinterpret the same tensor with ElementAccum type (static cast)
-                    return recast<ElementAccum>(tSrS_ambiguous_type);
+
+                    // // Reinterpret the same tensor with ElementAccum type (static cast)
+                    // return recast<ElementAccum>(tSrS_ambiguous_type);
+
                     // // Convert int32 to float and multiply by dequantization scale
                     // // Uses automatic type promotion: int32 * float -> float
                     // flash::convert_int32_to_float_scaled(tSrS_ambiguous_type, tSrS_converted, dequan_s);
-                    // return tSrS_converted;
+
+                    return tSrS_converted;
                 } else {
                     return tSrS_ambiguous_type;
                 }

@@ -44,16 +44,16 @@ namespace flash
 
     // Dequantize a 1D tensor (e.g., after reduction) to another 1D tensor with optional max operation
     template <bool const zero_init = true, typename Engine0, typename Layout0, typename Engine1, typename Layout1>
-    __device__ __forceinline__ void dequantize_max_1d_(Tensor<Engine0, Layout0> &src, Tensor<Engine1, Layout1> &dst, float const dequan_s)
+    __device__ __forceinline__ void dequantize_max_1d_(Tensor<Engine0, Layout0> &src, Tensor<Engine1, Layout1> &dst, double const dequan_s)
     {
-        MaxOp<float> op;
+        MaxOp<double> op;
         static_assert(Layout0::rank == 1, "Only support 1D Tensor for source");
         static_assert(Layout1::rank == 1, "Only support 1D Tensor for destination");
         CUTE_STATIC_ASSERT_V(size(src) == size(dst));
 #pragma unroll
         for (int mi = 0; mi < size(src); mi++)
         {
-            const float value = src(mi) * dequan_s;
+            const double value = src(mi) * dequan_s;
             if constexpr (zero_init){
                 dst(mi) = value;
             }else{
@@ -88,7 +88,7 @@ namespace flash
     }
 
     template <bool const zero_init = true, typename Engine0, typename Layout0, typename Engine1, typename Layout1>
-    __device__ __forceinline__ void reduce_max_dequantize(Tensor<Engine0, Layout0> &tensor, Tensor<Engine1, Layout1> &max, float const dequan_s)
+    __device__ __forceinline__ void reduce_max_dequantize(Tensor<Engine0, Layout0> &tensor, Tensor<Engine1, Layout1> &max, double const dequan_s)
     {
         MaxOp<int32_t> max_op;
         Tensor max_converted = make_tensor_like<int32_t>(max);
@@ -100,7 +100,8 @@ namespace flash
     template <bool const zero_init = true, bool warp_reduce = true, typename Engine0, typename Layout0, typename Engine1, typename Layout1>
     __device__ __forceinline__ void reduce_sum(Tensor<Engine0, Layout0> &tensor, Tensor<Engine1, Layout1> &sum)
     {
-        SumOp<float> sum_op;
+        using SumElemT = typename Engine1::value_type;
+        SumOp<SumElemT> sum_op;
         thread_reduce_<zero_init>(tensor, sum, sum_op);
         if constexpr (warp_reduce)
         {
@@ -158,7 +159,7 @@ namespace flash
     template <bool const Scale_max = true, bool const Check_inf = true, int const Max_offset = 0,
               typename Engine0, typename Layout0, typename Engine1, typename Layout1, typename Engine2, typename Layout2>
     __forceinline__ __device__ void scale_apply_exp2_dequantize(Tensor<Engine0, Layout0> &tensor, Tensor<Engine1, Layout1> &max,
-                                                                 Tensor<Engine2, Layout2> &tensor_dequantized, const float dequan_s)
+                                                                 Tensor<Engine2, Layout2> &tensor_dequantized, const double dequan_s)
     {
         // For FP8, we can subtract max by 8.0 so that the value after exp2 is in the range of [0, 256].
         // This lets us use more of the FP8 range (instead of just [0, 1]) to reduce underflow.
@@ -176,23 +177,23 @@ namespace flash
             // We don't want (-inf - (-inf)) since that would give NaN.
             // Note: max is already dequantized (in float), so we don't multiply by dequan_s here
             if constexpr (Check_inf){
-                const float max_scaled = max(mi) == -INFINITY ? 0.f : (!Scale_max ? max(mi) : max(mi)) - max_offset;
+                const double max_scaled = max(mi) == -INFINITY ? 0.0 : (!Scale_max ? max(mi) : max(mi)) - max_offset;
     #pragma unroll
                 for (int ni = 0; ni < size<1>(tensor); ++ni)
                 {
                     // Dequantize int32 to float, then compute exp2(dequantized_value - max_scaled)
                     // tensor(mi, ni) is int32_t, multiply by dequan_s to get float
-                    const float dequantized_value = tensor(mi, ni) * dequan_s - max_scaled;
-                    tensor_dequantized(mi, ni) = exp2f(dequantized_value);
+                    const double dequantized_value = tensor(mi, ni) * dequan_s - max_scaled;
+                    tensor_dequantized(mi, ni) = exp2(dequantized_value);
                 }
             }else{
-                const float max_scaled = (!Scale_max ? max(mi) : max(mi)) - max_offset;
+                const double max_scaled = (!Scale_max ? max(mi) : max(mi)) - max_offset;
     #pragma unroll
                 for (int ni = 0; ni < size<1>(tensor); ++ni)
                 {
                     // Dequantize int32 to float, then compute exp2(dequantized_value - max_scaled)
-                    const float dequantized_value = tensor(mi, ni) * dequan_s - max_scaled;
-                    tensor_dequantized(mi, ni) = exp2f(dequantized_value);
+                    const double dequantized_value = tensor(mi, ni) * dequan_s - max_scaled;
+                    tensor_dequantized(mi, ni) = exp2(dequantized_value);
                 }
             }
         }
@@ -204,7 +205,8 @@ namespace flash
     struct Softmax
     {
 
-        using TensorT = decltype(make_tensor<float>(Shape<Int<kNRows>>{}));
+        using TensorElemT = std::conditional_t<Is_INT8, double, float>;
+        using TensorT = decltype(make_tensor<TensorElemT>(Shape<Int<kNRows>>{}));
         TensorT row_max, row_sum;
         float const softmax_scale_log2; // (log2(e) * 1/sqrt(128)) * q_dequant * k_dequant
         // int const warp_idx_in_warpgroup = (threadIdx.x / 32) % 4;
@@ -216,16 +218,18 @@ namespace flash
         int const seqlen_q;
         int const thread_idx;
         // float const dequan_q;
-        float dequan_s;
+        double const dequan_q;
+        double dequan_s;
 
-        CUTLASS_DEVICE Softmax(float const softmax_scale_log2_, int const seqlen_q_, int const thread_idx_) 
-            : softmax_scale_log2(softmax_scale_log2_), seqlen_q(seqlen_q_), thread_idx(thread_idx_) {};
+        CUTLASS_DEVICE Softmax(float const softmax_scale_log2_, int const seqlen_q_, int const thread_idx_, double const dequan_q_) 
+            : softmax_scale_log2(softmax_scale_log2_), seqlen_q(seqlen_q_), thread_idx(thread_idx_), dequan_q(dequan_q_) {};
             // : softmax_scale_log2(softmax_scale_log2_), dequan_q(dequan_q_), seqlen_q(seqlen_q_), thread_idx(thread_idx_) {};
 
-        CUTLASS_DEVICE void set_dequan_s(float const dequan_k)
+        CUTLASS_DEVICE void set_dequan_s(double const dequan_k)
         {
             // dequan_s = dequan_k * softmax_scale_log2;
-            dequan_s = __shfl_sync(0xffffffff, dequan_k * softmax_scale_log2, 0);
+            // dequan_s = __shfl_sync(0xffffffff, dequan_k * softmax_scale_log2, 0);
+            dequan_s = dequan_k * dequan_q;
         }
 
         template <int kBlockM, typename TiledMma, bool const Is_first, bool const Check_inf = false, typename Tensor0>
@@ -250,7 +254,7 @@ namespace flash
                 } else {
                     flash::template reduce_max_dequantize</*zero_init=*/true>(scores, row_max, dequan_s);
                 }
-                cute::fill(scores_scale, 1.f);
+                cute::fill(scores_scale, TensorElemT(1.0));
                 if (is_warp_leader)
                 {
                     skip_reader.update_skip(false, warp_idx_in_warpgroup);
@@ -308,18 +312,18 @@ namespace flash
                     // float cur = !Check_inf
                     //                 ? row_max(mi)
                     //                 : (row_max(mi) == -INFINITY ? 0.0f : row_max(mi));
-                    float cur;
+                    TensorElemT cur;
                     if constexpr (Check_inf){
-                        cur = row_max(mi) == -INFINITY ? 0.0f : row_max(mi);
+                        cur = row_max(mi) == -INFINITY ? TensorElemT(0.0) : row_max(mi);
                     }else{
                         cur = row_max(mi);
                     }
-                    float prev = scores_max_prev(mi);
+                    TensorElemT prev = scores_max_prev(mi);
                     // consider: removing all the uses of softmax_scale_log2 when Is_INT8 is enabled
                     if constexpr (!Is_INT8) {
                         scores_scale(mi) = exp2f((prev - cur) * softmax_scale_log2);
                     } else {
-                        scores_scale(mi) = exp2f((prev - cur));
+                        scores_scale(mi) = exp2((prev - cur));
                     }
                     row_sum(mi) *= scores_scale(mi);
 
@@ -368,7 +372,7 @@ namespace flash
                 } else {
                     flash::template reduce_max_dequantize</*zero_init=*/true>(scores, row_max, dequan_s);
                 }
-                cute::fill(scores_scale, 1.f);
+                cute::fill(scores_scale, TensorElemT(1.0));
             }
             else
             {
@@ -392,9 +396,9 @@ namespace flash
                     //                            ? row_max(mi)
                     //                            : (row_max(mi) == -INFINITY ? 0.0f : row_max(mi));
 
-                    float scores_max_cur;
+                    TensorElemT scores_max_cur;
                     if constexpr (Check_inf){
-                        scores_max_cur = row_max(mi) == -INFINITY ? 0.0f : row_max(mi);
+                        scores_max_cur = row_max(mi) == -INFINITY ? TensorElemT(0.0) : row_max(mi);
                     }else{
                         scores_max_cur = row_max(mi);
                     }
@@ -404,7 +408,7 @@ namespace flash
                     if constexpr (!Is_INT8) {
                         scores_scale(mi) = exp2f((scores_max_prev(mi) - scores_max_cur) * softmax_scale_log2);
                     } else {
-                        scores_scale(mi) = exp2f((scores_max_prev(mi) - scores_max_cur));
+                        scores_scale(mi) = exp2((scores_max_prev(mi) - scores_max_cur));
                     }
                     row_sum(mi) *= scores_scale(mi);
                 }
@@ -450,28 +454,28 @@ namespace flash
 
         __forceinline__ __device__ TensorT finalize(float const final_scale = 1.f)
         {
-            SumOp<float> sum_op;
+            SumOp<TensorElemT> sum_op;
             quad_allreduce_(row_sum, row_sum, sum_op);
             TensorT scores_scale;
 #pragma unroll
             for (int mi = 0; mi < size(row_sum); ++mi)
             {
-                float sum = row_sum(mi);
+                TensorElemT sum = row_sum(mi);
                 // float inv_sum = (sum == 0.f || sum != sum) ? 0.f : 1.f / sum;
-                float inv_sum = (sum == 0.f | sum != sum) ? 0.f : 1.f / sum;
+                TensorElemT inv_sum = (sum == TensorElemT(0.0) | sum != sum) ? TensorElemT(0.0) : TensorElemT(1.0) / sum;
                 scores_scale(mi) = inv_sum * final_scale;
                 // For FP8, we might have scaled the output of exp by 2**8 so we need to divide sum by that amount.
                 if constexpr (Max_offset != 0)
                 {
-                    static constexpr float sum_scale = 1.f / float(1 << Max_offset);
+                    static constexpr TensorElemT sum_scale = TensorElemT(1.0) / TensorElemT(1 << Max_offset);
                     sum *= sum_scale;
                 }
                 // consider: when Is_INT8 is enabled we don't need to multiply by softmax_scale_log2
                 // row_sum(mi) = ((sum == 0.f) | (sum != sum)) ? -INFINITY : row_max(mi) * (softmax_scale_log2 * float(M_LN2)) + __logf(sum);
                 if constexpr (!Is_INT8) {
-                    row_sum(mi) = row_max(mi) * (softmax_scale_log2 * float(M_LN2)) + __logf(sum);
+                    row_sum(mi) = row_max(mi) * (softmax_scale_log2 * TensorElemT(M_LN2)) + __logf(sum);
                 } else {
-                    row_sum(mi) = row_max(mi) * float(M_LN2) + __logf(sum);
+                    row_sum(mi) = row_max(mi) * TensorElemT(M_LN2) + log(sum);
                 }
             }
             return scores_scale;
@@ -487,10 +491,11 @@ namespace flash
 #pragma unroll
             for (int mi = 0; mi < size<0>(acc_o_rowcol); ++mi)
             {
+                float const scale_converted = (float) scores_scale(mi);
 #pragma unroll
                 for (int ni = 0; ni < size<1>(acc_o_rowcol); ++ni)
                 {
-                    acc_o_rowcol(mi, ni) *= scores_scale(mi);
+                    acc_o_rowcol(mi, ni) *= scale_converted;
                 }
             }
         };

@@ -531,7 +531,8 @@ namespace flash
                     }
                     // If there's tanh softcap, the scaling will be done before tanh.
                     // float softmax_scale_log2 = params.mainloop.softmax_scale_log2;
-                    float softmax_scale_log2;
+                    float softmax_scale_log2 = params.mainloop.softmax_scale_log2;
+                    double descale_q = 1.0;
                     int const bidh = get<1>(block_coord);
                     int const bidh_kv = !PackGQA ? params.mainloop.qhead_per_khead_divmod.divide(bidh) : bidh;
                     if constexpr (Is_FP8 && !Has_softcap)
@@ -539,25 +540,25 @@ namespace flash
                         float const q_descale = params.mainloop.ptr_q_descale == nullptr ? 1.0f : params.mainloop.ptr_q_descale[bidb * get<0>(params.mainloop.stride_q_descale) + bidh_kv * get<1>(params.mainloop.stride_q_descale)];
                         float const k_descale = params.mainloop.ptr_k_descale == nullptr ? 1.0f : params.mainloop.ptr_k_descale[bidb * get<0>(params.mainloop.stride_k_descale) + bidh_kv * get<1>(params.mainloop.stride_k_descale)];
                         // softmax_scale_log2 *= q_descale * k_descale;
-                        softmax_scale_log2 = params.mainloop.softmax_scale_log2 * q_descale * k_descale;
+                        softmax_scale_log2 *= q_descale * k_descale;
                     }else if constexpr (Is_INT8){
                         int const m_block = get<0>(block_coord);
                         // For INT8: Create Q descale tensor with shape (num_batches, num_heads, num_m_blocks)
                         // Use the INT8-specific stride from params
                         int const num_m_blocks = cute::ceil_div(seqlen_info.seqlen_q, kBlockM);
                         auto shape_q_descale_3d = make_shape(get<3>(params.mainloop.shape_Q), get<2>(params.mainloop.shape_Q), num_m_blocks);
-                        Tensor mQDescale = make_tensor(make_gmem_ptr(params.mainloop.ptr_q_descale), shape_q_descale_3d, params.mainloop.stride_q_descale_int8);
+                        Tensor mQDescale = make_tensor(make_gmem_ptr(reinterpret_cast<const double*>(params.mainloop.ptr_q_descale)), shape_q_descale_3d, params.mainloop.stride_q_descale_int8);
                         // Slice by bidb and bidh to get scalar value for this m_block
-                        softmax_scale_log2 = mQDescale(bidb, bidh, m_block);
-                    }else{
-                        softmax_scale_log2 = params.mainloop.softmax_scale_log2;
+                        // softmax_scale_log2 = mQDescale(bidb, bidh, m_block);
+                        descale_q = mQDescale(bidb, bidh, m_block);
                     }
+
                     const int thread_idx = threadIdx.x - MmaThreadOffset;
 
                     // // DOR: kNRows = 2 * (2 * 128 / 256) = 2
                     // flash::Softmax<!LargeHeadDimV ? 2 * (2 * kBlockM / NumMmaThreads) : 2, /*Max_offset=*/!Is_8Bit ? 0 : 8> softmax(softmax_scale_log2, row_mask, local_row_idx);
                     // DOR: kNRows = 2 * (2 * 128 / 256) = 2
-                    flash::Softmax<!LargeHeadDimV ? 2 * (2 * kBlockM / NumMmaThreads) : 2, /*Max_offset=*/!Is_FP8 ? 0 : 8, Is_INT8> softmax(softmax_scale_log2, seqlen_info.seqlen_q, thread_idx);
+                    flash::Softmax<!LargeHeadDimV ? 2 * (2 * kBlockM / NumMmaThreads) : 2, /*Max_offset=*/!Is_FP8 ? 0 : 8, Is_INT8> softmax(softmax_scale_log2, seqlen_info.seqlen_q, thread_idx, descale_q);
 
                     /*
                     taken from the answer here: https://youtu.be/JwUcZwPOCpA?t=3152

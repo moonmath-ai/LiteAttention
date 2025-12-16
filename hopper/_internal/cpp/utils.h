@@ -74,6 +74,11 @@ template<typename T>
 struct MaxOp {
 __device__ __forceinline__ T operator()(T const & x, T const & y) { return x > y ? x : y; }
 };
+template <>
+struct MaxOp<double> {
+// This is slightly faster
+__device__ __forceinline__ double operator()(double const &x, double const &y) { return max(x, y); }
+};
 
 template <>
 struct MaxOp<float> {
@@ -96,13 +101,36 @@ __device__ __forceinline__ T operator()(T const & x, T const & y) { return x + y
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+// Helper function to shuffle double values (64-bit) by shuffling two 32-bit halves
+__device__ __forceinline__ double shfl_xor_sync_double(double x, int lane_mask, int offset) {
+    // Split double into two 32-bit halves using union for bit manipulation
+    union {
+        double d;
+        uint32_t u[2];
+    } converter;
+    converter.d = x;
+    
+    // Shuffle each half separately
+    converter.u[0] = __shfl_xor_sync(lane_mask, converter.u[0], offset);
+    converter.u[1] = __shfl_xor_sync(lane_mask, converter.u[1], offset);
+    
+    // Return reconstructed double
+    return converter.d;
+}
+
 template<int THREADS>
 struct Allreduce {
     static_assert(THREADS == 32 || THREADS == 16 || THREADS == 8 || THREADS == 4);
     template<typename T, typename Operator>
     static __device__ __forceinline__ T run(T x, Operator &op) {
         constexpr int OFFSET = THREADS / 2;
-        x = op(x, __shfl_xor_sync(uint32_t(-1), x, OFFSET));
+        if constexpr (sizeof(T) == sizeof(double)) {
+            // For 64-bit types (double), use special shuffle function
+            x = op(x, shfl_xor_sync_double(x, 0xffffffff, OFFSET));
+        } else {
+            // For 32-bit or smaller types, use regular shuffle
+            x = op(x, __shfl_xor_sync(0xffffffff, x, OFFSET));
+        }
         return Allreduce<OFFSET>::run(x, op);
     }
 };
@@ -111,11 +139,17 @@ struct Allreduce {
 
 template<>
 struct Allreduce<2> {
-template<typename T, typename Operator>
-static __device__ __forceinline__ T run(T x, Operator &op) {
-    x = op(x, __shfl_xor_sync(uint32_t(-1), x, 1));
-    return x;
-}
+    template<typename T, typename Operator>
+    static __device__ __forceinline__ T run(T x, Operator &op) {
+        if constexpr (sizeof(T) == sizeof(double)) {
+            // For 64-bit types (double), use special shuffle function
+            x = op(x, shfl_xor_sync_double(x, 0xffffffff, 1));
+        } else {
+            // For 32-bit or smaller types, use regular shuffle
+            x = op(x, __shfl_xor_sync(0xffffffff, x, 1));
+        }
+        return x;
+    }
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
