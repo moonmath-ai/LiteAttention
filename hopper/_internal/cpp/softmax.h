@@ -215,16 +215,16 @@ namespace flash
         // int const local_row_idx;
         int const seqlen_q;
         int const thread_idx;
-        float const dequan_q;
+        // float const dequan_q;
         float dequan_s;
 
-        // CUTLASS_DEVICE Softmax(float const softmax_scale_log2_, int const row_mask_, int const local_row_idx_) : softmax_scale_log2(softmax_scale_log2_), row_mask(row_mask_), local_row_idx(local_row_idx_) {};
-        CUTLASS_DEVICE Softmax(float const softmax_scale_log2_, float const dequan_q_, int const seqlen_q_, int const thread_idx_) 
-            : softmax_scale_log2(softmax_scale_log2_), dequan_q(dequan_q_), seqlen_q(seqlen_q_), thread_idx(thread_idx_) {};
+        CUTLASS_DEVICE Softmax(float const softmax_scale_log2_, int const seqlen_q_, int const thread_idx_) 
+            : softmax_scale_log2(softmax_scale_log2_), seqlen_q(seqlen_q_), thread_idx(thread_idx_) {};
+            // : softmax_scale_log2(softmax_scale_log2_), dequan_q(dequan_q_), seqlen_q(seqlen_q_), thread_idx(thread_idx_) {};
 
         CUTLASS_DEVICE void set_dequan_s(float const dequan_k)
         {
-            dequan_s = dequan_k * dequan_q;
+            dequan_s = dequan_k * softmax_scale_log2;
         }
 
         template <int kBlockM, typename TiledMma, bool const Is_first, bool const Check_inf = false, typename Tensor0>
