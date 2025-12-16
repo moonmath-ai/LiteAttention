@@ -1541,9 +1541,13 @@ namespace flash
                     n_block = skip_reader.next_n_block();
                 }
                 flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
+
+                if constexpr (Is_INT8){
+                    softmax.set_dequan_s(KDescaleSliced(n_block));
+                }
+
                 warpgroup_wait<0>();
                 pipeline_k.consumer_release(smem_pipe_read);
-
 
                 if constexpr (HasQv)
                 {
@@ -1555,11 +1559,6 @@ namespace flash
                     scoremod_premask_fn(tSrS_ambiguous_type);
                 }
                 mask.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS_ambiguous_type, m_block, n_block);
-
-
-                if constexpr (Is_INT8){
-                    softmax.set_dequan_s(KDescaleSliced(n_block));
-                }
 
                 // Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
                 Tensor scores_scale = [&]
@@ -1644,6 +1643,10 @@ namespace flash
 
                     flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
 
+                    if constexpr (Is_INT8){
+                        softmax.set_dequan_s(KDescaleSliced(new_n_block));
+                    }
+
                     if constexpr (RescaleOBeforeGemm)
                     {
                         softmax.rescale_o(tOrO, scores_scale);
@@ -1671,10 +1674,6 @@ namespace flash
                     }
                     // mask_fn(tSrS, n_block);
                     mask_fn(tSrS_ambiguous_type, new_n_block);
-
-                    if constexpr (Is_INT8){
-                        softmax.set_dequan_s(KDescaleSliced(new_n_block));
-                    }
                     if constexpr (Is_skipable){
                         cute::copy(
                             softmax.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, /*Is_first=*/false, Check_inf>(
