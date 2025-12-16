@@ -1541,12 +1541,10 @@ namespace flash
                     n_block = skip_reader.next_n_block();
                 }
                 flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
-
+                warpgroup_wait<0>();
                 if constexpr (Is_INT8){
                     softmax.set_dequan_s(KDescaleSliced(n_block));
                 }
-
-                warpgroup_wait<0>();
                 pipeline_k.consumer_release(smem_pipe_read);
 
                 if constexpr (HasQv)
@@ -1643,10 +1641,6 @@ namespace flash
 
                     flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
 
-                    if constexpr (Is_INT8){
-                        softmax.set_dequan_s(KDescaleSliced(new_n_block));
-                    }
-
                     if constexpr (RescaleOBeforeGemm)
                     {
                         softmax.rescale_o(tOrO, scores_scale);
@@ -1659,6 +1653,11 @@ namespace flash
                     }
                     flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP), tOrV(_, _, _, smem_pipe_read_v.index()), tOrO);
                     warp_scheduler_barrier_arrive();
+
+                    if constexpr (Is_INT8){
+                        softmax.set_dequan_s(KDescaleSliced(new_n_block));
+                    }
+
                     warpgroup_wait<1>();
                     pipeline_k.consumer_release(smem_pipe_read); // release K
                     if constexpr (HasQv)
