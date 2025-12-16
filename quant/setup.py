@@ -77,18 +77,25 @@ if device_debug:
     nvcc_flags = [f for f in nvcc_flags if f != '-lineinfo']
     nvcc_flags.append('-G')
 
+# Path to the shared quant.cu in hopper/_internal/cpp
+quant_cu_path = os.path.join(os.path.dirname(__file__), '..', 'hopper', '_internal', 'cpp', 'quant.cu')
+quant_cu_path = os.path.abspath(quant_cu_path)
+
+if not os.path.exists(quant_cu_path):
+    raise RuntimeError(f"quant.cu not found at {quant_cu_path}")
+
 setup(
     name='quant_tma',
     ext_modules=[
         CUDAExtension(
             name='quant_tma',
             sources=[
-                'quant.cu',
+                quant_cu_path,
             ],
             include_dirs=include_dirs,
             extra_compile_args={
                 'cxx': ['-O3', '-g'],
-                'nvcc': nvcc_flags,
+                'nvcc': nvcc_flags + ['-DQUANT_STANDALONE'],
             },
             extra_link_args=['-lcuda', '-lcudart']
         )

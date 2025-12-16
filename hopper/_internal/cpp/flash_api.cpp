@@ -14,6 +14,7 @@
 #include "tile_size.h"
 #include "heuristics.h"
 #include "cuda_check.h"
+#include "quant.h"
 
 
 extern "C" {
@@ -1813,6 +1814,86 @@ std::vector<int64_t> get_tile_size_fwd_sm90(
             static_cast<int64_t>(MmaPV_is_RS), static_cast<int64_t>(IntraWGOverlap)};
 }
 
+// Wrapper function for TMA-based Q/K quantization
+// Returns (Q_q, K_q, q_descale, k_descale)
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+quantize_qk(
+    at::Tensor Q,
+    at::Tensor K,
+    int64_t block_m,
+    int64_t block_n)
+{
+    TORCH_CHECK(Q.is_cuda(), "Q must be on CUDA");
+    TORCH_CHECK(K.is_cuda(), "K must be on CUDA");
+    TORCH_CHECK(Q.is_contiguous(), "Q must be contiguous");
+    TORCH_CHECK(K.is_contiguous(), "K must be contiguous");
+    TORCH_CHECK(Q.dim() == 4, "Q must be 4D: [batch, seqlen, heads, head_dim]");
+    TORCH_CHECK(K.dim() == 4, "K must be 4D: [batch, seqlen, heads, head_dim]");
+    TORCH_CHECK(Q.dtype() == torch::kHalf || Q.dtype() == torch::kBFloat16, 
+                "Q must be float16 or bfloat16");
+    TORCH_CHECK(K.dtype() == Q.dtype(), "K must have same dtype as Q");
+
+    const int batch = Q.size(0);
+    const int seqlen_q = Q.size(1);
+    const int seqlen_k = K.size(1);
+    const int num_heads = Q.size(2);
+    const int head_dim = Q.size(3);
+
+    TORCH_CHECK(K.size(0) == batch, "K batch must match Q batch");
+    TORCH_CHECK(K.size(2) == num_heads, "K heads must match Q heads");
+    TORCH_CHECK(K.size(3) == head_dim, "K head_dim must match Q head_dim");
+
+    // Allocate output tensors
+    auto Q_q = at::empty({batch, seqlen_q, num_heads, head_dim}, 
+                         Q.options().dtype(torch::kInt8));
+    auto K_q = at::empty({batch, seqlen_k, num_heads, head_dim}, 
+                         K.options().dtype(torch::kInt8));
+
+    const int num_q_blocks = (seqlen_q + block_m - 1) / block_m;
+    const int num_k_blocks = (seqlen_k + block_n - 1) / block_n;
+
+    // q_descale: [batch, heads, num_q_blocks]
+    auto q_descale = at::empty({batch, num_heads, num_q_blocks}, 
+                               Q.options().dtype(torch::kFloat32));
+    // k_descale: [batch, heads, num_k_blocks]
+    auto k_descale = at::empty({batch, num_heads, num_k_blocks}, 
+                               K.options().dtype(torch::kFloat32));
+    // k_mean: temporary buffer [batch, heads, head_dim]
+    auto k_mean = at::empty({batch, num_heads, head_dim}, 
+                            Q.options().dtype(torch::kFloat32));
+
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    at::cuda::CUDAGuard device_guard(Q.device());
+
+    if (Q.dtype() == torch::kHalf) {
+        launch_quantize_qk_runtime<cutlass::half_t>(
+            reinterpret_cast<const cutlass::half_t*>(Q.data_ptr()),
+            reinterpret_cast<const cutlass::half_t*>(K.data_ptr()),
+            reinterpret_cast<int8_t*>(Q_q.data_ptr()),
+            reinterpret_cast<int8_t*>(K_q.data_ptr()),
+            reinterpret_cast<float*>(q_descale.data_ptr()),
+            reinterpret_cast<float*>(k_descale.data_ptr()),
+            reinterpret_cast<float*>(k_mean.data_ptr()),
+            batch, seqlen_q, seqlen_k, num_heads,
+            head_dim, static_cast<int>(block_m), static_cast<int>(block_n),
+            stream);
+    } else {
+        launch_quantize_qk_runtime<cutlass::bfloat16_t>(
+            reinterpret_cast<const cutlass::bfloat16_t*>(Q.data_ptr()),
+            reinterpret_cast<const cutlass::bfloat16_t*>(K.data_ptr()),
+            reinterpret_cast<int8_t*>(Q_q.data_ptr()),
+            reinterpret_cast<int8_t*>(K_q.data_ptr()),
+            reinterpret_cast<float*>(q_descale.data_ptr()),
+            reinterpret_cast<float*>(k_descale.data_ptr()),
+            reinterpret_cast<float*>(k_mean.data_ptr()),
+            batch, seqlen_q, seqlen_k, num_heads,
+            head_dim, static_cast<int>(block_m), static_cast<int>(block_n),
+            stream);
+    }
+
+    return std::make_tuple(Q_q, K_q, q_descale, k_descale);
+}
+
 TORCH_LIBRARY(lite_attention, m) {
     m.def("fwd("
         "Tensor q,"
@@ -1921,6 +2002,11 @@ TORCH_LIBRARY(lite_attention, m) {
         "bool softcap = False,"
         "bool is_skipable = False,"
         "bool is_int8 = False) -> int[]", &get_tile_size_fwd_sm90);
+    m.def("quantize_qk("
+        "Tensor Q,"
+        "Tensor K,"
+        "int block_m,"
+        "int block_n) -> (Tensor, Tensor, Tensor, Tensor)", &quantize_qk);
 }
 
 TORCH_LIBRARY_IMPL(lite_attention, CUDA, m) {

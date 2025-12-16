@@ -1,3 +1,10 @@
+/******************************************************************************
+ * TMA-based Q/K quantization with mean centering for attention (FP16/BF16)
+ * 
+ * - Q: per-block quantization (kBlockM tokens share a scale per head)
+ * - K: smooth by subtracting channel-wise mean, then per-block quantization
+ ******************************************************************************/
+
 #include <cuda_runtime.h>
 #include <cute/tensor.hpp>
 #include <cute/atom/copy_atom.hpp>
@@ -86,7 +93,7 @@ float_vec_to_packed_int8(cute::array<float, 8UL> const& src, float scale) {
     for (size_t i = 0; i < 8; ++i) {
         int32_t res;
         float x = src[i] * scale;
-        asm("cvt.rni.sat.s8.f32 %0, %1;" : "=r"(res) : "f"(x)); // TODO @tarik: Check this since it clamps to -128 or 127 rather than clipping to -127 or 127
+        asm("cvt.rni.sat.s8.f32 %0, %1;" : "=r"(res) : "f"(x));
         packed.i8[i] = static_cast<int8_t>(res);
     }
     return packed.u64;
@@ -496,7 +503,7 @@ void launch_quantize_qk_config(
     );
 }
 
-// Runtime Dispatcher (unchanged logic, just calling the new template)
+// Runtime Dispatcher
 template <typename Element>
 void launch_quantize_qk_runtime(
     const Element* Q, const Element* K,
@@ -523,7 +530,7 @@ void launch_quantize_qk_runtime(
             Q, K, Q_q, K_q, q_scales, k_scales, k_mean,
             batch, seqlen_q, seqlen_k, num_heads, stream);
     } else {
-        assert(false && "Unsupported config");
+        assert(false && "Unsupported config for quantize_qk");
     }
 }
 
@@ -544,75 +551,68 @@ template void launch_quantize_qk_runtime<cutlass::bfloat16_t>(
     int, int, int,
     cudaStream_t);
 
-// -----------------------------------------------------------------------------
-// Python Bindings
-// -----------------------------------------------------------------------------
+// =============================================================================
+// Standalone pybind11 bindings (for quant/ folder testing)
+// Define QUANT_STANDALONE when building quant.cu independently
+// =============================================================================
+#ifdef QUANT_STANDALONE
 #include <pybind11/pybind11.h>
-
 namespace py = pybind11;
 
-#define CHECK_CUDA(call) do { \
-    cudaError_t err = call; \
-    if (err != cudaSuccess) \
-        throw std::runtime_error(std::string("CUDA error: ") + cudaGetErrorString(err)); \
-} while(0)
-
-// Python wrapper - float16
 void quantize_qk_f16(
-    uint64_t Q_ptr, uint64_t K_ptr,
-    uint64_t Q_q_ptr, uint64_t K_q_ptr,
-    uint64_t q_scales_ptr, uint64_t k_scales_ptr, uint64_t k_mean_ptr,
+    uintptr_t Q_ptr, uintptr_t K_ptr,
+    uintptr_t Q_q_ptr, uintptr_t K_q_ptr,
+    uintptr_t q_scales_ptr, uintptr_t k_scales_ptr, uintptr_t k_mean_ptr,
     int batch, int seqlen_q, int seqlen_k, int num_heads, int head_dim,
     int block_m, int block_n)
 {
     launch_quantize_qk_runtime<cutlass::half_t>(
-        reinterpret_cast<cutlass::half_t*>(Q_ptr),
-        reinterpret_cast<cutlass::half_t*>(K_ptr),
+        reinterpret_cast<const cutlass::half_t*>(Q_ptr),
+        reinterpret_cast<const cutlass::half_t*>(K_ptr),
         reinterpret_cast<int8_t*>(Q_q_ptr),
         reinterpret_cast<int8_t*>(K_q_ptr),
         reinterpret_cast<float*>(q_scales_ptr),
         reinterpret_cast<float*>(k_scales_ptr),
         reinterpret_cast<float*>(k_mean_ptr),
-        batch, seqlen_q, seqlen_k, num_heads, head_dim, block_m, block_n, 0);
-    CHECK_CUDA(cudaGetLastError());
-    CHECK_CUDA(cudaStreamSynchronize(0));
+        batch, seqlen_q, seqlen_k, num_heads,
+        head_dim, block_m, block_n,
+        cudaStreamDefault);
+    cudaDeviceSynchronize();
 }
 
-// Python wrapper - bfloat16
 void quantize_qk_bf16(
-    uint64_t Q_ptr, uint64_t K_ptr,
-    uint64_t Q_q_ptr, uint64_t K_q_ptr,
-    uint64_t q_scales_ptr, uint64_t k_scales_ptr, uint64_t k_mean_ptr,
+    uintptr_t Q_ptr, uintptr_t K_ptr,
+    uintptr_t Q_q_ptr, uintptr_t K_q_ptr,
+    uintptr_t q_scales_ptr, uintptr_t k_scales_ptr, uintptr_t k_mean_ptr,
     int batch, int seqlen_q, int seqlen_k, int num_heads, int head_dim,
     int block_m, int block_n)
 {
     launch_quantize_qk_runtime<cutlass::bfloat16_t>(
-        reinterpret_cast<cutlass::bfloat16_t*>(Q_ptr),
-        reinterpret_cast<cutlass::bfloat16_t*>(K_ptr),
+        reinterpret_cast<const cutlass::bfloat16_t*>(Q_ptr),
+        reinterpret_cast<const cutlass::bfloat16_t*>(K_ptr),
         reinterpret_cast<int8_t*>(Q_q_ptr),
         reinterpret_cast<int8_t*>(K_q_ptr),
         reinterpret_cast<float*>(q_scales_ptr),
         reinterpret_cast<float*>(k_scales_ptr),
         reinterpret_cast<float*>(k_mean_ptr),
-        batch, seqlen_q, seqlen_k, num_heads, head_dim, block_m, block_n, 0);
-    CHECK_CUDA(cudaGetLastError());
-    CHECK_CUDA(cudaStreamSynchronize(0));
+        batch, seqlen_q, seqlen_k, num_heads,
+        head_dim, block_m, block_n,
+        cudaStreamDefault);
+    cudaDeviceSynchronize();
 }
 
 PYBIND11_MODULE(quant_tma, m) {
-    m.doc() = "TMA-based Q/K quantization with mean centering for attention (FP16/BF16 only)";
-
+    m.doc() = "TMA-based Q/K quantization kernels";
     m.def("quantize_qk_f16", &quantize_qk_f16,
-          "Quantize Q and K (float16) with K mean centering",
+          "Quantize Q and K tensors (FP16 input)",
           py::arg("Q_ptr"), py::arg("K_ptr"),
           py::arg("Q_q_ptr"), py::arg("K_q_ptr"),
           py::arg("q_scales_ptr"), py::arg("k_scales_ptr"), py::arg("k_mean_ptr"),
           py::arg("batch"), py::arg("seqlen_q"), py::arg("seqlen_k"),
           py::arg("num_heads"), py::arg("head_dim"),
           py::arg("block_m"), py::arg("block_n"));
-
     m.def("quantize_qk_bf16", &quantize_qk_bf16,
-          "Quantize Q and K (bfloat16) with K mean centering",
+          "Quantize Q and K tensors (BF16 input)",
           py::arg("Q_ptr"), py::arg("K_ptr"),
           py::arg("Q_q_ptr"), py::arg("K_q_ptr"),
           py::arg("q_scales_ptr"), py::arg("k_scales_ptr"), py::arg("k_mean_ptr"),
@@ -620,3 +620,4 @@ PYBIND11_MODULE(quant_tma, m) {
           py::arg("num_heads"), py::arg("head_dim"),
           py::arg("block_m"), py::arg("block_n"));
 }
+#endif // QUANT_STANDALONE
