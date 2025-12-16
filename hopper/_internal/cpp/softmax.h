@@ -42,29 +42,6 @@ namespace flash
         }
     }
 
-//     template <bool const zero_init = true, typename Engine0, typename Layout0, typename Engine1, typename Layout1>
-//     __device__ __forceinline__ void thread_reduce_dequantize_(Tensor<Engine0, Layout0> &tensor, Tensor<Engine1, Layout1> &summary, float const dequan_s)
-//     {
-//         MaxOp<float> op;
-//         static_assert(Layout0::rank == 2, "Only support 2D Tensor");
-//         static_assert(Layout1::rank == 1, "Only support 1D Tensor");
-//         CUTE_STATIC_ASSERT_V(size<0>(summary) == size<0>(tensor));
-// #pragma unroll
-//         for (int ni = 0; ni < size<1>(tensor); ni++)
-//         {
-// #pragma unroll
-//             for (int mi = 0; mi < size<0>(tensor); mi++)
-//             {
-//                 const float value = tensor(mi, ni) * dequan_s;
-//                 if constexpr (zero_init){
-//                     summary(mi) = ni == 0 ? value : op(summary(mi), value);
-//                 }else{
-//                     summary(mi) = op(summary(mi), value);
-//                 }
-//             }
-//         }
-//     }
-
     // Dequantize a 1D tensor (e.g., after reduction) to another 1D tensor with optional max operation
     template <bool const zero_init = true, typename Engine0, typename Layout0, typename Engine1, typename Layout1>
     __device__ __forceinline__ void dequantize_max_1d_(Tensor<Engine0, Layout0> &src, Tensor<Engine1, Layout1> &dst, float const dequan_s)
@@ -117,14 +94,7 @@ namespace flash
         Tensor max_converted = make_tensor_like<int32_t>(max);
         thread_reduce_<true>(tensor, max_converted, max_op);
         quad_allreduce_(max_converted, max_converted, max_op);
-        // thread_reduce_dequantize_<zero_init>(max_converted, max, dequan_s);
         dequantize_max_1d_<zero_init>(max_converted, max, dequan_s);
-        
-        // // generate tensor of int32_t for results (instead of the max tensor)
-        // // Tensor max_converted = make_tensor_like<int32_t>(max);
-        // Tensor max_converted = make_tensor_like(tensor);
-        // quad_allreduce_(max_converted, tensor, max_op);
-        // thread_reduce_dequantize_<zero_init>(max_converted, max, dequan_s);
     }
 
     template <bool const zero_init = true, bool warp_reduce = true, typename Engine0, typename Layout0, typename Engine1, typename Layout1>
