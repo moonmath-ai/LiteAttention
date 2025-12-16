@@ -18,24 +18,33 @@
 
 using namespace cute;
 
-constexpr int kNumThreads = 256;
+// -----------------------------------------------------------------------------
+// Math Helpers
+// -----------------------------------------------------------------------------
+constexpr float constexpr_sqrt(float x, float curr, float prev) {
+    return curr == prev ? curr : constexpr_sqrt(x, 0.5f * (curr + x / curr), curr);
+}
 
-// 4D Shape: [seqlen, head_dim, num_heads, batch]
+constexpr float constexpr_sqrt(float x) {
+    return x >= 0.0f && x < FLT_MAX ? constexpr_sqrt(x, x, 0.0f) : FLT_MAX;
+}
+
+// -----------------------------------------------------------------------------
+// Layouts & Storage
+// -----------------------------------------------------------------------------
 using Shape4D = cute::Shape<int, int, int, int>;
 
 template<int ROWS, int HEAD_DIM, typename Element>
 struct SmemConfig {
-    // Input: row-major for TMA load
     using SmemLayoutIn = Layout<Shape<Int<ROWS>, Int<HEAD_DIM>>,
                                 Stride<Int<HEAD_DIM>, _1>>;
-    // Output: row-major for TMA store
     using SmemLayoutOut = Layout<Shape<Int<ROWS>, Int<HEAD_DIM>>,
                                  Stride<Int<HEAD_DIM>, _1>>;
 };
 
-template <int HEAD_DIM, typename Element, typename SmemLayoutIn, typename SmemLayoutOut>
+template <int HEAD_DIM, int NUM_THREADS, typename Element, typename SmemLayoutIn, typename SmemLayoutOut>
 struct __align__(128) TmaSharedStorage {
-    using BlockReduce = cub::BlockReduce<float, kNumThreads>;
+    using BlockReduce = cub::BlockReduce<float, NUM_THREADS>;
     
     __align__(128) cute::ArrayEngine<Element, cute::cosize_v<SmemLayoutIn>>   smem_in;
     __align__(128) cute::ArrayEngine<int8_t,  cute::cosize_v<SmemLayoutOut>>  smem_out;
@@ -43,101 +52,99 @@ struct __align__(128) TmaSharedStorage {
     __align__(16) typename BlockReduce::TempStorage cub_storage;
 
     __align__(16) cute::uint64_t tma_load_barrier;
-    __align__(16)  float tile_inv_scale;
-    __align__(16)  float tile_means[HEAD_DIM];
+    __align__(16) float tile_inv_scale;
+    __align__(16) float tile_means[HEAD_DIM];
 };
 
+template <int HEAD_DIM, int BLOCK_N, typename Element>
+struct __align__(128) MeanKernelStorage {
+    __align__(128) cute::ArrayEngine<Element, BLOCK_N * HEAD_DIM> smem_data;
+    __align__(16)  cute::uint64_t tma_barrier;
+};
 
-// Helper struct for reducing 8 floats simultaneously in CUB
-struct Array8 {
-    float data[8];
-    
-    __device__ __forceinline__ static Array8 add(const Array8& a, const Array8& b) {
-        Array8 res;
-        #pragma unroll
-        for(int i=0; i<8; ++i) {
-            res.data[i] = a.data[i] + b.data[i];
-        }
-        return res;
+// Convert Vector<Element> -> Vector<float>
+template <typename Element, size_t N>
+__device__ __forceinline__ cute::array<float, N> 
+vec_to_float(cute::array<Element, N> const& src) {
+    cute::array<float, N> dst;
+    #pragma unroll
+    for (size_t i = 0; i < N; ++i) {
+        dst[i] = static_cast<float>(src[i]); 
     }
-};
+    return dst;
+}
 
-struct SumArray8 {
-    __device__ __forceinline__ Array8 operator()(const Array8& a, const Array8& b) const {
-        return Array8::add(a, b);
+// Quantize Vector<float> -> Packed uint64_t (8 x int8)
+__device__ __forceinline__ uint64_t 
+float_vec_to_packed_int8(cute::array<float, 8UL> const& src, float scale) {
+    union {
+        int8_t  i8[8];
+        uint64_t u64;
+    } packed;
+
+    #pragma unroll
+    for (size_t i = 0; i < 8; ++i) {
+        int32_t res;
+        float x = src[i] * scale;
+        asm("cvt.rni.sat.s8.f32 %0, %1;" : "=r"(res) : "f"(x)); // TODO @tarik: Check this since it clamps to -128 or 127 rather than clipping to -127 or 127
+        packed.i8[i] = static_cast<int8_t>(res);
     }
-};
+    return packed.u64;
+}
 
 // -----------------------------------------------------------------------------
 // Kernel 1: Compute K Mean
 // -----------------------------------------------------------------------------
-template <typename Element>
-__global__ void compute_k_mean_kernel(
-    const Element* __restrict__ K,
-    float* __restrict__ k_mean,
-    int seqlen, 
-    int num_heads, 
-    int head_dim,
-    int64_t stride_b, 
-    int64_t stride_s, 
-    int64_t stride_h)
+template <int HEAD_DIM, int BLOCK_N, typename Element, typename TmaLoad>
+__global__ void 
+compute_k_mean_kernel(
+    CUTE_GRID_CONSTANT TmaLoad const tma_load,
+    Shape4D shape_K,
+    float* __restrict__ k_mean, 
+    int seqlen_k,
+    int num_heads)
 {
-    constexpr int kVecElem = 8; 
+    // Standardize to 256 threads for the Mean Kernel regardless of HEAD_DIM
+    constexpr int kNumThreads = 256; 
+
+    using SmemLayoutIn = typename SmemConfig<BLOCK_N, HEAD_DIM, Element>::SmemLayoutIn;
     
-    int bh_idx    = blockIdx.x; // Batch * NumHeads
-    int chunk_idx = blockIdx.y; // Channel Chunk Index
-    int tid       = threadIdx.x;
+    extern __shared__ char shared_mem[];
+    using Storage = MeanKernelStorage<HEAD_DIM, BLOCK_N, Element>;
+    Storage& storage = *reinterpret_cast<Storage*>(shared_mem);
     
-    int b = bh_idx / num_heads;
-    int h = bh_idx % num_heads;
-    
-    int d_start = chunk_idx * kVecElem;
-    
-    // Base Pointer Arithmetic (in bytes)
-    // K is [Batch, Seq, Head, Dim] conceptually for these strides
-    const char* ptr_base = reinterpret_cast<const char*>(K) + 
-    (b * stride_b + h * stride_h) * sizeof(Element) + 
-    d_start * sizeof(Element);
-    
-    // Accumulate 8 sums in registers
-    Array8 local_sums;
-    #pragma unroll
-    for(int i=0; i<kVecElem; ++i) local_sums.data[i] = 0.0f;
-    
-    // Grid-Stride Loop over Sequence
-    for (int s = tid; s < seqlen; s += blockDim.x) {
-        // Calculate address for this sequence step, s * stride_s jumps over the sequence dimension
-        const char* curr_ptr = ptr_base + s * stride_s * sizeof(Element);
-        
-        // Vector Load (16 bytes)
-        uint4 loaded = *reinterpret_cast<const uint4*>(curr_ptr);
-        
-        // Interpret bits as Elements and accumulate
-        const Element* vals = reinterpret_cast<const Element*>(&loaded);
-        
-        #pragma unroll
-        for(int i=0; i<kVecElem; ++i) {
-            local_sums.data[i] += static_cast<float>(vals[i]);
-        }
+    uint64_t* tma_barrier = &storage.tma_barrier;
+    Element* smem_data = storage.smem_data.begin();
+
+    int tile_idx = blockIdx.x;
+    int bidh     = blockIdx.y;
+    int bidb     = blockIdx.z;
+
+    Tensor mK = tma_load.get_tma_tensor(shape_K)(_, _, bidh, bidb);
+    Tensor gK = local_tile(mK, Shape<Int<BLOCK_N>, Int<HEAD_DIM>>{}, make_coord(tile_idx, 0));
+    Tensor sK = make_tensor(make_smem_ptr(smem_data), SmemLayoutIn{});
+
+    auto tma_slice = tma_load.get_slice(_0{});
+    if (threadIdx.x == 0) {
+        initialize_barrier(*tma_barrier, 1);
+        set_barrier_transaction_bytes(*tma_barrier, sizeof(Element) * size(sK));
+        copy(tma_load.with(*tma_barrier), tma_slice.partition_S(gK), tma_slice.partition_D(sK));
     }
+    __syncthreads();
+    wait_barrier(*tma_barrier, 0);
+    __syncthreads();
 
-    // Block Reduction
-    using BlockReduce = cub::BlockReduce<Array8, kNumThreads>;
-    __shared__ typename BlockReduce::TempStorage temp_storage;
-
-    Array8 block_sum = BlockReduce(temp_storage).Reduce(local_sums, SumArray8());
-
-    // Write result
-    if (tid == 0) {
-        float inv_seqlen = 1.0f / static_cast<float>(seqlen);
-        int out_offset = bh_idx * head_dim + d_start;
-
-        #pragma unroll
-        for (int i = 0; i < kVecElem; ++i) {
-            if (d_start + i < head_dim) {
-                k_mean[out_offset + i] = block_sum.data[i] * inv_seqlen;
-            }
+    int valid_rows  = min(BLOCK_N, seqlen_k - tile_idx * BLOCK_N);
+    int tid = threadIdx.x;
+    
+    for (int c = tid; c < HEAD_DIM; c += kNumThreads) {
+        float col_sum = 0.0f;
+        for (int r = 0; r < valid_rows; ++r) {
+            col_sum += static_cast<float>(sK(r, c)); 
         }
+
+        int global_idx = (bidb * num_heads + bidh) * HEAD_DIM + c;
+        atomicAdd(&k_mean[global_idx], col_sum);
     }
 }
 
@@ -147,10 +154,11 @@ __global__ void compute_k_mean_kernel(
 template <
     int HEAD_DIM,
     int BLOCK_M,
+    int NUM_THREADS,
     typename Element,
     typename TmaLoad,
     typename TmaStore>
-__global__ void __launch_bounds__(kNumThreads)
+__global__ void __launch_bounds__(NUM_THREADS)
 quantize_q_kernel(
     CUTE_GRID_CONSTANT TmaLoad const tma_load,
     CUTE_GRID_CONSTANT TmaStore const tma_store,
@@ -158,12 +166,11 @@ quantize_q_kernel(
     int num_heads,
     int batch,
     float* __restrict__ q_scales,
-    int num_seq_tiles_q,
-    float inv_sqrt_d)
+    int num_seq_tiles_q)
 {
     using SmemLayoutIn = typename SmemConfig<BLOCK_M, HEAD_DIM, Element>::SmemLayoutIn;
     using SmemLayoutOut = typename SmemConfig<BLOCK_M, HEAD_DIM, Element>::SmemLayoutOut;
-    using SharedStorage = TmaSharedStorage<HEAD_DIM, Element, SmemLayoutIn, SmemLayoutOut>;
+    using SharedStorage = TmaSharedStorage<HEAD_DIM, NUM_THREADS, Element, SmemLayoutIn, SmemLayoutOut>;
     using BlockReduce = typename SharedStorage::BlockReduce;
 
     extern __shared__ char shared_mem[];
@@ -173,49 +180,41 @@ quantize_q_kernel(
     int bidh         = blockIdx.y;
     int bidb         = blockIdx.z;
 
-    // 1. TMA Load
     Shape4D shape_Q = make_shape(seqlen_q, HEAD_DIM, num_heads, batch);
     Tensor mQ       = tma_load.get_tma_tensor(shape_Q)(_, _, bidh, bidb);
     Tensor gQ       = local_tile(mQ, Shape<Int<BLOCK_M>, Int<HEAD_DIM>>{}, make_coord(seq_tile_idx, 0));
     Tensor sQ_in    = make_tensor(make_smem_ptr(storage.smem_in.begin()), SmemLayoutIn{});
 
     auto tma_load_slice = tma_load.get_slice(_0{});
-    Tensor tAgQ = tma_load_slice.partition_S(gQ);
-    Tensor tAsQ = tma_load_slice.partition_D(sQ_in);
-
     if (threadIdx.x == 0) {
         initialize_barrier(storage.tma_load_barrier, 1);
         set_barrier_transaction_bytes(storage.tma_load_barrier, sizeof(Element) * size(sQ_in));
-        copy(tma_load.with(storage.tma_load_barrier), tAgQ, tAsQ);
+        copy(tma_load.with(storage.tma_load_barrier), tma_load_slice.partition_S(gQ), tma_load_slice.partition_D(sQ_in));
     }
     __syncthreads();
     wait_barrier(storage.tma_load_barrier, 0);
     __syncthreads();
 
-    // 2. Data Partitioning
     Tensor sQ_flat = make_tensor(sQ_in.data(), make_layout(size(sQ_in)));
-    Tensor tTsQ    = local_partition(sQ_flat, Layout<Shape<Int<kNumThreads>>>{}, threadIdx.x);
+    Tensor sQ_vec  = recast<cute::array<Element, 8>>(sQ_flat);
+    uint64_t* smem_out_ptr = reinterpret_cast<uint64_t*>(storage.smem_out.begin());
 
-    int tile_row_start = seq_tile_idx * BLOCK_M;
-    int rows_remaining = seqlen_q - tile_row_start;
-    int valid_rows     = (rows_remaining > 0) ? min(BLOCK_M, rows_remaining) : 0;
-    int valid_elems    = valid_rows * HEAD_DIM;
-
-    // Find Max
     float local_max = 0.0f;
+    
     #pragma unroll
-    for (int i = 0; i < size(tTsQ); ++i) {
-        int original_idx = threadIdx.x + i * kNumThreads;
-        if (original_idx < valid_elems) {
-            float v = static_cast<float>(tTsQ(i));
-            local_max = fmaxf(local_max, fabsf(v));
+    for (int i = threadIdx.x; i < size(sQ_vec); i += NUM_THREADS) {
+        cute::array<float, 8> vals = vec_to_float(sQ_vec(i));
+        #pragma unroll
+        for (int k = 0; k < 8; ++k) {
+            local_max = fmaxf(local_max, fabsf(vals[k]));
         }
     }
 
     float tile_max_raw = BlockReduce(storage.cub_storage).Reduce(local_max, cub::Max());
-
+    
     if (threadIdx.x == 0) {
-        float real_scale = (tile_max_raw * inv_sqrt_d) / 127.f;
+        constexpr float dequantizationScale = 1.44269504089f / constexpr_sqrt(static_cast<float>(HEAD_DIM));
+        float real_scale = (tile_max_raw * dequantizationScale) / 127.f;
         real_scale = fmaxf(real_scale, 1e-6f); 
 
         int idx_scale = bidb * num_heads * num_seq_tiles_q + bidh * num_seq_tiles_q + seq_tile_idx;
@@ -225,36 +224,24 @@ quantize_q_kernel(
     }
     __syncthreads(); 
 
-    // Quantize & Store
-    Tensor sQ_out     = make_tensor(make_smem_ptr(storage.smem_out.begin()), SmemLayoutOut{});
-    Tensor sQ_out_flat= make_tensor(sQ_out.data(), make_layout(size(sQ_out)));
-    Tensor tTsQ_out   = local_partition(sQ_out_flat, Layout<Shape<Int<kNumThreads>>>{}, threadIdx.x);
-
-    float effective_inv_scale = storage.tile_inv_scale;
+    float inv_scale = storage.tile_inv_scale;
 
     #pragma unroll
-    for (int i = 0; i < size(tTsQ_out); ++i) {
-        int original_idx = threadIdx.x + i * kNumThreads;
-        if (original_idx < valid_elems) {
-            float v = static_cast<float>(tTsQ(i));
-            tTsQ_out(i) = static_cast<int8_t>(max(-127, min(127, __float2int_rn(v * effective_inv_scale))));
-        } else {
-            tTsQ_out(i) = 0;
-        }
+    for (int i = threadIdx.x; i < size(sQ_vec); i += NUM_THREADS) {
+        cute::array<float, 8> vals = vec_to_float(sQ_vec(i));
+        smem_out_ptr[i] = float_vec_to_packed_int8(vals, inv_scale);
     }
     __syncthreads();
 
-    // 3. TMA Store
+    // TMA Store
     Tensor mQ_out = tma_store.get_tma_tensor(shape_Q)(_, _, bidh, bidb);
     Tensor gQ_out = local_tile(mQ_out, Shape<Int<BLOCK_M>, Int<HEAD_DIM>>{}, make_coord(seq_tile_idx, 0));
-
+    Tensor sQ_out = make_tensor(make_smem_ptr(storage.smem_out.begin()), SmemLayoutOut{});
+    
     auto tma_store_slice = tma_store.get_slice(_0{});
-    Tensor tAsQ_out = tma_store_slice.partition_S(sQ_out);
-    Tensor tAgQ_out = tma_store_slice.partition_D(gQ_out);
-
     if (threadIdx.x == 0) {
         tma_store_fence();
-        copy(tma_store, tAsQ_out, tAgQ_out);
+        copy(tma_store, tma_store_slice.partition_S(sQ_out), tma_store_slice.partition_D(gQ_out));
         tma_store_wait<0>();
     }
 }
@@ -262,14 +249,14 @@ quantize_q_kernel(
 // -----------------------------------------------------------------------------
 // Kernel 3: Quantize K
 // -----------------------------------------------------------------------------
-
 template <
     int HEAD_DIM,
     int BLOCK_N,
+    int NUM_THREADS,
     typename Element,
     typename TmaLoad,
     typename TmaStore>
-__global__ void __launch_bounds__(kNumThreads)
+__global__ void __launch_bounds__(NUM_THREADS)
 quantize_k_kernel(
     CUTE_GRID_CONSTANT TmaLoad const tma_load,
     CUTE_GRID_CONSTANT TmaStore const tma_store,
@@ -281,9 +268,11 @@ quantize_k_kernel(
     float* __restrict__ k_scales,
     int num_seq_tiles_k)
 {
+    static_assert((NUM_THREADS * 8) % HEAD_DIM == 0, "NUM_THREADS * 8 must be divisible by HEAD_DIM");
+
     using SmemLayoutIn = typename SmemConfig<BLOCK_N, HEAD_DIM, Element>::SmemLayoutIn;
     using SmemLayoutOut = typename SmemConfig<BLOCK_N, HEAD_DIM, Element>::SmemLayoutOut;
-    using SharedStorage = TmaSharedStorage<HEAD_DIM, Element, SmemLayoutIn, SmemLayoutOut>;
+    using SharedStorage = TmaSharedStorage<HEAD_DIM, NUM_THREADS, Element, SmemLayoutIn, SmemLayoutOut>;
     using BlockReduce = typename SharedStorage::BlockReduce;
 
     extern __shared__ char shared_mem[];
@@ -294,8 +283,11 @@ quantize_k_kernel(
     int bidb         = blockIdx.z;
 
     int bh_idx = bidb * num_heads + bidh;
+
+    // Load Means
     if (threadIdx.x < HEAD_DIM) {
-        storage.tile_means[threadIdx.x] = k_mean[bh_idx * HEAD_DIM + threadIdx.x];
+        float sum = k_mean[bh_idx * HEAD_DIM + threadIdx.x];
+        storage.tile_means[threadIdx.x] = sum / static_cast<float>(seqlen_k);
     }
     __syncthreads();
 
@@ -305,36 +297,43 @@ quantize_k_kernel(
     Tensor sK_in = make_tensor(make_smem_ptr(storage.smem_in.begin()), SmemLayoutIn{});
 
     auto tma_load_slice = tma_load.get_slice(_0{});
-    Tensor tAgK = tma_load_slice.partition_S(gK);
-    Tensor tAsK = tma_load_slice.partition_D(sK_in);
-
     if (threadIdx.x == 0) {
         initialize_barrier(storage.tma_load_barrier, 1);
         set_barrier_transaction_bytes(storage.tma_load_barrier, sizeof(Element) * size(sK_in));
-        copy(tma_load.with(storage.tma_load_barrier), tAgK, tAsK);
+        copy(tma_load.with(storage.tma_load_barrier), tma_load_slice.partition_S(gK), tma_load_slice.partition_D(sK_in));
     }
     __syncthreads();
     wait_barrier(storage.tma_load_barrier, 0);
     __syncthreads();
 
-    // 2. Compute
-    Tensor sK_flat = make_tensor(sK_in.data(), make_layout(size(sK_in)));
-    Tensor tTsK    = local_partition(sK_flat, Layout<Shape<Int<kNumThreads>>>{}, threadIdx.x);
+    float mean_cache[8];
+    int start_col_idx = (threadIdx.x * 8) % HEAD_DIM;
 
-    int tile_row_start = seq_tile_idx * BLOCK_N;
-    int rows_remaining = seqlen_k - tile_row_start;
-    int valid_rows     = (rows_remaining > 0) ? min(BLOCK_N, rows_remaining) : 0;
-    int valid_elems    = valid_rows * HEAD_DIM;
-
-    // Find Max (Centered)
-    float local_max = 0.0f;
     #pragma unroll
-    for (int i = 0; i < size(tTsK); ++i) {
-        int original_idx = threadIdx.x + i * kNumThreads;
-        if (original_idx < valid_elems) {
-            int d = original_idx % HEAD_DIM;
-            float v = static_cast<float>(tTsK(i)) - storage.tile_means[d];
-            local_max = fmaxf(local_max, fabsf(v));
+    for (int k = 0; k < 8; ++k) {
+        mean_cache[k] = storage.tile_means[start_col_idx + k];
+    }
+
+    Tensor sK_flat = make_tensor(sK_in.data(), make_layout(size(sK_in)));
+    Tensor sK_vec  = recast<cute::array<Element, 8>>(sK_flat);
+    uint64_t* smem_out_ptr = reinterpret_cast<uint64_t*>(storage.smem_out.begin());
+
+    float local_max = 0.0f;
+    int valid_elems = min(BLOCK_N, seqlen_k - seq_tile_idx * BLOCK_N) * HEAD_DIM;
+
+    // Pass 1: Find Max 
+    #pragma unroll
+    for (int i = threadIdx.x; i < size(sK_vec); i += NUM_THREADS) {
+        int flat_elem_idx = i * 8;
+        
+        if (flat_elem_idx < valid_elems) {
+            cute::array<float, 8> vals = vec_to_float(sK_vec(i));
+            
+            #pragma unroll
+            for (int k = 0; k < 8; ++k) {
+                float centered = vals[k] - mean_cache[k];
+                local_max = fmaxf(local_max, fabsf(centered));
+            }
         }
     }
     
@@ -350,22 +349,24 @@ quantize_k_kernel(
     }
     __syncthreads();
 
-    // Quantize & Store
-    Tensor sK_out     = make_tensor(make_smem_ptr(storage.smem_out.begin()), SmemLayoutOut{});
-    Tensor sK_out_flat= make_tensor(sK_out.data(), make_layout(size(sK_out)));
-    Tensor tTsK_out   = local_partition(sK_out_flat, Layout<Shape<Int<kNumThreads>>>{}, threadIdx.x);
-    
+    // Pass 2: Quantize 
     float inv_scale = storage.tile_inv_scale;
 
     #pragma unroll
-    for (int i = 0; i < size(tTsK_out); ++i) {
-        int original_idx = threadIdx.x + i * kNumThreads;
-        if (original_idx < valid_elems) {
-            int d = original_idx % HEAD_DIM;
-            float v = static_cast<float>(tTsK(i)) - storage.tile_means[d];
-            tTsK_out(i) = static_cast<int8_t>(max(-127, min(127, __float2int_rn(v * inv_scale))));
+    for (int i = threadIdx.x; i < size(sK_vec); i += NUM_THREADS) {
+        int flat_elem_idx = i * 8;
+        
+        if (flat_elem_idx < valid_elems) {
+            cute::array<float, 8> vals = vec_to_float(sK_vec(i));
+            
+            #pragma unroll
+            for (int k = 0; k < 8; ++k) {
+                vals[k] = vals[k] - mean_cache[k];
+            }
+            
+            smem_out_ptr[i] = float_vec_to_packed_int8(vals, inv_scale);
         } else {
-            tTsK_out(i) = 0;
+            smem_out_ptr[i] = 0;
         }
     }
     __syncthreads();
@@ -373,18 +374,19 @@ quantize_k_kernel(
     // 3. TMA Store
     Tensor mK_out = tma_store.get_tma_tensor(shape_K)(_, _, bidh, bidb);
     Tensor gK_out = local_tile(mK_out, Shape<Int<BLOCK_N>, Int<HEAD_DIM>>{}, make_coord(seq_tile_idx, 0));
+    Tensor sK_out = make_tensor(make_smem_ptr(storage.smem_out.begin()), SmemLayoutOut{});
 
     auto tma_store_slice = tma_store.get_slice(_0{});
-    Tensor tAsK_out = tma_store_slice.partition_S(sK_out);
-    Tensor tAgK_out = tma_store_slice.partition_D(gK_out);
-
     if (threadIdx.x == 0) {
         tma_store_fence();
-        copy(tma_store, tAsK_out, tAgK_out);
+        copy(tma_store, tma_store_slice.partition_S(sK_out), tma_store_slice.partition_D(gK_out));
         tma_store_wait<0>();
     }
 }
 
+// -----------------------------------------------------------------------------
+// Host Dispatchers
+// -----------------------------------------------------------------------------
 template<int HEAD_DIM, int BLOCK_M, int BLOCK_N>
 struct QKConfigAllowed {
     static constexpr bool value =
@@ -404,32 +406,16 @@ void launch_quantize_qk_config(
 {
     static_assert(QKConfigAllowed<HEAD_DIM, BLOCK_M, BLOCK_N>::value, "Unsupported Config");
 
+    constexpr int kNumThreads = HEAD_DIM == 96 ? 288 : 256;
+
     using SmemConfigQ = SmemConfig<BLOCK_M, HEAD_DIM, Element>;
     using SmemConfigK = SmemConfig<BLOCK_N, HEAD_DIM, Element>;
 
     int num_seq_tiles_q = (seqlen_q + BLOCK_M - 1) / BLOCK_M;
     int num_seq_tiles_k = (seqlen_k + BLOCK_N - 1) / BLOCK_N;
-    float inv_sqrt_d    = 1.0f / std::sqrt(static_cast<float>(HEAD_DIM));
 
-    // 1. Compute K Mean
-    // -------------------------------------------------
-    // Strides: [Batch, Seq, Head, Dim] mapping
-    int64_t stride_s_k = (int64_t)num_heads * HEAD_DIM;
-    int64_t stride_b_k = (int64_t)seqlen_k * stride_s_k;
-    int64_t stride_h_k = (int64_t)HEAD_DIM;
+    cudaMemsetAsync(k_mean, 0, batch * num_heads * HEAD_DIM * sizeof(float), stream);
 
-    // Grid Strategy: 
-    // X: Batch * NumHeads
-    // Y: Chunks of HeadDim (8 elements per chunk)
-    // This dramatically increases occupancy (e.g. 64 -> 1024 blocks).
-    dim3 grid_mean(batch * num_heads, (HEAD_DIM + 7) / 8); 
-
-    compute_k_mean_kernel<Element><<<grid_mean, kNumThreads, 0, stream>>>(
-        K, k_mean, seqlen_k, num_heads, HEAD_DIM,
-        stride_b_k, stride_s_k, stride_h_k
-    );
-
-    // 2. Prepare Shapes & Tensors
     Shape4D shape_Q = make_shape(seqlen_q, HEAD_DIM, num_heads, batch);
     Shape4D shape_K = make_shape(seqlen_k, HEAD_DIM, num_heads, batch);
 
@@ -437,7 +423,8 @@ void launch_quantize_qk_config(
     int64_t stride_b_q = (int64_t)seqlen_q * stride_s_q;
     auto stride_Q = make_stride(stride_s_q, Int<1>{}, Int<HEAD_DIM>{}, stride_b_q);
 
-    // Re-use stride_K calculation logic for TMA
+    int64_t stride_s_k = (int64_t)num_heads * HEAD_DIM;
+    int64_t stride_b_k = (int64_t)seqlen_k * stride_s_k;
     auto stride_K = make_stride(stride_s_k, Int<1>{}, Int<HEAD_DIM>{}, stride_b_k);
 
     Tensor mQ   = make_tensor(make_gmem_ptr(Q),   make_layout(shape_Q, stride_Q));
@@ -450,7 +437,6 @@ void launch_quantize_qk_config(
     using SmemLayoutInK  = typename SmemConfigK::SmemLayoutIn;
     using SmemLayoutOutK = typename SmemConfigK::SmemLayoutOut;
 
-    // 3. Create TMA Objects
     auto tma_load_Q = make_tma_copy<Element>(
         SM90_TMA_LOAD{}, mQ, SmemLayoutInQ{}, Shape<Int<BLOCK_M>, Int<HEAD_DIM>>{}, _1{});
     auto tma_store_Q = make_tma_copy<int8_t>(
@@ -461,42 +447,56 @@ void launch_quantize_qk_config(
     auto tma_store_K = make_tma_copy<int8_t>(
         SM90_TMA_STORE{}, mK_q, SmemLayoutOutK{}, Shape<Int<BLOCK_N>, Int<HEAD_DIM>>{}, _1{});
 
-    // 4. Launch Q Kernel
-    using SharedStorageQ = TmaSharedStorage<HEAD_DIM, Element, SmemLayoutInQ, SmemLayoutOutQ>;
+    // Launch 1: Compute Mean (Uses fixed 256 threads)
+    using MeanStorage = MeanKernelStorage<HEAD_DIM, BLOCK_N, Element>;
+    size_t smem_mean_bytes = sizeof(MeanStorage);
+    
+    if (smem_mean_bytes >= 48 * 1024) {
+        cudaFuncSetAttribute(compute_k_mean_kernel<HEAD_DIM, BLOCK_N, Element, decltype(tma_load_K)>, 
+        cudaFuncAttributeMaxDynamicSharedMemorySize, smem_mean_bytes);
+    }
+    
+    dim3 grid_mean(num_seq_tiles_k, num_heads, batch);
+    compute_k_mean_kernel<HEAD_DIM, BLOCK_N, Element, decltype(tma_load_K)>
+        <<<grid_mean, 256, smem_mean_bytes, stream>>>(
+        tma_load_K, shape_K, k_mean, seqlen_k, num_heads
+    );
+
+    // Launch 2: Quantize Q
+    using SharedStorageQ = TmaSharedStorage<HEAD_DIM, kNumThreads, Element, SmemLayoutInQ, SmemLayoutOutQ>;
     int smem_size_q = sizeof(SharedStorageQ);
 
     if (smem_size_q >= 48 * 1024) {
-        cudaFuncSetAttribute(quantize_q_kernel<HEAD_DIM, BLOCK_M, Element, decltype(tma_load_Q), decltype(tma_store_Q)>, 
+        cudaFuncSetAttribute(quantize_q_kernel<HEAD_DIM, BLOCK_M, kNumThreads, Element, decltype(tma_load_Q), decltype(tma_store_Q)>, 
                              cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size_q);
     }
 
     dim3 grid_q(num_seq_tiles_q, num_heads, batch);
-    quantize_q_kernel<HEAD_DIM, BLOCK_M, Element>
+    quantize_q_kernel<HEAD_DIM, BLOCK_M, kNumThreads, Element>
         <<<grid_q, kNumThreads, smem_size_q, stream>>>(
         tma_load_Q, tma_store_Q,
         seqlen_q, num_heads, batch,
-        q_scales, num_seq_tiles_q, inv_sqrt_d
+        q_scales, num_seq_tiles_q
     );
 
-    // 5. Launch K Kernel
-    using SharedStorageK = TmaSharedStorage<HEAD_DIM, Element, SmemLayoutInK, SmemLayoutOutK>;
+    // Launch 3: Quantize K
+    using SharedStorageK = TmaSharedStorage<HEAD_DIM, kNumThreads, Element, SmemLayoutInK, SmemLayoutOutK>;
     int smem_size_k = sizeof(SharedStorageK);
 
     if (smem_size_k >= 48 * 1024) {
-        cudaFuncSetAttribute(quantize_k_kernel<HEAD_DIM, BLOCK_N, Element, decltype(tma_load_K), decltype(tma_store_K)>, 
+        cudaFuncSetAttribute(quantize_k_kernel<HEAD_DIM, BLOCK_N, kNumThreads, Element, decltype(tma_load_K), decltype(tma_store_K)>, 
                              cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size_k);
     }
 
-    dim3 grid_k(num_seq_tiles_k, num_heads, batch);
-    quantize_k_kernel<HEAD_DIM, BLOCK_N, Element>
-        <<<grid_k, kNumThreads, smem_size_k, stream>>>(
+    quantize_k_kernel<HEAD_DIM, BLOCK_N, kNumThreads, Element>
+        <<<grid_mean, kNumThreads, smem_size_k, stream>>>(
         tma_load_K, tma_store_K,
         seqlen_k, num_heads, batch,
         shape_K, k_mean, k_scales, num_seq_tiles_k
     );
 }
 
-// Runtime Dispatcher
+// Runtime Dispatcher (unchanged logic, just calling the new template)
 template <typename Element>
 void launch_quantize_qk_runtime(
     const Element* Q, const Element* K,
@@ -527,6 +527,7 @@ void launch_quantize_qk_runtime(
     }
 }
 
+// Instantiations
 template void launch_quantize_qk_runtime<cutlass::half_t>(
     const cutlass::half_t*, const cutlass::half_t*,
     int8_t*, int8_t*,
@@ -542,3 +543,80 @@ template void launch_quantize_qk_runtime<cutlass::bfloat16_t>(
     int, int, int, int,
     int, int, int,
     cudaStream_t);
+
+// -----------------------------------------------------------------------------
+// Python Bindings
+// -----------------------------------------------------------------------------
+#include <pybind11/pybind11.h>
+
+namespace py = pybind11;
+
+#define CHECK_CUDA(call) do { \
+    cudaError_t err = call; \
+    if (err != cudaSuccess) \
+        throw std::runtime_error(std::string("CUDA error: ") + cudaGetErrorString(err)); \
+} while(0)
+
+// Python wrapper - float16
+void quantize_qk_f16(
+    uint64_t Q_ptr, uint64_t K_ptr,
+    uint64_t Q_q_ptr, uint64_t K_q_ptr,
+    uint64_t q_scales_ptr, uint64_t k_scales_ptr, uint64_t k_mean_ptr,
+    int batch, int seqlen_q, int seqlen_k, int num_heads, int head_dim,
+    int block_m, int block_n)
+{
+    launch_quantize_qk_runtime<cutlass::half_t>(
+        reinterpret_cast<cutlass::half_t*>(Q_ptr),
+        reinterpret_cast<cutlass::half_t*>(K_ptr),
+        reinterpret_cast<int8_t*>(Q_q_ptr),
+        reinterpret_cast<int8_t*>(K_q_ptr),
+        reinterpret_cast<float*>(q_scales_ptr),
+        reinterpret_cast<float*>(k_scales_ptr),
+        reinterpret_cast<float*>(k_mean_ptr),
+        batch, seqlen_q, seqlen_k, num_heads, head_dim, block_m, block_n, 0);
+    CHECK_CUDA(cudaGetLastError());
+    CHECK_CUDA(cudaStreamSynchronize(0));
+}
+
+// Python wrapper - bfloat16
+void quantize_qk_bf16(
+    uint64_t Q_ptr, uint64_t K_ptr,
+    uint64_t Q_q_ptr, uint64_t K_q_ptr,
+    uint64_t q_scales_ptr, uint64_t k_scales_ptr, uint64_t k_mean_ptr,
+    int batch, int seqlen_q, int seqlen_k, int num_heads, int head_dim,
+    int block_m, int block_n)
+{
+    launch_quantize_qk_runtime<cutlass::bfloat16_t>(
+        reinterpret_cast<cutlass::bfloat16_t*>(Q_ptr),
+        reinterpret_cast<cutlass::bfloat16_t*>(K_ptr),
+        reinterpret_cast<int8_t*>(Q_q_ptr),
+        reinterpret_cast<int8_t*>(K_q_ptr),
+        reinterpret_cast<float*>(q_scales_ptr),
+        reinterpret_cast<float*>(k_scales_ptr),
+        reinterpret_cast<float*>(k_mean_ptr),
+        batch, seqlen_q, seqlen_k, num_heads, head_dim, block_m, block_n, 0);
+    CHECK_CUDA(cudaGetLastError());
+    CHECK_CUDA(cudaStreamSynchronize(0));
+}
+
+PYBIND11_MODULE(quant_tma, m) {
+    m.doc() = "TMA-based Q/K quantization with mean centering for attention (FP16/BF16 only)";
+
+    m.def("quantize_qk_f16", &quantize_qk_f16,
+          "Quantize Q and K (float16) with K mean centering",
+          py::arg("Q_ptr"), py::arg("K_ptr"),
+          py::arg("Q_q_ptr"), py::arg("K_q_ptr"),
+          py::arg("q_scales_ptr"), py::arg("k_scales_ptr"), py::arg("k_mean_ptr"),
+          py::arg("batch"), py::arg("seqlen_q"), py::arg("seqlen_k"),
+          py::arg("num_heads"), py::arg("head_dim"),
+          py::arg("block_m"), py::arg("block_n"));
+
+    m.def("quantize_qk_bf16", &quantize_qk_bf16,
+          "Quantize Q and K (bfloat16) with K mean centering",
+          py::arg("Q_ptr"), py::arg("K_ptr"),
+          py::arg("Q_q_ptr"), py::arg("K_q_ptr"),
+          py::arg("q_scales_ptr"), py::arg("k_scales_ptr"), py::arg("k_mean_ptr"),
+          py::arg("batch"), py::arg("seqlen_q"), py::arg("seqlen_k"),
+          py::arg("num_heads"), py::arg("head_dim"),
+          py::arg("block_m"), py::arg("block_n"));
+}

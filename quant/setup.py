@@ -84,7 +84,6 @@ setup(
             name='quant_tma',
             sources=[
                 'quant.cu',
-                'quant_python.cu',
             ],
             include_dirs=include_dirs,
             extra_compile_args={
