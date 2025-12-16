@@ -16,9 +16,11 @@ def get_tile_seq_k(head_dim):
         64: 224,
         96: 208,
         128: 176,
+        192: 112,
+        256: 80,
     }
     if head_dim not in tile_map:
-        raise ValueError(f"Unsupported head_dim={head_dim}. Only 64, 96, 128 supported.")
+        raise ValueError(f"Unsupported head_dim={head_dim}. Only 64, 96, 128, 192, 256 supported.")
     return tile_map[head_dim]
 
 

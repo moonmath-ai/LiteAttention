@@ -400,7 +400,11 @@ struct QKConfigAllowed {
         (HEAD_DIM ==  64 && BLOCK_M == 128 && BLOCK_N == 224) ||
         (HEAD_DIM ==  96 && BLOCK_M == 128 && BLOCK_N == 208) ||
         (HEAD_DIM == 128 && BLOCK_M == 128 && BLOCK_N == 128) ||
-        (HEAD_DIM == 128 && BLOCK_M == 128 && BLOCK_N == 176);
+        (HEAD_DIM == 128 && BLOCK_M == 128 && BLOCK_N == 176) ||
+        (HEAD_DIM == 192 && BLOCK_M == 128 && BLOCK_N == 112) ||
+        (HEAD_DIM == 192 && BLOCK_M == 128 && BLOCK_N ==  96) ||
+        (HEAD_DIM == 256 && BLOCK_M == 128 && BLOCK_N ==  80) ||
+        (HEAD_DIM == 256 && BLOCK_M == 128 && BLOCK_N ==  64);
 };
 
 template <int HEAD_DIM, int BLOCK_M, int BLOCK_N, typename Element>
@@ -413,7 +417,10 @@ void launch_quantize_qk_config(
 {
     static_assert(QKConfigAllowed<HEAD_DIM, BLOCK_M, BLOCK_N>::value, "Unsupported Config");
 
-    constexpr int kNumThreads = HEAD_DIM == 96 ? 288 : 256;
+    constexpr int kNumThreads =
+        (HEAD_DIM == 96) ? 288 :
+        (HEAD_DIM == 192) ? 192 :
+        256;
 
     using SmemConfigQ = SmemConfig<BLOCK_M, HEAD_DIM, Element>;
     using SmemConfigK = SmemConfig<BLOCK_N, HEAD_DIM, Element>;
@@ -513,23 +520,46 @@ void launch_quantize_qk_runtime(
     int head_dim, int block_m, int block_n,
     cudaStream_t stream)
 {
-    if (head_dim == 64 && block_m == 128 && block_n == 224) {
+    if (head_dim == 64) {
         launch_quantize_qk_config<64, 128, 224, Element>(
             Q, K, Q_q, K_q, q_scales, k_scales, k_mean,
             batch, seqlen_q, seqlen_k, num_heads, stream);
-    } else if (head_dim == 96 && block_m == 128 && block_n == 208) {
+    } else if (head_dim == 96) {
         launch_quantize_qk_config<96, 128, 208, Element>(
             Q, K, Q_q, K_q, q_scales, k_scales, k_mean,
             batch, seqlen_q, seqlen_k, num_heads, stream);
-    } else if (head_dim == 128 && block_m == 128 && block_n == 128) {
-        launch_quantize_qk_config<128, 128, 128, Element>(
-            Q, K, Q_q, K_q, q_scales, k_scales, k_mean,
-            batch, seqlen_q, seqlen_k, num_heads, stream);
-    } else if (head_dim == 128 && block_m == 128 && block_n == 176) {
-        launch_quantize_qk_config<128, 128, 176, Element>(
-            Q, K, Q_q, K_q, q_scales, k_scales, k_mean,
-            batch, seqlen_q, seqlen_k, num_heads, stream);
+    } else if (head_dim == 128) {
+        if (block_n == 128) {
+            launch_quantize_qk_config<128, 128, 128, Element>(
+                Q, K, Q_q, K_q, q_scales, k_scales, k_mean,
+                batch, seqlen_q, seqlen_k, num_heads, stream);
+        } else {
+            launch_quantize_qk_config<128, 128, 176, Element>(
+                Q, K, Q_q, K_q, q_scales, k_scales, k_mean,
+                batch, seqlen_q, seqlen_k, num_heads, stream);
+        }
+    } else if (head_dim == 192) {
+        if (block_n == 96) {
+            launch_quantize_qk_config<192, 128, 96, Element>(
+                Q, K, Q_q, K_q, q_scales, k_scales, k_mean,
+                batch, seqlen_q, seqlen_k, num_heads, stream);
+        } else {
+            launch_quantize_qk_config<192, 128, 112, Element>(
+                Q, K, Q_q, K_q, q_scales, k_scales, k_mean,
+                batch, seqlen_q, seqlen_k, num_heads, stream);
+        }
+    } else if (head_dim == 256) {
+        if (block_n == 64) {
+            launch_quantize_qk_config<256, 128, 64, Element>(
+                Q, K, Q_q, K_q, q_scales, k_scales, k_mean,
+                batch, seqlen_q, seqlen_k, num_heads, stream);
+        } else {
+            launch_quantize_qk_config<256, 128, 80, Element>(
+                Q, K, Q_q, K_q, q_scales, k_scales, k_mean,
+                batch, seqlen_q, seqlen_k, num_heads, stream);
+        }
     } else {
+        printf("Error: Unsupported head_dim=%d. Supported: 64, 96, 128, 192, 256\n", head_dim);
         assert(false && "Unsupported config for quantize_qk");
     }
 }
