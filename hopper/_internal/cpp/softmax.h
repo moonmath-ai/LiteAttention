@@ -163,7 +163,7 @@ namespace flash
     {
         // For FP8, we can subtract max by 8.0 so that the value after exp2 is in the range of [0, 256].
         // This lets us use more of the FP8 range (instead of just [0, 1]) to reduce underflow.
-        static constexpr float max_offset = float(Max_offset); // We can only template on int, not float
+        static constexpr double max_offset = double(Max_offset); // We can only template on int, not float
         static_assert(Layout0::rank == 2, "Only support 2D Tensor");
         static_assert(Layout1::rank == 1, "Only support 1D Tensor");
         static_assert(Layout2::rank == 2, "Only support 2D Tensor for output");
