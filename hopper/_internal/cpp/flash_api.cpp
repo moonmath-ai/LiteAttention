@@ -1225,16 +1225,17 @@ mha_fwd(at::Tensor q,   // (b, s_q, h, d) or (total_q, h, d) if there is cu_seql
             auto q_descale = q_descale_.value();
             CHECK_DEVICE(q_descale);
             if (is_int8) {
-                // INT8: 3D tensor (batch, heads, m_blocks)
+                // INT8: 3D tensor (batch, heads, m_blocks) - uses double precision
                 TORCH_CHECK(q_descale.dim() == 3, "q_descale must be 3D for INT8 (batch, heads, m_blocks)");
-                params.q_descale_ptr = q_descale.data_ptr<float>();
+                TORCH_CHECK(q_descale.dtype() == torch::kFloat64, "q_descale must be float64 (double) for INT8");
+                params.q_descale_ptr = q_descale.data_ptr();
                 params.q_descale_batch_stride = q_descale.stride(0);
                 params.q_descale_head_stride = q_descale.stride(1);
                 params.q_descale_block_stride = q_descale.stride(2);
             } else {
-                // FP8: 2D tensor (batch, heads)
+                // FP8: 2D tensor (batch, heads) - uses float precision
                 CHECK_SHAPE(q_descale, batch_size, num_heads_k);
-                params.q_descale_ptr = q_descale.data_ptr<float>();
+                params.q_descale_ptr = q_descale.data_ptr();
                 params.q_descale_batch_stride = q_descale.stride(0);
                 params.q_descale_head_stride = q_descale.stride(1);
                 params.q_descale_block_stride = 0;  // Not used for FP8
@@ -1247,16 +1248,17 @@ mha_fwd(at::Tensor q,   // (b, s_q, h, d) or (total_q, h, d) if there is cu_seql
             auto k_descale = k_descale_.value();
             CHECK_DEVICE(k_descale);
             if (is_int8) {
-                // INT8: 3D tensor (batch, heads, n_blocks)
+                // INT8: 3D tensor (batch, heads, n_blocks) - uses double precision
                 TORCH_CHECK(k_descale.dim() == 3, "k_descale must be 3D for INT8 (batch, heads, n_blocks)");
-                params.k_descale_ptr = k_descale.data_ptr<float>();
+                TORCH_CHECK(k_descale.dtype() == torch::kFloat64, "k_descale must be float64 (double) for INT8");
+                params.k_descale_ptr = k_descale.data_ptr();
                 params.k_descale_batch_stride = k_descale.stride(0);
                 params.k_descale_head_stride = k_descale.stride(1);
                 params.k_descale_block_stride = k_descale.stride(2);
             } else {
-                // FP8: 2D tensor (batch, heads)
+                // FP8: 2D tensor (batch, heads) - uses float precision
             CHECK_SHAPE(k_descale, batch_size, num_heads_k);
-            params.k_descale_ptr = k_descale.data_ptr<float>();
+            params.k_descale_ptr = k_descale.data_ptr();
             params.k_descale_batch_stride = k_descale.stride(0);
             params.k_descale_head_stride = k_descale.stride(1);
                 params.k_descale_block_stride = 0;  // Not used for FP8
@@ -1270,7 +1272,7 @@ mha_fwd(at::Tensor q,   // (b, s_q, h, d) or (total_q, h, d) if there is cu_seql
             auto v_descale = v_descale_.value();
             CHECK_DEVICE(v_descale);
             CHECK_SHAPE(v_descale, batch_size, num_heads_k);
-            params.v_descale_ptr = v_descale.data_ptr<float>();
+            params.v_descale_ptr = v_descale.data_ptr();
             params.v_descale_batch_stride = v_descale.stride(0);
             params.v_descale_head_stride = v_descale.stride(1);
         } else {

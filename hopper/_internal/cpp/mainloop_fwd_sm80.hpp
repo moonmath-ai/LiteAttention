@@ -245,7 +245,7 @@ struct CollectiveMainloopFwdSm80 {
         cutlass::FastDivmod page_size_divmod;
         cutlass::FastDivmod qhead_per_khead_divmod;
         float const softmax_scale_log2;
-        float const* ptr_q_descale, *ptr_k_descale, *ptr_v_descale;
+        void const* ptr_q_descale, *ptr_k_descale, *ptr_v_descale;
         StrideDescale const stride_q_descale, stride_k_descale, stride_v_descale;
         float const softcap_val;
         int const window_size_left, window_size_right;
@@ -557,8 +557,10 @@ struct CollectiveMainloopFwdSm80 {
 
         float softcap_val = params.softcap_val;
         if constexpr (Has_softcap && Is_FP8) {
-            float const q_descale = params.ptr_q_descale == nullptr ? 1.0f : params.ptr_q_descale[bidb * get<0>(params.stride_q_descale) + bidh_kv * get<1>(params.stride_q_descale)];
-            float const k_descale = params.ptr_k_descale == nullptr ? 1.0f : params.ptr_k_descale[bidb * get<0>(params.stride_k_descale) + bidh_kv * get<1>(params.stride_k_descale)];
+            float const *q_descale_ptr = reinterpret_cast<const float*>(params.ptr_q_descale);
+            float const *k_descale_ptr = reinterpret_cast<const float*>(params.ptr_k_descale);
+            float const q_descale = q_descale_ptr == nullptr ? 1.0f : q_descale_ptr[bidb * get<0>(params.stride_q_descale) + bidh_kv * get<1>(params.stride_q_descale)];
+            float const k_descale = k_descale_ptr == nullptr ? 1.0f : k_descale_ptr[bidb * get<0>(params.stride_k_descale) + bidh_kv * get<1>(params.stride_k_descale)];
             softcap_val *= q_descale * k_descale;
         }
         // Softcapping needs to happen before masking since if we apply after masking, softcapping can turn
@@ -649,7 +651,8 @@ struct CollectiveMainloopFwdSm80 {
                 fwd_step(n_block, local_mask_fn, cute::false_type{} /*is_first_iter*/, cute::bool_constant<Is_local>{} /*check_inf*/);
             }
         }
-        float const v_descale = !Is_FP8 || params.ptr_v_descale == nullptr ? 1.0f : params.ptr_v_descale[bidb * get<0>(params.stride_v_descale) + bidh_kv * get<1>(params.stride_v_descale)];
+        float const *v_descale_ptr = reinterpret_cast<const float*>(params.ptr_v_descale);
+        float const v_descale = !Is_FP8 || v_descale_ptr == nullptr ? 1.0f : v_descale_ptr[bidb * get<0>(params.stride_v_descale) + bidh_kv * get<1>(params.stride_v_descale)];
         Tensor scores_scale = softmax.finalize(v_descale);
         softmax.rescale_o(tOrO, scores_scale);
         if constexpr (Is_FP8) { flash::permute_output_fp8(tOrO); }

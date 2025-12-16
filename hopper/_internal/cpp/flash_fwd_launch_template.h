@@ -256,10 +256,10 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream)
         {params.kv_batch_idx ? params.b_k : params.b, !params.page_table ? 0 : params.seqlen_k / params.page_size},
         {params.page_table_batch_stride, _1{}}, // stride_page_table: CuTe stride pattern for page table
         params.scale_softmax,                   // Softmax scaling factor
-        // FP8 descaling pointers for quantized tensors
-        params.q_descale_ptr,
-        params.k_descale_ptr,
-        params.v_descale_ptr,
+        // FP8/INT8 descaling pointers for quantized tensors (void* to support both float and double)
+        const_cast<void const*>(params.q_descale_ptr),
+        const_cast<void const*>(params.k_descale_ptr),
+        const_cast<void const*>(params.v_descale_ptr),
         // CuTe stride patterns for FP8 descaling tensors
         {params.q_descale_batch_stride, params.q_descale_head_stride}, // Q descale strides (FP8)
         {params.k_descale_batch_stride, params.k_descale_head_stride}, // K descale strides (FP8)

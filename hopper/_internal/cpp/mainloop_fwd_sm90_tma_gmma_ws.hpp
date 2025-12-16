@@ -454,7 +454,7 @@ namespace flash
             ShapePageTable const shape_pagetable;
             StridePageTable const stride_pagetable;
             float const softmax_scale;
-            float const *ptr_q_descale, *ptr_k_descale, *ptr_v_descale;
+            void const *ptr_q_descale, *ptr_k_descale, *ptr_v_descale;
             StrideDescale const stride_q_descale, stride_k_descale, stride_v_descale;
             StrideDescaleINT8 const stride_q_descale_int8, stride_k_descale_int8;  // For INT8 per-block descaling
             int const window_size_left = -1, window_size_right = -1, attention_chunk = 0;
@@ -513,7 +513,7 @@ namespace flash
             TMA_V tma_load_V_new;
             TMA_Qv tma_load_Qv;
             float const softmax_scale_log2;
-            float const *ptr_q_descale, *ptr_k_descale, *ptr_v_descale;
+            void const *ptr_q_descale, *ptr_k_descale, *ptr_v_descale;
             StrideDescale const stride_q_descale, stride_k_descale, stride_v_descale;
             StrideDescaleINT8 const stride_q_descale_int8, stride_k_descale_int8;  // For INT8 per-block descaling
             float const softcap_val;
@@ -1404,8 +1404,10 @@ namespace flash
             float softcap_val = params.softcap_val;
             if constexpr (Has_softcap && Is_FP8)
             {
-                float const q_descale = params.ptr_q_descale == nullptr ? 1.0f : params.ptr_q_descale[bidb * get<0>(params.stride_q_descale) + bidh_kv * get<1>(params.stride_q_descale)];
-                float const k_descale = params.ptr_k_descale == nullptr ? 1.0f : params.ptr_k_descale[bidb * get<0>(params.stride_k_descale) + bidh_kv * get<1>(params.stride_k_descale)];
+                float const *q_descale_ptr = reinterpret_cast<const float*>(params.ptr_q_descale);
+                float const *k_descale_ptr = reinterpret_cast<const float*>(params.ptr_k_descale);
+                float const q_descale = q_descale_ptr == nullptr ? 1.0f : q_descale_ptr[bidb * get<0>(params.stride_q_descale) + bidh_kv * get<1>(params.stride_q_descale)];
+                float const k_descale = k_descale_ptr == nullptr ? 1.0f : k_descale_ptr[bidb * get<0>(params.stride_k_descale) + bidh_kv * get<1>(params.stride_k_descale)];
                 softcap_val *= q_descale * k_descale;
             }
             
@@ -1522,6 +1524,7 @@ namespace flash
             auto convert_qk_accum_to_float = [&](auto& tSrS_ambiguous_type) {
                 if constexpr (Is_INT8) {
                     Tensor tSrS_converted = make_tensor_like<double>(tSrS_ambiguous_type);
+                    // Tensor tSrS_converted = make_tensor_like<bfloat16_t>(tSrS_ambiguous_type);
                     // // Tensor tSrS_converted = make_tensor_like<ElementAccum>(tSrS_ambiguous_type);
 
                     // // Reinterpret the same tensor with ElementAccum type (static cast)
@@ -1788,7 +1791,8 @@ namespace flash
                 }
                 flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP), tOrV(_, _, _, smem_pipe_read.index()), tOrO);
                 // For INT8, V is bf16, so no v_descale needed (use Is_FP8)
-                float const v_descale = !Is_FP8 || params.ptr_v_descale == nullptr ? 1.0f : params.ptr_v_descale[bidb * get<0>(params.stride_v_descale) + bidh_kv * get<1>(params.stride_v_descale)];
+                float const *v_descale_ptr = reinterpret_cast<const float*>(params.ptr_v_descale);
+                float const v_descale = !Is_FP8 || v_descale_ptr == nullptr ? 1.0f : v_descale_ptr[bidb * get<0>(params.stride_v_descale) + bidh_kv * get<1>(params.stride_v_descale)];
                 cute::copy(softmax.finalize(v_descale), scores_scale);
                 if constexpr (LargeHeadDimV)
                 {
@@ -2003,7 +2007,8 @@ namespace flash
                 // Tell producers that smem_q is ready
                 cutlass::arch::NamedBarrier::arrive(NumMmaThreadsQK + (Use_TMA_Q ? cutlass::NumThreadsPerWarp : NumProducerThreads), static_cast<uint32_t>(FwdNamedBarriers::QueryEmpty) /*id*/);
                 // For INT8, V is bf16, so no v_descale needed (use Is_FP8)
-                float const v_descale = !Is_FP8 || params.ptr_v_descale == nullptr ? 1.0f : params.ptr_v_descale[bidb * get<0>(params.stride_v_descale) + bidh_kv * get<1>(params.stride_v_descale)];
+                float const *v_descale_ptr = reinterpret_cast<const float*>(params.ptr_v_descale);
+                float const v_descale = !Is_FP8 || v_descale_ptr == nullptr ? 1.0f : v_descale_ptr[bidb * get<0>(params.stride_v_descale) + bidh_kv * get<1>(params.stride_v_descale)];
                 Tensor scores_scale = softmax.finalize(v_descale);
 
                 if constexpr (LargeHeadDimV)
