@@ -1856,15 +1856,14 @@ namespace flash
                         warpgroup_wait<0>();
                     }
 
-                    if constexpr (Is_INT8){
-                        softmax.set_dequan_s(KDescaleSliced(new_n_block));
-                    }
-                    auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
-
                     if constexpr (!Is_INT8){
                         scoremod_premask_fn(tSrS_ambiguous_type);
                     }
                     mask_fn(tSrS_ambiguous_type, new_n_block);
+
+                    if constexpr (Is_INT8){
+                        softmax.set_dequan_s(KDescaleSliced(new_n_block));
+                    }
                     // Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
                     Tensor scores_scale = [&]
                     {
@@ -1881,6 +1880,7 @@ namespace flash
                         store_scales(scores_scale, smem_pipe_read_prev.index());
                     }
 
+                    auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
                     if constexpr (!Is_INT8){
                         softmax.template online_softmax<Is_first_iter, Check_inf>(tSrS);
                     } else {
