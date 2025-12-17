@@ -1523,8 +1523,8 @@ namespace flash
             // auto convert_qk_accum_to_float = [&](auto& tSrS_ambiguous_type, float dequan_s) {
             auto convert_qk_accum_to_float = [&](auto& tSrS_ambiguous_type) {
                 if constexpr (Is_INT8) {
-                    Tensor tSrS_converted = make_tensor_like<double>(tSrS_ambiguous_type);
-                    // Tensor tSrS_converted = make_tensor_like<bfloat16_t>(tSrS_ambiguous_type);
+                    // Tensor tSrS_converted = make_tensor_like<double>(tSrS_ambiguous_type);
+                    Tensor tSrS_converted = make_tensor_like<bfloat16_t>(tSrS_ambiguous_type);
                     // // Tensor tSrS_converted = make_tensor_like<ElementAccum>(tSrS_ambiguous_type);
 
                     // // Reinterpret the same tensor with ElementAccum type (static cast)

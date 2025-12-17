@@ -184,7 +184,7 @@ namespace flash
                     // Dequantize int32 to float, then compute exp2(dequantized_value - max_scaled)
                     // tensor(mi, ni) is int32_t, multiply by dequan_s to get float
                     const double dequantized_value = tensor(mi, ni) * dequan_s - max_scaled;
-                    tensor_dequantized(mi, ni) = exp2(dequantized_value);
+                    tensor_dequantized(mi, ni) = (bfloat16_t) exp2(dequantized_value);
                 }
             }else{
                 const double max_scaled = (!Scale_max ? max(mi) : max(mi)) - max_offset;
@@ -193,7 +193,76 @@ namespace flash
                 {
                     // Dequantize int32 to float, then compute exp2(dequantized_value - max_scaled)
                     const double dequantized_value = tensor(mi, ni) * dequan_s - max_scaled;
-                    tensor_dequantized(mi, ni) = exp2(dequantized_value);
+                    tensor_dequantized(mi, ni) = (bfloat16_t) exp2(dequantized_value);
+                }
+            }
+        }
+    }
+
+    // Apply the exp to all the elements, dequantizing int32 input to float output, and compute sum reduction.
+    // This version fuses the exp2 computation with sum reduction, computing sum on float values before conversion to bfloat16_t.
+    // tensor: input tensor with int32_t values (from INT8 MMA)
+    // tensor_dequantized: output tensor with bfloat16_t values
+    // row_sum: output tensor for row sums (1D tensor)
+    // dequan_s: dequantization scale (q_dequant * k_dequant)
+    template <bool const Scale_max = true, bool const Check_inf = true, int const Max_offset = 0, bool const zero_init = true,
+              typename Engine0, typename Layout0, typename Engine1, typename Layout1, typename Engine2, typename Layout2, typename Engine3, typename Layout3>
+    __forceinline__ __device__ void scale_apply_exp2_dequantize(Tensor<Engine0, Layout0> &tensor, Tensor<Engine1, Layout1> &max,
+                                                                 Tensor<Engine2, Layout2> &tensor_dequantized, Tensor<Engine3, Layout3> &row_sum, const double dequan_s)
+    {
+        // For FP8, we can subtract max by 8.0 so that the value after exp2 is in the range of [0, 256].
+        // This lets us use more of the FP8 range (instead of just [0, 1]) to reduce underflow.
+        static constexpr double max_offset = double(Max_offset); // We can only template on int, not float
+        static_assert(Layout0::rank == 2, "Only support 2D Tensor");
+        static_assert(Layout1::rank == 1, "Only support 1D Tensor");
+        static_assert(Layout2::rank == 2, "Only support 2D Tensor for output");
+        static_assert(Layout3::rank == 1, "Only support 1D Tensor for row_sum");
+        CUTE_STATIC_ASSERT_V(size<0>(max) == size<0>(tensor));
+        CUTE_STATIC_ASSERT_V(size<0>(tensor) == size<0>(tensor_dequantized));
+        CUTE_STATIC_ASSERT_V(size<1>(tensor) == size<1>(tensor_dequantized));
+        CUTE_STATIC_ASSERT_V(size<0>(row_sum) == size<0>(tensor));
+        using SumElemT = typename Engine3::value_type;
+        SumOp<SumElemT> sum_op;
+#pragma unroll
+        for (int mi = 0; mi < size<0>(tensor); ++mi)
+        {
+            // If max is -inf, then all elements must have been -inf (possibly due to masking).
+            // We don't want (-inf - (-inf)) since that would give NaN.
+            // Note: max is already dequantized (in float), so we don't multiply by dequan_s here
+            if constexpr (Check_inf){
+                const double max_scaled = max(mi) == -INFINITY ? 0.0 : (!Scale_max ? max(mi) : max(mi)) - max_offset;
+    #pragma unroll
+                for (int ni = 0; ni < size<1>(tensor); ++ni)
+                {
+                    // Dequantize int32 to float, then compute exp2(dequantized_value - max_scaled)
+                    // tensor(mi, ni) is int32_t, multiply by dequan_s to get float
+                    const double dequantized_value = tensor(mi, ni) * dequan_s - max_scaled;
+                    const double exp2_value = exp2(dequantized_value);
+                    // Store as bfloat16_t
+                    tensor_dequantized(mi, ni) = (bfloat16_t) exp2_value;
+                    // Accumulate sum on float values before conversion to bfloat16_t
+                    if constexpr (zero_init){
+                        row_sum(mi) = ni == 0 ? SumElemT(exp2_value) : sum_op(row_sum(mi), SumElemT(exp2_value));
+                    }else{
+                        row_sum(mi) = sum_op(row_sum(mi), SumElemT(exp2_value));
+                    }
+                }
+            }else{
+                const double max_scaled = (!Scale_max ? max(mi) : max(mi)) - max_offset;
+    #pragma unroll
+                for (int ni = 0; ni < size<1>(tensor); ++ni)
+                {
+                    // Dequantize int32 to float, then compute exp2(dequantized_value - max_scaled)
+                    const double dequantized_value = tensor(mi, ni) * dequan_s - max_scaled;
+                    const double exp2_value = exp2(dequantized_value);
+                    // Store as bfloat16_t
+                    tensor_dequantized(mi, ni) = (bfloat16_t) exp2_value;
+                    // Accumulate sum on float values before conversion to bfloat16_t
+                    if constexpr (zero_init){
+                        row_sum(mi) = ni == 0 ? SumElemT(exp2_value) : sum_op(row_sum(mi), SumElemT(exp2_value));
+                    }else{
+                        row_sum(mi) = sum_op(row_sum(mi), SumElemT(exp2_value));
+                    }
                 }
             }
         }
@@ -444,12 +513,13 @@ namespace flash
             // consider: scores are Int's when Is_INT8 is enabled, so we need to pass the dequan_s instead of scale_apply_exp2
             //           and also we need to define a new scores tensor for float type (we dequantize and take the exp2 inside this function)
             // flash::template scale_apply_exp2</*Scale_max=*/true, Check_inf, Max_offset>(scores, row_max, softmax_scale_log2);
-            flash::template scale_apply_exp2_dequantize</*Scale_max=*/true, Check_inf, Max_offset>(scores, row_max, scores_float, dequan_s);
+            // Use fused version that computes sum reduction on float values before conversion to bfloat16_t
+            flash::template scale_apply_exp2_dequantize</*Scale_max=*/true, Check_inf, Max_offset, /*zero_init=*/Is_first>(scores, row_max, scores_float, row_sum, dequan_s);
 
             // consider: here we should reduce_sum with the values of the float exp2 scores (which we need to create a float tensor for when Is_INT8 is enabled)
             // We don't do the reduce across threads here since we don't need to use the row_sum.
             // We do that reduce at the end when we need to normalize the softmax.
-            flash::reduce_sum</*zero_init=*/Is_first, /*warp_reduce=*/false>(scores_float, row_sum);
+            // flash::reduce_sum</*zero_init=*/Is_first, /*warp_reduce=*/false>(scores_float, row_sum);
         };
 
         __forceinline__ __device__ TensorT finalize(float const final_scale = 1.f)
