@@ -403,7 +403,7 @@ class LiteAttention:
         
         # Determine if value tensor is column-major (affects tile size selection)
         v_colmajor = value.shape[-3] == head_dim
-        dtype = query.dtype
+        dtype = torch.int8 if self.use_int8 else query.dtype
         device = query.device
         
         # Allocate for max_batch_size to avoid reallocation on batch size changes
@@ -455,7 +455,7 @@ class LiteAttention:
         current_head_dim = head_dim
         current_num_heads = query.shape[2]
         v_colmajor = value.shape[-3] == head_dim
-        dtype = query.dtype
+        dtype = torch.int8 if self.use_int8 else query.dtype
         device = query.device
         
         # Initialize or reinitialize skip list if needed
@@ -502,7 +502,7 @@ class LiteAttention:
         return read_list, write_list
 
     @staticmethod
-    def _expand_must_do_list(must_do_list, list_shape, query, value):
+    def _expand_must_do_list(must_do_list, list_shape, query, value, use_int8: bool = False):
         """
         Convert user-provided must-do list from sequence indices to tile indices.
         
@@ -559,7 +559,7 @@ class LiteAttention:
         # Extract tensor properties needed for tile size calculation
         head_dim = query.shape[-1]
         v_colmajor = value.shape[-3] == head_dim
-        dtype = query.dtype
+        dtype = torch.int8 if use_int8 else query.dtype
         device = query.device
 
         # Get tile dimensions (kBlockM, kBlockN)
@@ -743,7 +743,7 @@ class LiteAttention:
 
         if self.enable_skipping and (must_do_list is not None):
             # handle must-do list - expand the 1d list to a list per head per batch per qi
-            must_do_list_expanded = self._expand_must_do_list(must_do_list, write_list.shape, query, value)
+            must_do_list_expanded = self._expand_must_do_list(must_do_list, write_list.shape, query, value, self.use_int8)
         else:
             must_do_list_expanded = None
 
@@ -939,7 +939,9 @@ class LiteAttention:
                 batch_head_dir = os.path.join(save_path, f"batch_{b}", f"head_{h}")
                 os.makedirs(batch_head_dir, exist_ok=True)
 
-        kBlockM, kBlockN = LiteAttention.get_MN(key.shape[-1], key.dtype)
+        # kBlockM, kBlockN = LiteAttention.get_MN(key.shape[-1], key.dtype)
+        kBlockM, kBlockN = LiteAttention.get_MN(key.shape[-1], torch.int8 if self.use_int8 else key.dtype)
+
         # Add grid overlay
         height, width = max_res, max_res
         ratio_height = height / seq_len_q
