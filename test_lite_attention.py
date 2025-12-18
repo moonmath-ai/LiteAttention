@@ -1,5 +1,9 @@
+import os
 import torch
 from lite_attention import LiteAttention
+
+# Enable debug mode to allow non-negative thresholds in tests
+os.environ["LITE_ATTENTION_DEBUG"] = "TRUE"
 
 
 def generate_test_tensors(batch, seq_len, heads, head_dim):
