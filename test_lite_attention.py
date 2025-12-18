@@ -304,7 +304,7 @@ def test_must_skip_list(q, k, v, head_dim, use_int8=False):
     Tests multiple must skip list configurations.
     """
     seq_len = k.shape[1]
-    element_type = k.dtype
+    element_type = torch.int8 if use_int8 else k.dtype
     _, kBlockN = LiteAttention.get_MN(head_dim, element_type)
     ktiles = LiteAttention.ceil_div(seq_len, kBlockN)
 
@@ -358,7 +358,7 @@ def test_must_do_list(q, k, v, head_dim, use_int8=False):
     Tests multiple must do list configurations.
     """
     seq_len = k.shape[1]
-    element_type = k.dtype
+    element_type = torch.int8 if use_int8 else k.dtype
     _, kBlockN = LiteAttention.get_MN(head_dim, element_type)
     ktiles = LiteAttention.ceil_div(seq_len, kBlockN)
 
@@ -558,7 +558,7 @@ def run_tests_for_head_dim(head_dim, batch=2, seq_len=18200, heads=32):
     
     # Run BF16 tests
     print(f"\n  {'-'*56}")
-    print(f"  BF16 Tests")
+    print(f"  BF16 Tests (head_dim: {head_dim})")
     print(f"  {'-'*56}")
     stress_test(q, k, v, head_dim, use_int8=False)
     test_skip_all(q, k, v, head_dim, use_int8=False)
@@ -572,7 +572,7 @@ def run_tests_for_head_dim(head_dim, batch=2, seq_len=18200, heads=32):
     
     # Run INT8 tests
     print(f"\n  {'-'*56}")
-    print(f"  INT8 Tests")
+    print(f"  INT8 Tests (head_dim: {head_dim})")
     print(f"  {'-'*56}")
     q_int8, k_int8, v_int8 = generate_test_tensors(batch=batch, seq_len=seq_len, heads=heads, head_dim=head_dim)
     stress_test(q_int8, k_int8, v_int8, head_dim, use_int8=True)
@@ -583,7 +583,7 @@ def run_tests_for_head_dim(head_dim, batch=2, seq_len=18200, heads=32):
     
     # INT8 correctness tests (compare INT8 vs BF16)
     print(f"\n  {'-'*56}")
-    print(f"  INT8 Correctness Tests (vs BF16)")
+    print(f"  INT8 Correctness Tests (vs BF16) (head_dim: {head_dim})")
     print(f"  {'-'*56}")
     q_int8_short, k_int8_short, v_int8_short = generate_test_tensors(batch=batch, seq_len=min(6000, seq_len), heads=heads, head_dim=head_dim)
     test_int8_correctness(q_int8_short, k_int8_short, v_int8_short, head_dim)
