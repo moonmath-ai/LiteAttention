@@ -466,8 +466,8 @@ def test_int8_correctness(q, k, v, head_dim, tolerance_max_abs=0.1, tolerance_co
         tolerance_cosine: Minimum acceptable cosine similarity (default: 0.99)
     """
     # Check if tile sizes match between int8 and bf16
-    tile_size_bf16 = LiteAttention.get_MN(head_dim, torch.bfloat16)
-    tile_size_int8 = LiteAttention.get_MN(head_dim, torch.int8)
+    tile_size_bf16 = LiteAttention.get_MN(head_dim, torch.bfloat16, is_skipable=False)
+    tile_size_int8 = LiteAttention.get_MN(head_dim, torch.int8, is_skipable=False)
     tile_sizes_match = tile_size_bf16 == tile_size_int8
     
     if not tile_sizes_match:
@@ -521,8 +521,8 @@ def test_int8_with_skipping(q, k, v, head_dim, tolerance_max_abs=0.15, tolerance
     Compares INT8 with skipping vs BF16 with skipping.
     """
     # Check if tile sizes match between int8 and bf16
-    tile_size_bf16 = LiteAttention.get_MN(head_dim, torch.bfloat16)
-    tile_size_int8 = LiteAttention.get_MN(head_dim, torch.int8)
+    tile_size_bf16 = LiteAttention.get_MN(head_dim, torch.bfloat16, is_skipable=True)
+    tile_size_int8 = LiteAttention.get_MN(head_dim, torch.int8, is_skipable=True)
     tile_sizes_match = tile_size_bf16 == tile_size_int8
     
     if not tile_sizes_match:
