@@ -625,7 +625,7 @@ class LiteAttention:
         return merged + [s, e]
     
     # TODO: consider passing the scale as well so to not need to multiply by it inside the kernel
-    def _quantize_query_key(self, query: torch.Tensor, key: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def _quantize_query_key(self, query: torch.Tensor, key: torch.Tensor, scale: float) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         SageAttention-style quantization for Q and K:
         - Q: per-block quantization (kBlockM tokens share a scale per head)
@@ -647,7 +647,11 @@ class LiteAttention:
             q_amax = q_reshaped.abs().amax(dim=(2, 4)).clamp(min=1e-7).to(torch.float64)  # [batch, num_q_blocks, heads]
             # q_scale = (q_amax  * (math.log2(math.e) / math.sqrt(head_dim))) / 127.0
             q_scale = torch.tensor(127.0, dtype=torch.float64, device=q_amax.device) / q_amax
-            constant_term = math.log2(math.e) / math.sqrt(head_dim * (127 ** 2))
+            # constant_term = math.log2(math.e) / math.sqrt(head_dim * (127 ** 2))
+            if scale is None:
+                constant_term = math.log2(math.e) / math.sqrt(head_dim * (127 ** 2))
+            else:
+                constant_term = (math.log2(math.e) / 127) * scale
             # q_descale = q_amax * (math.log2(math.e) / (127.0 * math.sqrt(head_dim)))
             q_descale = q_amax * constant_term
             # q_int8 = (q_reshaped / q_scale[:, :, None, :, None]).round().clamp(-128, 127).to(torch.int8)
@@ -736,7 +740,7 @@ class LiteAttention:
         """
 
         # quantize the query, key if needed and get the dequantization scales
-        query, key, q_descale, k_descale = self._quantize_query_key(query, key)
+        query, key, q_descale, k_descale = self._quantize_query_key(query, key, scale)
 
         # Get read and write lists (internal mask management)
         read_list, write_list = self._get_read_write_lists(query, value, must_skip_list)
@@ -754,7 +758,7 @@ class LiteAttention:
             q=query,
             k=key, 
             v=value,
-            softmax_scale=scale,
+            softmax_scale=None if self.use_int8 else scale,
             attn_read_list=read_list,
             attn_must_do_list=must_do_list_expanded,
             attn_write_list=write_list,
