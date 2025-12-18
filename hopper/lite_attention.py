@@ -253,7 +253,7 @@ class LiteAttention:
         return LiteAttention.calc_percentage_per_head(read_list).mean()
 
     @staticmethod
-    def get_MN(head_dim, dtype, v_colmajor=False):
+    def get_MN(head_dim, dtype, v_colmajor=False, is_skipable=True):
         """
         Get the tile sizes (block dimensions) for attention computation.
         
@@ -290,7 +290,7 @@ class LiteAttention:
             v_colmajor,         # v_colmajor
             False,              # paged_kv_non_TMA
             False,              # softcap
-            True,               # is_skipable (always True for LiteAttention skip list)
+            is_skipable,        # is_skipable
             is_int8             # is_int8
         )
         kBlockM, kBlockN = result[0], result[1]
