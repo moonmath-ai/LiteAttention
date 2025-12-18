@@ -260,8 +260,8 @@ def test_must_skip_list(q, k, v, head_dim):
     Tests multiple must skip list configurations.
     """
     seq_len = k.shape[1]
-    element_size = k.dtype.itemsize
-    _, kBlockN = LiteAttention.get_MN(head_dim, element_size)
+    element_type = k.dtype
+    _, kBlockN = LiteAttention.get_MN(head_dim, element_type)
     ktiles = LiteAttention.ceil_div(seq_len, kBlockN)
 
     # Each entry is [start0, end0, start1, end1, ...] representing ranges to skip
@@ -313,8 +313,8 @@ def test_must_do_list(q, k, v, head_dim):
     Tests multiple must do list configurations.
     """
     seq_len = k.shape[1]
-    element_size = k.dtype.itemsize
-    _, kBlockN = LiteAttention.get_MN(head_dim, element_size)
+    element_type = k.dtype
+    _, kBlockN = LiteAttention.get_MN(head_dim, element_type)
     ktiles = LiteAttention.ceil_div(seq_len, kBlockN)
 
     # Each entry is [start0, end0, start1, end1, ...] representing ranges to compute
