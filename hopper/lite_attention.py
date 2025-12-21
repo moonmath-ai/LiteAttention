@@ -154,6 +154,7 @@ class LiteAttention:
         self._last_num_heads = None  # Number of attention heads
         # Statistics
         self._last_percentage = 0.0  # Percentage of tiles computed in last pass
+        self._last_use_int8 = use_int8  # Whether using int8 quantization in last pass
         
         # Public configuration
         self.enable_skipping = enable_skipping
@@ -457,19 +458,23 @@ class LiteAttention:
         v_colmajor = value.shape[-3] == head_dim
         dtype = torch.int8 if self.use_int8 else query.dtype
         device = query.device
-        
-        # Initialize or reinitialize skip list if needed
-        # we always enter this in the first call
-        if (self._skip_list is None or 
+
+        should_reinitialize = (self._skip_list is None or 
             self._last_seq_len != current_seq_len or 
             self._skip_list.device != query.device or
             self._last_head_dim != current_head_dim or
             self._last_v_colmajor != v_colmajor or
             self._last_dtype != dtype or
             self._last_device != device or
-            self._last_num_heads != current_num_heads
-            ):
+            self._last_num_heads != current_num_heads)
 
+        if self.use_int8 != self._last_use_int8 and not should_reinitialize:
+            should_reinitialize = LiteAttention.get_MN(head_dim, torch.int8, v_colmajor) != LiteAttention.get_MN(head_dim, dtype, v_colmajor)
+            self._last_use_int8 = self.use_int8
+
+        # Initialize or reinitialize skip list if needed
+        # we always enter this in the first call
+        if should_reinitialize:
             # initialize the skip list (actually allocate the memory)
             self._skip_list = self._init_skip_list(query, value, must_skip_list)
             # ditermines which part of self._skip_list to use for read_list and write_list
@@ -483,6 +488,7 @@ class LiteAttention:
             self._last_device = device
             self._last_num_heads = current_num_heads
             self._last_batch_size = query.shape[0]
+            self._last_use_int8 = self.use_int8
 
             if os.getenv("LITE_ATTENTION_VERBOSE", "FALSE") != "FALSE":
                 print(f"[Warning]: reinitialized skip list during the forward pass")
