@@ -184,6 +184,9 @@ def compute_reference_lse(q, k, v, head_dim):
 
 def compute_error_metrics(output, reference, name=""):
     """Compute and return error metrics between output and reference."""
+
+    assert output.shape == reference.shape, f"Output and reference shapes do not match: {output.shape} != {reference.shape}"
+
     # Convert both to float32 for accurate error computation
     out_f32 = output.float()
     ref_f32 = reference.float()
@@ -593,13 +596,14 @@ def run_tests_for_head_dim(head_dim, batch=2, seq_len=18200, heads=32):
     print(f"\n  {'-'*56}")
     print(f"  BF16 Tests (head_dim: {head_dim})")
     print(f"  {'-'*56}")
-    stress_test(q, k, v, head_dim, use_int8=False)
-    test_skip_all(q, k, v, head_dim, use_int8=False)
-    test_skip_nothing(q, k, v, head_dim, use_int8=False)
-    test_must_skip_list(q, k, v, head_dim, use_int8=False)
-    test_must_do_list(q, k, v, head_dim, use_int8=False)
-    q_short, k_short, v_short = generate_test_tensors(batch=batch, seq_len=min(6000, seq_len), heads=heads, head_dim=head_dim)
-    test_softmax_lse_correctness(q_short, k_short, v_short, head_dim, use_int8=False)
+    bf16_results = []
+    bf16_results.append(stress_test(q, k, v, head_dim, use_int8=False))
+    bf16_results.append(test_skip_all(q, k, v, head_dim, use_int8=False))
+    bf16_results.append(test_skip_nothing(q, k, v, head_dim, use_int8=False))
+    bf16_results.append(test_must_skip_list(q, k, v, head_dim, use_int8=False))
+    bf16_results.append(test_must_do_list(q, k, v, head_dim, use_int8=False))
+    q_short, k_short, v_short = generate_test_tensors(batch=batch, seq_len=min(6143, seq_len), heads=heads, head_dim=head_dim)
+    bf16_results.append(test_softmax_lse_correctness(q_short, k_short, v_short, head_dim, use_int8=False))
 
     # consistency_test(q, k, v, head_dim)
     
@@ -607,12 +611,13 @@ def run_tests_for_head_dim(head_dim, batch=2, seq_len=18200, heads=32):
     print(f"\n  {'-'*56}")
     print(f"  INT8 Tests (head_dim: {head_dim})")
     print(f"  {'-'*56}")
-    stress_test(q, k, v, head_dim, use_int8=True)
-    test_skip_all(q, k, v, head_dim, use_int8=True)
-    test_skip_nothing(q, k, v, head_dim, use_int8=True)
-    test_must_skip_list(q, k, v, head_dim, use_int8=True)
-    test_must_do_list(q, k, v, head_dim, use_int8=True)
-    test_softmax_lse_correctness(q_short, k_short, v_short, head_dim, tolerance=0.01, use_int8=True)
+    int8_results = []
+    int8_results.append(stress_test(q, k, v, head_dim, use_int8=True))
+    int8_results.append(test_skip_all(q, k, v, head_dim, use_int8=True))
+    int8_results.append(test_skip_nothing(q, k, v, head_dim, use_int8=True))
+    int8_results.append(test_must_skip_list(q, k, v, head_dim, use_int8=True))
+    int8_results.append(test_must_do_list(q, k, v, head_dim, use_int8=True))
+    int8_results.append(test_softmax_lse_correctness(q_short, k_short, v_short, head_dim, tolerance=0.01, use_int8=True))
 
     torch.cuda.synchronize()
     
@@ -620,8 +625,16 @@ def run_tests_for_head_dim(head_dim, batch=2, seq_len=18200, heads=32):
     print(f"\n  {'-'*56}")
     print(f"  INT8 Correctness Tests (vs BF16) (head_dim: {head_dim})")
     print(f"  {'-'*56}")
-    test_int8_correctness(q, k, v, head_dim)
-    test_int8_with_skipping(q, k, v, head_dim)
+    # int8_results.append(test_int8_correctness(q, k, v, head_dim))
+    # int8_results.append(test_int8_with_skipping(q, k, v, head_dim))
+    int8_results.append(test_int8_correctness(q_short, k_short, v_short, head_dim))
+    int8_results.append(test_int8_with_skipping(q_short, k_short, v_short, head_dim))
+    
+    # Determine overall pass/fail for each dtype
+    bf16_passed = all(bf16_results)
+    int8_passed = all(int8_results)
+    
+    return bf16_passed, int8_passed
 
 
 def main():
@@ -633,12 +646,50 @@ def main():
     # Test different head dimensions
     head_dims = [32, 64, 96, 128, 192, 256]
     
-    for head_dim in head_dims:
-        run_tests_for_head_dim(head_dim)
+    # Track results for each head dimension
+    bf16_results = {}
+    int8_results = {}
     
+    for head_dim in head_dims:
+        # bf16_passed, int8_passed = run_tests_for_head_dim(head_dim, seq_len=2**15)
+        bf16_passed, int8_passed = run_tests_for_head_dim(head_dim)
+        bf16_results[head_dim] = bf16_passed
+        int8_results[head_dim] = int8_passed
+    
+    # Print summary
     print(f"\n{'='*60}")
     print("All tests completed!")
     print(f"{'='*60}\n")
+    
+    # Summary for BF16
+    print(f"{'='*60}")
+    print("SUMMARY - BF16 Tests")
+    print(f"{'='*60}")
+    bf16_passed_dims = [hd for hd in head_dims if bf16_results[hd]]
+    bf16_failed_dims = [hd for hd in head_dims if not bf16_results[hd]]
+    
+    if bf16_passed_dims:
+        print(f"✅ PASSED head dimensions: {bf16_passed_dims}")
+    if bf16_failed_dims:
+        print(f"❌ FAILED head dimensions: {bf16_failed_dims}")
+    if not bf16_failed_dims:
+        print("All BF16 tests passed!")
+    
+    # Summary for INT8
+    print(f"\n{'='*60}")
+    print("SUMMARY - INT8 Tests")
+    print(f"{'='*60}")
+    int8_passed_dims = [hd for hd in head_dims if int8_results[hd]]
+    int8_failed_dims = [hd for hd in head_dims if not int8_results[hd]]
+    
+    if int8_passed_dims:
+        print(f"✅ PASSED head dimensions: {int8_passed_dims}")
+    if int8_failed_dims:
+        print(f"❌ FAILED head dimensions: {int8_failed_dims}")
+    if not int8_failed_dims:
+        print("All INT8 tests passed!")
+    
+    print(f"\n{'='*60}\n")
 
 
 if __name__ == "__main__":

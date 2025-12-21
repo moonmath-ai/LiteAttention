@@ -419,13 +419,13 @@ namespace flash
         // For INT8, V is bf16, so we use Is_FP8 for V-related tuning
         static constexpr bool UseSchedulerBarrier = (
                 (IntraWGOverlap
-                    ? (NumMmaWarpGroups >= 2) && (!Is_FP8 ? kHeadDim <= 128 : kHeadDim >= 128)
+                    ? (NumMmaWarpGroups >= 2) && (!Is_8Bit ? kHeadDim <= 128 : kHeadDim >= 128)
                     : NumMmaWarpGroups == 2
                 ) || Is_skipable
             ) && !LargeHeadDimV;
 
         // static constexpr bool RescaleOBeforeGemm = kHeadDim > 128 && (!Is_FP8 || V_colmajor) && IntraWGOverlap;
-        static constexpr bool RescaleOBeforeGemm = (kHeadDim > 128) && (!Is_FP8 || V_colmajor) && IntraWGOverlap;
+        static constexpr bool RescaleOBeforeGemm = (kHeadDim > 128) && (!Is_8Bit || V_colmajor) && IntraWGOverlap;
 
         // Host side kernel arguments
         struct Arguments

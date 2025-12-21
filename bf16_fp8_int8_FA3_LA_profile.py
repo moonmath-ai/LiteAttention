@@ -96,7 +96,8 @@ def main():
     # Configuration
     device = 'cuda'
     batch_size = 2
-    seqlen = 16384  # ~16k as requested
+    # seqlen = 16384  # ~16k as requested
+    seqlen = 19 + 2**14  # ~16k as requested
     num_heads = 32  # Adjust based on your model
     headdim = 128   # As requested
     causal = False  # Set to True for autoregressive (causal) attention, False for bidirectional
