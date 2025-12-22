@@ -14,7 +14,7 @@ template <typename Element>
 void launch_quantize_qk_runtime(
     const Element* Q, const Element* K,
     int8_t* Q_q, int8_t* K_q,
-    float* q_scales, float* k_scales, float* k_mean,
+    float* q_scales, float* k_scales, const float* k_mean,
     int batch, int seqlen_q, int seqlen_k, int num_heads,
     int head_dim, int block_m, int block_n,
     cudaStream_t stream);
@@ -23,7 +23,7 @@ void launch_quantize_qk_runtime(
 extern template void launch_quantize_qk_runtime<cutlass::half_t>(
     const cutlass::half_t*, const cutlass::half_t*,
     int8_t*, int8_t*,
-    float*, float*, float*,
+    float*, float*, const float*,
     int, int, int, int,
     int, int, int,
     cudaStream_t);
@@ -31,7 +31,7 @@ extern template void launch_quantize_qk_runtime<cutlass::half_t>(
 extern template void launch_quantize_qk_runtime<cutlass::bfloat16_t>(
     const cutlass::bfloat16_t*, const cutlass::bfloat16_t*,
     int8_t*, int8_t*,
-    float*, float*, float*,
+    float*, float*, const float*,
     int, int, int, int,
     int, int, int,
     cudaStream_t);

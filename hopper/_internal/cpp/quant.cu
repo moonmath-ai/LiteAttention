@@ -449,27 +449,18 @@ void launch_quantize_qk_runtime(
             Q, K, Q_q, K_q, q_scales, k_scales, k_mean, \
             batch, seqlen_q, seqlen_k, num_heads, stream)
 
-    // int8 configs: {kBlockM, kBlockN} from tile_size_fwd_sm90
-    if (head_dim == 64) {
-        if (block_m == 192 && block_n == 160) DISPATCH_QK(64, 192, 160);
-        else assert(false && "Unsupported block config for head_dim=64");
-    } else if (head_dim == 96) {
-        if (block_m == 192 && block_n == 128) DISPATCH_QK(96, 192, 128);
-        else assert(false && "Unsupported block config for head_dim=96");
-    } else if (head_dim == 128) {
-        if (block_m == 128 && block_n == 128) DISPATCH_QK(128, 128, 128);
-        else if (block_m == 192 && block_n == 128) DISPATCH_QK(128, 192, 128);
-        else assert(false && "Unsupported block config for head_dim=128");
-    } else if (head_dim == 192) {
-        if (block_m == 128 && block_n == 160) DISPATCH_QK(192, 128, 160);
-        else if (block_m == 128 && block_n == 128) DISPATCH_QK(192, 128, 128);
-        else assert(false && "Unsupported block config for head_dim=192");
-    } else if (head_dim == 256) {
-        if (block_m == 128 && block_n == 128) DISPATCH_QK(256, 128, 128);
-        else if (block_m == 128 && block_n == 64) DISPATCH_QK(256, 128, 64);
-        else assert(false && "Unsupported block config for head_dim=256");
-    } else {
-        assert(false && "Unsupported head_dim");
+    if (head_dim == 32 && block_m == 192 && block_n == 160) DISPATCH_QK(32, 192, 160);
+    else if (head_dim == 64 && block_m == 192 && block_n == 160) DISPATCH_QK(64, 192, 160);
+    else if (head_dim == 96 && block_m == 192 && block_n == 128) DISPATCH_QK(96, 192, 128);
+    else if (head_dim == 128 && block_m == 128 && block_n == 128) DISPATCH_QK(128, 128, 128);
+    else if (head_dim == 128 && block_m == 128 && block_n == 176) DISPATCH_QK(128, 128, 176);
+    else if (head_dim == 128 && block_m == 192 && block_n == 128) DISPATCH_QK(128, 192, 128);
+    else if (head_dim == 192 && block_m == 128 && block_n == 160) DISPATCH_QK(192, 128, 160);
+    else if (head_dim == 192 && block_m == 128 && block_n == 128) DISPATCH_QK(192, 128, 128);
+    else if (head_dim == 256 && block_m == 128 && block_n == 128) DISPATCH_QK(256, 128, 128);
+    else if (head_dim == 256 && block_m == 128 && block_n == 64) DISPATCH_QK(256, 128, 64);
+    else {
+        assert(false && "Unsupported head_dim/block config");
     }
     #undef DISPATCH_QK
 }
@@ -507,6 +498,7 @@ void launch_quantize_k_runtime(
     if (head_dim == 64 && block_n == 160) DISPATCH_K(64, 160);
     else if (head_dim == 96 && block_n == 128) DISPATCH_K(96, 128);
     else if (head_dim == 128 && block_n == 128) DISPATCH_K(128, 128);
+    else if (head_dim == 128 && block_n == 176) DISPATCH_K(128, 176);
     else if (head_dim == 192 && block_n == 160) DISPATCH_K(192, 160);
     else if (head_dim == 192 && block_n == 128) DISPATCH_K(192, 128);
     else if (head_dim == 256 && block_n == 128) DISPATCH_K(256, 128);
