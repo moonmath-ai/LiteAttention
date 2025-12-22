@@ -21,7 +21,7 @@ namespace flash
     ////////////////////////////////////////////////////////////////////////////////////////////////////
 
     template <bool const zero_init = true, typename Engine0, typename Layout0, typename Engine1, typename Layout1, typename Operator>
-    __device__ __forceinline__ void thread_reduce_(Tensor<Engine0, Layout0> const &tensor, Tensor<Engine1, Layout1> &summary, Operator &op)
+    __device__ __forceinline__ void thread_reduce_(Tensor<Engine0, Layout0> &tensor, Tensor<Engine1, Layout1> &summary, Operator &op)
     {
         static_assert(Layout0::rank == 2, "Only support 2D Tensor");
         static_assert(Layout1::rank == 1, "Only support 1D Tensor");
@@ -42,31 +42,28 @@ namespace flash
         }
     }
 
+    // Dequantize a 1D tensor (e.g., after reduction) to another 1D tensor with optional max operation
     template <bool const zero_init = true, typename Engine0, typename Layout0, typename Engine1, typename Layout1>
-    __device__ __forceinline__ void thread_reduce_dequantize_(Tensor<Engine0, Layout0> const &tensor, Tensor<Engine1, Layout1> &summary, float const dequan_s)
+    __device__ __forceinline__ void dequantize_max_1d_(Tensor<Engine0, Layout0> &src, Tensor<Engine1, Layout1> &dst, float const dequan_s)
     {
         MaxOp<float> op;
-        static_assert(Layout0::rank == 2, "Only support 2D Tensor");
-        static_assert(Layout1::rank == 1, "Only support 1D Tensor");
-        CUTE_STATIC_ASSERT_V(size<0>(summary) == size<0>(tensor));
+        static_assert(Layout0::rank == 1, "Only support 1D Tensor for source");
+        static_assert(Layout1::rank == 1, "Only support 1D Tensor for destination");
+        CUTE_STATIC_ASSERT_V(size(src) == size(dst));
 #pragma unroll
-        for (int ni = 0; ni < size<1>(tensor); ni++)
+        for (int mi = 0; mi < size(src); mi++)
         {
-#pragma unroll
-            for (int mi = 0; mi < size<0>(tensor); mi++)
-            {
-                const float value = tensor(mi, ni) * dequan_s;
-                if constexpr (zero_init){
-                    summary(mi) = ni == 0 ? value : op(summary(mi), value);
-                }else{
-                    summary(mi) = op(summary(mi), value);
-                }
+            const float value = src(mi) * dequan_s;
+            if constexpr (zero_init){
+                dst(mi) = value;
+            }else{
+                dst(mi) = op(dst(mi), value);
             }
         }
     }
 
     template <typename Engine0, typename Layout0, typename Engine1, typename Layout1, typename Operator>
-    __device__ __forceinline__ void quad_allreduce_(Tensor<Engine0, Layout0> &dst, Tensor<Engine1, Layout1> const &src, Operator &op)
+    __device__ __forceinline__ void quad_allreduce_(Tensor<Engine0, Layout0> &dst, Tensor<Engine1, Layout1> &src, Operator &op)
     {
         CUTE_STATIC_ASSERT_V(size(dst) == size(src));
 #pragma unroll
@@ -77,31 +74,31 @@ namespace flash
     }
 
     template <bool zero_init = true, typename Engine0, typename Layout0, typename Engine1, typename Layout1, typename Operator>
-    __device__ __forceinline__ void reduce_(Tensor<Engine0, Layout0> const &tensor, Tensor<Engine1, Layout1> &summary, Operator &op)
+    __device__ __forceinline__ void reduce_(Tensor<Engine0, Layout0> &tensor, Tensor<Engine1, Layout1> &summary, Operator &op)
     {
         thread_reduce_<zero_init>(tensor, summary, op);
         quad_allreduce_(summary, summary, op);
     }
 
     template <bool const zero_init = true, typename Engine0, typename Layout0, typename Engine1, typename Layout1>
-    __device__ __forceinline__ void reduce_max(Tensor<Engine0, Layout0> const &tensor, Tensor<Engine1, Layout1> &max)
+    __device__ __forceinline__ void reduce_max(Tensor<Engine0, Layout0> &tensor, Tensor<Engine1, Layout1> &max)
     {
         MaxOp<float> max_op;
         reduce_<zero_init>(tensor, max, max_op);
     }
 
     template <bool const zero_init = true, typename Engine0, typename Layout0, typename Engine1, typename Layout1>
-    __device__ __forceinline__ void reduce_max_dequantize(Tensor<Engine0, Layout0> const &tensor, Tensor<Engine1, Layout1> &max, float const dequan_s)
+    __device__ __forceinline__ void reduce_max_dequantize(Tensor<Engine0, Layout0> &tensor, Tensor<Engine1, Layout1> &max, float const dequan_s)
     {
         MaxOp<int32_t> max_op;
-        // generate tensor of int32_t for results (instead of the max tensor)
-        Tensor max_converted = make_tensor_like<int32_t>(tensor);
-        quad_allreduce_(max_converted, tensor, max_op);
-        thread_reduce_dequantize_<zero_init>(max_converted, max, dequan_s);
+        Tensor max_converted = make_tensor_like<int32_t>(max);
+        thread_reduce_<true>(tensor, max_converted, max_op);
+        quad_allreduce_(max_converted, max_converted, max_op);
+        dequantize_max_1d_<zero_init>(max_converted, max, dequan_s);
     }
 
     template <bool const zero_init = true, bool warp_reduce = true, typename Engine0, typename Layout0, typename Engine1, typename Layout1>
-    __device__ __forceinline__ void reduce_sum(Tensor<Engine0, Layout0> const &tensor, Tensor<Engine1, Layout1> &sum)
+    __device__ __forceinline__ void reduce_sum(Tensor<Engine0, Layout0> &tensor, Tensor<Engine1, Layout1> &sum)
     {
         SumOp<float> sum_op;
         thread_reduce_<zero_init>(tensor, sum, sum_op);
@@ -160,7 +157,7 @@ namespace flash
     // dequan_s: dequantization scale (q_dequant * k_dequant)
     template <bool const Scale_max = true, bool const Check_inf = true, int const Max_offset = 0,
               typename Engine0, typename Layout0, typename Engine1, typename Layout1, typename Engine2, typename Layout2>
-    __forceinline__ __device__ void scale_apply_exp2_dequantize(Tensor<Engine0, Layout0> const &tensor, Tensor<Engine1, Layout1> const &max,
+    __forceinline__ __device__ void scale_apply_exp2_dequantize(Tensor<Engine0, Layout0> &tensor, Tensor<Engine1, Layout1> &max,
                                                                  Tensor<Engine2, Layout2> &tensor_dequantized, const float dequan_s)
     {
         // For FP8, we can subtract max by 8.0 so that the value after exp2 is in the range of [0, 256].
@@ -218,16 +215,17 @@ namespace flash
         // int const local_row_idx;
         int const seqlen_q;
         int const thread_idx;
-        float const dequan_q;
+        // float const dequan_q;
         float dequan_s;
 
-        // CUTLASS_DEVICE Softmax(float const softmax_scale_log2_, int const row_mask_, int const local_row_idx_) : softmax_scale_log2(softmax_scale_log2_), row_mask(row_mask_), local_row_idx(local_row_idx_) {};
-        CUTLASS_DEVICE Softmax(float const softmax_scale_log2_, float const dequan_q_, int const seqlen_q_, int const thread_idx_) 
-            : softmax_scale_log2(softmax_scale_log2_), dequan_q(dequan_q_), seqlen_q(seqlen_q_), thread_idx(thread_idx_) {};
+        CUTLASS_DEVICE Softmax(float const softmax_scale_log2_, int const seqlen_q_, int const thread_idx_) 
+            : softmax_scale_log2(softmax_scale_log2_), seqlen_q(seqlen_q_), thread_idx(thread_idx_) {};
+            // : softmax_scale_log2(softmax_scale_log2_), dequan_q(dequan_q_), seqlen_q(seqlen_q_), thread_idx(thread_idx_) {};
 
         CUTLASS_DEVICE void set_dequan_s(float const dequan_k)
         {
-            dequan_s = dequan_k * dequan_q;
+            // dequan_s = dequan_k * softmax_scale_log2;
+            dequan_s = __shfl_sync(0xffffffff, dequan_k * softmax_scale_log2, 0);
         }
 
         template <int kBlockM, typename TiledMma, bool const Is_first, bool const Check_inf = false, typename Tensor0>

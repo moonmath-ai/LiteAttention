@@ -417,13 +417,15 @@ namespace flash
 
         // These are tuned for speed. They don't affect correctness.
         // For INT8, V is bf16, so we use Is_FP8 for V-related tuning
-        static constexpr bool UseSchedulerBarrier = ((IntraWGOverlap
-                                                         ? (NumMmaWarpGroups >= 2) && (!Is_FP8 ? kHeadDim <= 128 : kHeadDim >= 128)
-                                                         : NumMmaWarpGroups == 2) &&
-                                                    !LargeHeadDimV) || Is_skipable;
+        static constexpr bool UseSchedulerBarrier = (
+                (IntraWGOverlap
+                    ? (NumMmaWarpGroups >= 2) && (!Is_8Bit ? kHeadDim <= 128 : kHeadDim >= 128)
+                    : NumMmaWarpGroups == 2
+                ) || Is_skipable
+            ) && !LargeHeadDimV;
 
         // static constexpr bool RescaleOBeforeGemm = kHeadDim > 128 && (!Is_FP8 || V_colmajor) && IntraWGOverlap;
-        static constexpr bool RescaleOBeforeGemm = ((kHeadDim > 128) && (!Is_FP8 || V_colmajor) && IntraWGOverlap) || (Is_skipable && IntraWGOverlap);
+        static constexpr bool RescaleOBeforeGemm = (kHeadDim > 128) && (!Is_8Bit || V_colmajor) && IntraWGOverlap;
 
         // Host side kernel arguments
         struct Arguments
@@ -1521,11 +1523,13 @@ namespace flash
             // auto convert_qk_accum_to_float = [&](auto& tSrS_ambiguous_type, float dequan_s) {
             auto convert_qk_accum_to_float = [&](auto& tSrS_ambiguous_type) {
                 if constexpr (Is_INT8) {
-                    Tensor tSrS_converted = make_tensor_like<ElementAccum>(tSrS_ambiguous_type);
+                    // // Tensor tSrS_converted = make_tensor_like<ElementAccum>(tSrS_ambiguous_type);
+                    // Reinterpret the same tensor with ElementAccum type (static cast)
+                    return recast<ElementAccum>(tSrS_ambiguous_type);
                     // // Convert int32 to float and multiply by dequantization scale
                     // // Uses automatic type promotion: int32 * float -> float
                     // flash::convert_int32_to_float_scaled(tSrS_ambiguous_type, tSrS_converted, dequan_s);
-                    return tSrS_converted;
+                    // return tSrS_converted;
                 } else {
                     return tSrS_ambiguous_type;
                 }
@@ -1540,8 +1544,10 @@ namespace flash
                 }
                 flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
                 warpgroup_wait<0>();
+                if constexpr (Is_INT8){
+                    softmax.set_dequan_s(KDescaleSliced(n_block));
+                }
                 pipeline_k.consumer_release(smem_pipe_read);
-
 
                 if constexpr (HasQv)
                 {
@@ -1549,11 +1555,6 @@ namespace flash
                     consumer_wait(pipeline_v, smem_pipe_read);
                     flash::gemm</*zero_init=*/false, /*wg_wait=*/0>(tiled_mma_qv, tSrQv, tSrV(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
                 }
-
-                if constexpr (Is_INT8){
-                    softmax.set_dequan_s(KDescaleSliced(n_block));
-                }
-                auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
                 if constexpr (!Is_INT8){
                     scoremod_premask_fn(tSrS_ambiguous_type);
                 }
@@ -1574,9 +1575,12 @@ namespace flash
                 }();
                 // Don't need to store scales to send to WG1 (in the case of LargeHeadDimV) since it's 1.f
 
-                // // TODO: tSrS doesn't necessarily keep it's type! for example input int32_t output float
+                auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
+
                 // softmax.template online_softmax</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
                 if constexpr (!Is_INT8){
+                    // interesting! if we use tSrS_ambiguous_type here the result is incorrect!
+                    // AND LA without optimization becomes faster then FA3 baseline!
                     softmax.template online_softmax</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
                 } else {
                     softmax.template online_softmax_dequantize</*Is_first=*/true, /*Check_inf=*/true>(tSrS_ambiguous_type, tSrS);
@@ -1639,10 +1643,6 @@ namespace flash
 
                     flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
 
-                    if constexpr (Is_INT8){
-                        softmax.set_dequan_s(KDescaleSliced(new_n_block));
-                    }
-
                     if constexpr (RescaleOBeforeGemm)
                     {
                         softmax.rescale_o(tOrO, scores_scale);
@@ -1655,6 +1655,11 @@ namespace flash
                     }
                     flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP), tOrV(_, _, _, smem_pipe_read_v.index()), tOrO);
                     warp_scheduler_barrier_arrive();
+
+                    if constexpr (Is_INT8){
+                        softmax.set_dequan_s(KDescaleSliced(new_n_block));
+                    }
+
                     warpgroup_wait<1>();
                     pipeline_k.consumer_release(smem_pipe_read); // release K
                     if constexpr (HasQv)
@@ -1664,7 +1669,7 @@ namespace flash
                         consumer_wait(pipeline_v, smem_pipe_read);
                         flash::gemm</*zero_init=*/false, /*wg_wait=*/0>(tiled_mma_qv, tSrQv, tSrV(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
                     }
-                    auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
+                    // auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
                     if constexpr (!Is_INT8){
                         scoremod_premask_fn(tSrS_ambiguous_type);
                     }
@@ -1683,6 +1688,8 @@ namespace flash
                     {
                         store_scales(scores_scale, smem_pipe_read_v.index());
                     }
+
+                    auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
                     if constexpr (!Is_INT8){
                         softmax.template online_softmax</*Is_first=*/false, Check_inf>(tSrS);
                     } else {
@@ -1851,15 +1858,14 @@ namespace flash
                         warpgroup_wait<0>();
                     }
 
-                    if constexpr (Is_INT8){
-                        softmax.set_dequan_s(KDescaleSliced(new_n_block));
-                    }
-                    auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
-
                     if constexpr (!Is_INT8){
                         scoremod_premask_fn(tSrS_ambiguous_type);
                     }
                     mask_fn(tSrS_ambiguous_type, new_n_block);
+
+                    if constexpr (Is_INT8){
+                        softmax.set_dequan_s(KDescaleSliced(new_n_block));
+                    }
                     // Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
                     Tensor scores_scale = [&]
                     {
@@ -1876,6 +1882,7 @@ namespace flash
                         store_scales(scores_scale, smem_pipe_read_prev.index());
                     }
 
+                    auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
                     if constexpr (!Is_INT8){
                         softmax.template online_softmax<Is_first_iter, Check_inf>(tSrS);
                     } else {
