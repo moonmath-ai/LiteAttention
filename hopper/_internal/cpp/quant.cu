@@ -14,7 +14,7 @@
 #include <cutlass/cutlass.h>
 #include <cutlass/numeric_types.h>
 #include <cutlass/arch/barrier.h>
-#include <cutlass/array.h> 
+#include <cutlass/array.h>
 
 #include <cub/cub.cuh>
 
@@ -28,6 +28,7 @@ using namespace cute;
 // -----------------------------------------------------------------------------
 // Math Helpers
 // -----------------------------------------------------------------------------
+
 constexpr float constexpr_sqrt(float x, float curr, float prev) {
     return curr == prev ? curr : constexpr_sqrt(x, 0.5f * (curr + x / curr), curr);
 }
@@ -52,10 +53,10 @@ struct SmemConfig {
 template <int HEAD_DIM, int NUM_THREADS, typename Element, typename SmemLayoutIn, typename SmemLayoutOut>
 struct __align__(128) TmaSharedStorage {
     using BlockReduce = cub::BlockReduce<float, NUM_THREADS>;
-    
+
     __align__(128) cute::ArrayEngine<Element, cute::cosize_v<SmemLayoutIn>>   smem_in;
     __align__(128) cute::ArrayEngine<int8_t,  cute::cosize_v<SmemLayoutOut>>  smem_out;
-    
+
     __align__(16) typename BlockReduce::TempStorage cub_storage;
 
     __align__(16) cute::uint64_t tma_load_barrier;
@@ -63,26 +64,20 @@ struct __align__(128) TmaSharedStorage {
     __align__(16) float tile_means[HEAD_DIM];
 };
 
-template <int HEAD_DIM, int BLOCK_N, typename Element>
-struct __align__(128) MeanKernelStorage {
-    __align__(128) cute::ArrayEngine<Element, BLOCK_N * HEAD_DIM> smem_data;
-    __align__(16)  cute::uint64_t tma_barrier;
-};
-
 // Convert Vector<Element> -> Vector<float>
 template <typename Element, size_t N>
-__device__ __forceinline__ cute::array<float, N> 
+__device__ __forceinline__ cute::array<float, N>
 vec_to_float(cute::array<Element, N> const& src) {
     cute::array<float, N> dst;
     #pragma unroll
     for (size_t i = 0; i < N; ++i) {
-        dst[i] = static_cast<float>(src[i]); 
+        dst[i] = static_cast<float>(src[i]);
     }
     return dst;
 }
 
 // Quantize Vector<float> -> Packed uint64_t (8 x int8)
-__device__ __forceinline__ uint64_t 
+__device__ __forceinline__ uint64_t
 float_vec_to_packed_int8(cute::array<float, 8UL> const& src, float scale) {
     union {
         int8_t  i8[8];
@@ -100,63 +95,7 @@ float_vec_to_packed_int8(cute::array<float, 8UL> const& src, float scale) {
 }
 
 // -----------------------------------------------------------------------------
-// Kernel 1: Compute K Mean
-// -----------------------------------------------------------------------------
-template <int HEAD_DIM, int BLOCK_N, typename Element, typename TmaLoad>
-__global__ void 
-compute_k_mean_kernel(
-    CUTE_GRID_CONSTANT TmaLoad const tma_load,
-    Shape4D shape_K,
-    float* __restrict__ k_mean, 
-    int seqlen_k,
-    int num_heads)
-{
-    // Standardize to 256 threads for the Mean Kernel regardless of HEAD_DIM
-    constexpr int kNumThreads = 256; 
-
-    using SmemLayoutIn = typename SmemConfig<BLOCK_N, HEAD_DIM, Element>::SmemLayoutIn;
-    
-    extern __shared__ char shared_mem[];
-    using Storage = MeanKernelStorage<HEAD_DIM, BLOCK_N, Element>;
-    Storage& storage = *reinterpret_cast<Storage*>(shared_mem);
-    
-    uint64_t* tma_barrier = &storage.tma_barrier;
-    Element* smem_data = storage.smem_data.begin();
-
-    int tile_idx = blockIdx.x;
-    int bidh     = blockIdx.y;
-    int bidb     = blockIdx.z;
-
-    Tensor mK = tma_load.get_tma_tensor(shape_K)(_, _, bidh, bidb);
-    Tensor gK = local_tile(mK, Shape<Int<BLOCK_N>, Int<HEAD_DIM>>{}, make_coord(tile_idx, 0));
-    Tensor sK = make_tensor(make_smem_ptr(smem_data), SmemLayoutIn{});
-
-    auto tma_slice = tma_load.get_slice(_0{});
-    if (threadIdx.x == 0) {
-        initialize_barrier(*tma_barrier, 1);
-        set_barrier_transaction_bytes(*tma_barrier, sizeof(Element) * size(sK));
-        copy(tma_load.with(*tma_barrier), tma_slice.partition_S(gK), tma_slice.partition_D(sK));
-    }
-    __syncthreads();
-    wait_barrier(*tma_barrier, 0);
-    __syncthreads();
-
-    int valid_rows  = min(BLOCK_N, seqlen_k - tile_idx * BLOCK_N);
-    int tid = threadIdx.x;
-    
-    for (int c = tid; c < HEAD_DIM; c += kNumThreads) {
-        float col_sum = 0.0f;
-        for (int r = 0; r < valid_rows; ++r) {
-            col_sum += static_cast<float>(sK(r, c)); 
-        }
-
-        int global_idx = (bidb * num_heads + bidh) * HEAD_DIM + c;
-        atomicAdd(&k_mean[global_idx], col_sum);
-    }
-}
-
-// -----------------------------------------------------------------------------
-// Kernel 2: Quantize Q 
+// Kernel 1: Quantize Q
 // -----------------------------------------------------------------------------
 template <
     int HEAD_DIM,
@@ -207,7 +146,7 @@ quantize_q_kernel(
     uint64_t* smem_out_ptr = reinterpret_cast<uint64_t*>(storage.smem_out.begin());
 
     float local_max = 0.0f;
-    
+
     #pragma unroll
     for (int i = threadIdx.x; i < size(sQ_vec); i += NUM_THREADS) {
         cute::array<float, 8> vals = vec_to_float(sQ_vec(i));
@@ -218,18 +157,19 @@ quantize_q_kernel(
     }
 
     float tile_max_raw = BlockReduce(storage.cub_storage).Reduce(local_max, cub::Max());
-    
+
     if (threadIdx.x == 0) {
-        constexpr float dequantizationScale = 1.44269504089f / constexpr_sqrt(static_cast<float>(HEAD_DIM));
-        float real_scale = (tile_max_raw * dequantizationScale) / 127.f;
-        real_scale = fmaxf(real_scale, 1e-6f); 
+        constexpr double dequantizationScale = 1.44269504089 / constexpr_sqrt(static_cast<float>(HEAD_DIM));
+        double real_scale = (static_cast<double>(tile_max_raw) * dequantizationScale) / 127.0;
+        real_scale = fmax(real_scale, 1e-6);
 
         int idx_scale = bidb * num_heads * num_seq_tiles_q + bidh * num_seq_tiles_q + seq_tile_idx;
-        q_scales[idx_scale] = real_scale;
+        q_scales[idx_scale] = static_cast<float>(real_scale);
 
-        storage.tile_inv_scale = 127.f / fmaxf(tile_max_raw, 1e-6f);
+        double inv_scale_d = 127.0 / fmax(static_cast<double>(tile_max_raw), 1e-6);
+        storage.tile_inv_scale = static_cast<float>(inv_scale_d);
     }
-    __syncthreads(); 
+    __syncthreads();
 
     float inv_scale = storage.tile_inv_scale;
 
@@ -244,7 +184,7 @@ quantize_q_kernel(
     Tensor mQ_out = tma_store.get_tma_tensor(shape_Q)(_, _, bidh, bidb);
     Tensor gQ_out = local_tile(mQ_out, Shape<Int<BLOCK_M>, Int<HEAD_DIM>>{}, make_coord(seq_tile_idx, 0));
     Tensor sQ_out = make_tensor(make_smem_ptr(storage.smem_out.begin()), SmemLayoutOut{});
-    
+
     auto tma_store_slice = tma_store.get_slice(_0{});
     if (threadIdx.x == 0) {
         tma_store_fence();
@@ -254,7 +194,7 @@ quantize_q_kernel(
 }
 
 // -----------------------------------------------------------------------------
-// Kernel 3: Quantize K
+// Kernel 2: Quantize K
 // -----------------------------------------------------------------------------
 template <
     int HEAD_DIM,
@@ -275,7 +215,7 @@ quantize_k_kernel(
     float* __restrict__ k_scales,
     int num_seq_tiles_k)
 {
-    static_assert((NUM_THREADS * 8) % HEAD_DIM == 0, "NUM_THREADS * 8 must be divisible by HEAD_DIM");
+    static_assert((NUM_THREADS * 8) % HEAD_DIM == 0, "NUM_THREADS * 8 must be divisible by HEAD_DIM to eliminate cycle logic");
 
     using SmemLayoutIn = typename SmemConfig<BLOCK_N, HEAD_DIM, Element>::SmemLayoutIn;
     using SmemLayoutOut = typename SmemConfig<BLOCK_N, HEAD_DIM, Element>::SmemLayoutOut;
@@ -291,10 +231,9 @@ quantize_k_kernel(
 
     int bh_idx = bidb * num_heads + bidh;
 
-    // Load Means
-    if (threadIdx.x < HEAD_DIM) {
-        float sum = k_mean[bh_idx * HEAD_DIM + threadIdx.x];
-        storage.tile_means[threadIdx.x] = sum / static_cast<float>(seqlen_k);
+    // Load Means (pre-computed externally)
+    for (int c = threadIdx.x; c < HEAD_DIM; c += NUM_THREADS) {
+        storage.tile_means[c] = k_mean[bh_idx * HEAD_DIM + c];
     }
     __syncthreads();
 
@@ -328,14 +267,14 @@ quantize_k_kernel(
     float local_max = 0.0f;
     int valid_elems = min(BLOCK_N, seqlen_k - seq_tile_idx * BLOCK_N) * HEAD_DIM;
 
-    // Pass 1: Find Max 
+    // Pass 1: Find Max
     #pragma unroll
     for (int i = threadIdx.x; i < size(sK_vec); i += NUM_THREADS) {
         int flat_elem_idx = i * 8;
-        
+
         if (flat_elem_idx < valid_elems) {
             cute::array<float, 8> vals = vec_to_float(sK_vec(i));
-            
+
             #pragma unroll
             for (int k = 0; k < 8; ++k) {
                 float centered = vals[k] - mean_cache[k];
@@ -343,34 +282,35 @@ quantize_k_kernel(
             }
         }
     }
-    
+
     float tile_max = BlockReduce(storage.cub_storage).Reduce(local_max, cub::Max());
 
     if (threadIdx.x == 0) {
-        float scale = tile_max / 127.f;
-        scale = fmaxf(scale, 1e-6f);
-        storage.tile_inv_scale = 1.f / scale;
-        
+        double scale = static_cast<double>(tile_max) / 127.0;
+        scale = fmax(scale, 1e-6);
+        double inv_scale_d = 1.0 / scale;
+        storage.tile_inv_scale = static_cast<float>(inv_scale_d);
+
         int idx_scale = bh_idx * num_seq_tiles_k + seq_tile_idx;
-        k_scales[idx_scale] = scale;
+        k_scales[idx_scale] = static_cast<float>(scale);
     }
     __syncthreads();
 
-    // Pass 2: Quantize 
+    // Pass 2: Quantize
     float inv_scale = storage.tile_inv_scale;
 
     #pragma unroll
     for (int i = threadIdx.x; i < size(sK_vec); i += NUM_THREADS) {
         int flat_elem_idx = i * 8;
-        
+
         if (flat_elem_idx < valid_elems) {
             cute::array<float, 8> vals = vec_to_float(sK_vec(i));
-            
+
             #pragma unroll
             for (int k = 0; k < 8; ++k) {
                 vals[k] = vals[k] - mean_cache[k];
             }
-            
+
             smem_out_ptr[i] = float_vec_to_packed_int8(vals, inv_scale);
         } else {
             smem_out_ptr[i] = 0;
@@ -394,181 +334,192 @@ quantize_k_kernel(
 // -----------------------------------------------------------------------------
 // Host Dispatchers
 // -----------------------------------------------------------------------------
-template<int HEAD_DIM, int BLOCK_M, int BLOCK_N>
-struct QKConfigAllowed {
-    static constexpr bool value =
-        (HEAD_DIM ==  64 && BLOCK_M == 128 && BLOCK_N == 224) ||
-        (HEAD_DIM ==  96 && BLOCK_M == 128 && BLOCK_N == 208) ||
-        (HEAD_DIM == 128 && BLOCK_M == 128 && BLOCK_N == 128) ||
-        (HEAD_DIM == 128 && BLOCK_M == 128 && BLOCK_N == 176) ||
-        (HEAD_DIM == 192 && BLOCK_M == 128 && BLOCK_N == 112) ||
-        (HEAD_DIM == 192 && BLOCK_M == 128 && BLOCK_N ==  96) ||
-        (HEAD_DIM == 256 && BLOCK_M == 128 && BLOCK_N ==  80) ||
-        (HEAD_DIM == 256 && BLOCK_M == 128 && BLOCK_N ==  64);
-};
 
-template <int HEAD_DIM, int BLOCK_M, int BLOCK_N, typename Element>
-void launch_quantize_qk_config(
-    const Element* Q, const Element* K,
-    int8_t* Q_q, int8_t* K_q,
-    float* q_scales, float* k_scales, float* k_mean,
-    int batch, int seqlen_q, int seqlen_k, int num_heads,
+// Thread count: 288 for HEAD_DIM 96/192 (divisibility), 256 otherwise
+template<int HEAD_DIM>
+constexpr int get_num_threads() { return (HEAD_DIM == 96 || HEAD_DIM == 192) ? 288 : 256; }
+
+// Q-only launcher
+template <int HEAD_DIM, int BLOCK_M, typename Element>
+void launch_quantize_q_config(
+    const Element* Q, int8_t* Q_q, float* q_scales,
+    int batch, int seqlen_q, int num_heads,
     cudaStream_t stream)
 {
-    static_assert(QKConfigAllowed<HEAD_DIM, BLOCK_M, BLOCK_N>::value, "Unsupported Config");
-
-    constexpr int kNumThreads =
-        (HEAD_DIM == 96) ? 288 :
-        (HEAD_DIM == 192) ? 192 :
-        256;
-
+    constexpr int kNumThreads = get_num_threads<HEAD_DIM>();
     using SmemConfigQ = SmemConfig<BLOCK_M, HEAD_DIM, Element>;
-    using SmemConfigK = SmemConfig<BLOCK_N, HEAD_DIM, Element>;
-
     int num_seq_tiles_q = (seqlen_q + BLOCK_M - 1) / BLOCK_M;
-    int num_seq_tiles_k = (seqlen_k + BLOCK_N - 1) / BLOCK_N;
-
-    cudaMemsetAsync(k_mean, 0, batch * num_heads * HEAD_DIM * sizeof(float), stream);
 
     Shape4D shape_Q = make_shape(seqlen_q, HEAD_DIM, num_heads, batch);
-    Shape4D shape_K = make_shape(seqlen_k, HEAD_DIM, num_heads, batch);
-
     int64_t stride_s_q = (int64_t)num_heads * HEAD_DIM;
     int64_t stride_b_q = (int64_t)seqlen_q * stride_s_q;
     auto stride_Q = make_stride(stride_s_q, Int<1>{}, Int<HEAD_DIM>{}, stride_b_q);
 
-    int64_t stride_s_k = (int64_t)num_heads * HEAD_DIM;
-    int64_t stride_b_k = (int64_t)seqlen_k * stride_s_k;
-    auto stride_K = make_stride(stride_s_k, Int<1>{}, Int<HEAD_DIM>{}, stride_b_k);
-
     Tensor mQ   = make_tensor(make_gmem_ptr(Q),   make_layout(shape_Q, stride_Q));
-    Tensor mK   = make_tensor(make_gmem_ptr(K),   make_layout(shape_K, stride_K));
     Tensor mQ_q = make_tensor(make_gmem_ptr(Q_q), make_layout(shape_Q, stride_Q));
-    Tensor mK_q = make_tensor(make_gmem_ptr(K_q), make_layout(shape_K, stride_K));
 
     using SmemLayoutInQ  = typename SmemConfigQ::SmemLayoutIn;
     using SmemLayoutOutQ = typename SmemConfigQ::SmemLayoutOut;
-    using SmemLayoutInK  = typename SmemConfigK::SmemLayoutIn;
-    using SmemLayoutOutK = typename SmemConfigK::SmemLayoutOut;
 
     auto tma_load_Q = make_tma_copy<Element>(
         SM90_TMA_LOAD{}, mQ, SmemLayoutInQ{}, Shape<Int<BLOCK_M>, Int<HEAD_DIM>>{}, _1{});
     auto tma_store_Q = make_tma_copy<int8_t>(
         SM90_TMA_STORE{}, mQ_q, SmemLayoutOutQ{}, Shape<Int<BLOCK_M>, Int<HEAD_DIM>>{}, _1{});
 
-    auto tma_load_K = make_tma_copy<Element>(
-        SM90_TMA_LOAD{}, mK, SmemLayoutInK{}, Shape<Int<BLOCK_N>, Int<HEAD_DIM>>{}, _1{});
-    auto tma_store_K = make_tma_copy<int8_t>(
-        SM90_TMA_STORE{}, mK_q, SmemLayoutOutK{}, Shape<Int<BLOCK_N>, Int<HEAD_DIM>>{}, _1{});
-
-    // Launch 1: Compute Mean (Uses fixed 256 threads)
-    using MeanStorage = MeanKernelStorage<HEAD_DIM, BLOCK_N, Element>;
-    size_t smem_mean_bytes = sizeof(MeanStorage);
-    
-    if (smem_mean_bytes >= 48 * 1024) {
-        cudaFuncSetAttribute(compute_k_mean_kernel<HEAD_DIM, BLOCK_N, Element, decltype(tma_load_K)>, 
-        cudaFuncAttributeMaxDynamicSharedMemorySize, smem_mean_bytes);
-    }
-    
-    dim3 grid_mean(num_seq_tiles_k, num_heads, batch);
-    compute_k_mean_kernel<HEAD_DIM, BLOCK_N, Element, decltype(tma_load_K)>
-        <<<grid_mean, 256, smem_mean_bytes, stream>>>(
-        tma_load_K, shape_K, k_mean, seqlen_k, num_heads
-    );
-
-    // Launch 2: Quantize Q
     using SharedStorageQ = TmaSharedStorage<HEAD_DIM, kNumThreads, Element, SmemLayoutInQ, SmemLayoutOutQ>;
     int smem_size_q = sizeof(SharedStorageQ);
 
     if (smem_size_q >= 48 * 1024) {
-        cudaFuncSetAttribute(quantize_q_kernel<HEAD_DIM, BLOCK_M, kNumThreads, Element, decltype(tma_load_Q), decltype(tma_store_Q)>, 
+        cudaFuncSetAttribute(quantize_q_kernel<HEAD_DIM, BLOCK_M, kNumThreads, Element, decltype(tma_load_Q), decltype(tma_store_Q)>,
                              cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size_q);
     }
 
     dim3 grid_q(num_seq_tiles_q, num_heads, batch);
     quantize_q_kernel<HEAD_DIM, BLOCK_M, kNumThreads, Element>
         <<<grid_q, kNumThreads, smem_size_q, stream>>>(
-        tma_load_Q, tma_store_Q,
-        seqlen_q, num_heads, batch,
-        q_scales, num_seq_tiles_q
-    );
+        tma_load_Q, tma_store_Q, seqlen_q, num_heads, batch, q_scales, num_seq_tiles_q);
+}
 
-    // Launch 3: Quantize K
+// K-only launcher (assumes k_mean passed in from Python)
+template <int HEAD_DIM, int BLOCK_N, typename Element>
+void launch_quantize_k_config(
+    const Element* K, int8_t* K_q, const float* k_mean, float* k_scales,
+    int batch, int seqlen_k, int num_heads,
+    cudaStream_t stream)
+{
+    constexpr int kNumThreads = get_num_threads<HEAD_DIM>();
+    using SmemConfigK = SmemConfig<BLOCK_N, HEAD_DIM, Element>;
+    int num_seq_tiles_k = (seqlen_k + BLOCK_N - 1) / BLOCK_N;
+
+    Shape4D shape_K = make_shape(seqlen_k, HEAD_DIM, num_heads, batch);
+    int64_t stride_s_k = (int64_t)num_heads * HEAD_DIM;
+    int64_t stride_b_k = (int64_t)seqlen_k * stride_s_k;
+    auto stride_K = make_stride(stride_s_k, Int<1>{}, Int<HEAD_DIM>{}, stride_b_k);
+
+    Tensor mK   = make_tensor(make_gmem_ptr(K),   make_layout(shape_K, stride_K));
+    Tensor mK_q = make_tensor(make_gmem_ptr(K_q), make_layout(shape_K, stride_K));
+
+    using SmemLayoutInK  = typename SmemConfigK::SmemLayoutIn;
+    using SmemLayoutOutK = typename SmemConfigK::SmemLayoutOut;
+
+    auto tma_load_K = make_tma_copy<Element>(
+        SM90_TMA_LOAD{}, mK, SmemLayoutInK{}, Shape<Int<BLOCK_N>, Int<HEAD_DIM>>{}, _1{});
+    auto tma_store_K = make_tma_copy<int8_t>(
+        SM90_TMA_STORE{}, mK_q, SmemLayoutOutK{}, Shape<Int<BLOCK_N>, Int<HEAD_DIM>>{}, _1{});
+
     using SharedStorageK = TmaSharedStorage<HEAD_DIM, kNumThreads, Element, SmemLayoutInK, SmemLayoutOutK>;
     int smem_size_k = sizeof(SharedStorageK);
 
     if (smem_size_k >= 48 * 1024) {
-        cudaFuncSetAttribute(quantize_k_kernel<HEAD_DIM, BLOCK_N, kNumThreads, Element, decltype(tma_load_K), decltype(tma_store_K)>, 
+        cudaFuncSetAttribute(quantize_k_kernel<HEAD_DIM, BLOCK_N, kNumThreads, Element, decltype(tma_load_K), decltype(tma_store_K)>,
                              cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size_k);
     }
 
+    dim3 grid_k(num_seq_tiles_k, num_heads, batch);
     quantize_k_kernel<HEAD_DIM, BLOCK_N, kNumThreads, Element>
-        <<<grid_mean, kNumThreads, smem_size_k, stream>>>(
-        tma_load_K, tma_store_K,
-        seqlen_k, num_heads, batch,
-        shape_K, k_mean, k_scales, num_seq_tiles_k
-    );
+        <<<grid_k, kNumThreads, smem_size_k, stream>>>(
+        tma_load_K, tma_store_K, seqlen_k, num_heads, batch, shape_K, k_mean, k_scales, num_seq_tiles_k);
 }
 
-// Runtime Dispatcher
+// Combined QK launcher (k_mean must be pre-computed externally)
+template <int HEAD_DIM, int BLOCK_M, int BLOCK_N, typename Element>
+void launch_quantize_qk_config(
+    const Element* Q, const Element* K,
+    int8_t* Q_q, int8_t* K_q,
+    float* q_scales, float* k_scales, const float* k_mean,
+    int batch, int seqlen_q, int seqlen_k, int num_heads,
+    cudaStream_t stream)
+{
+    launch_quantize_q_config<HEAD_DIM, BLOCK_M, Element>(Q, Q_q, q_scales, batch, seqlen_q, num_heads, stream);
+    launch_quantize_k_config<HEAD_DIM, BLOCK_N, Element>(K, K_q, k_mean, k_scales, batch, seqlen_k, num_heads, stream);
+}
+
+// Runtime Dispatcher (k_mean must be pre-computed externally)
 template <typename Element>
 void launch_quantize_qk_runtime(
     const Element* Q, const Element* K,
     int8_t* Q_q, int8_t* K_q,
-    float* q_scales, float* k_scales, float* k_mean,
+    float* q_scales, float* k_scales, const float* k_mean,
     int batch, int seqlen_q, int seqlen_k, int num_heads,
     int head_dim, int block_m, int block_n,
     cudaStream_t stream)
 {
+    #define DISPATCH_QK(HD, BM, BN) \
+        launch_quantize_qk_config<HD, BM, BN, Element>( \
+            Q, K, Q_q, K_q, q_scales, k_scales, k_mean, \
+            batch, seqlen_q, seqlen_k, num_heads, stream)
+
+    // int8 configs: {kBlockM, kBlockN} from tile_size_fwd_sm90
     if (head_dim == 64) {
-        launch_quantize_qk_config<64, 128, 224, Element>(
-            Q, K, Q_q, K_q, q_scales, k_scales, k_mean,
-            batch, seqlen_q, seqlen_k, num_heads, stream);
+        if (block_m == 192 && block_n == 160) DISPATCH_QK(64, 192, 160);
+        else assert(false && "Unsupported block config for head_dim=64");
     } else if (head_dim == 96) {
-        launch_quantize_qk_config<96, 128, 208, Element>(
-            Q, K, Q_q, K_q, q_scales, k_scales, k_mean,
-            batch, seqlen_q, seqlen_k, num_heads, stream);
+        if (block_m == 192 && block_n == 128) DISPATCH_QK(96, 192, 128);
+        else assert(false && "Unsupported block config for head_dim=96");
     } else if (head_dim == 128) {
-        if (block_n == 128) {
-            launch_quantize_qk_config<128, 128, 128, Element>(
-                Q, K, Q_q, K_q, q_scales, k_scales, k_mean,
-                batch, seqlen_q, seqlen_k, num_heads, stream);
-        } else {
-            launch_quantize_qk_config<128, 128, 176, Element>(
-                Q, K, Q_q, K_q, q_scales, k_scales, k_mean,
-                batch, seqlen_q, seqlen_k, num_heads, stream);
-        }
+        if (block_m == 128 && block_n == 128) DISPATCH_QK(128, 128, 128);
+        else if (block_m == 192 && block_n == 128) DISPATCH_QK(128, 192, 128);
+        else assert(false && "Unsupported block config for head_dim=128");
     } else if (head_dim == 192) {
-        if (block_n == 96) {
-            launch_quantize_qk_config<192, 128, 96, Element>(
-                Q, K, Q_q, K_q, q_scales, k_scales, k_mean,
-                batch, seqlen_q, seqlen_k, num_heads, stream);
-        } else {
-            launch_quantize_qk_config<192, 128, 112, Element>(
-                Q, K, Q_q, K_q, q_scales, k_scales, k_mean,
-                batch, seqlen_q, seqlen_k, num_heads, stream);
-        }
+        if (block_m == 128 && block_n == 160) DISPATCH_QK(192, 128, 160);
+        else if (block_m == 128 && block_n == 128) DISPATCH_QK(192, 128, 128);
+        else assert(false && "Unsupported block config for head_dim=192");
     } else if (head_dim == 256) {
-        if (block_n == 64) {
-            launch_quantize_qk_config<256, 128, 64, Element>(
-                Q, K, Q_q, K_q, q_scales, k_scales, k_mean,
-                batch, seqlen_q, seqlen_k, num_heads, stream);
-        } else {
-            launch_quantize_qk_config<256, 128, 80, Element>(
-                Q, K, Q_q, K_q, q_scales, k_scales, k_mean,
-                batch, seqlen_q, seqlen_k, num_heads, stream);
-        }
+        if (block_m == 128 && block_n == 128) DISPATCH_QK(256, 128, 128);
+        else if (block_m == 128 && block_n == 64) DISPATCH_QK(256, 128, 64);
+        else assert(false && "Unsupported block config for head_dim=256");
     } else {
-        printf("Error: Unsupported head_dim=%d. Supported: 64, 96, 128, 192, 256\n", head_dim);
-        assert(false && "Unsupported config for quantize_qk");
+        assert(false && "Unsupported head_dim");
     }
+    #undef DISPATCH_QK
+}
+
+// Q-only runtime dispatcher
+template <typename Element>
+void launch_quantize_q_runtime(
+    const Element* Q, int8_t* Q_q, float* q_scales,
+    int batch, int seqlen_q, int num_heads, int head_dim, int block_m,
+    cudaStream_t stream)
+{
+    #define DISPATCH_Q(HD, BM) \
+        launch_quantize_q_config<HD, BM, Element>(Q, Q_q, q_scales, batch, seqlen_q, num_heads, stream)
+
+    if (head_dim == 64 && block_m == 192) DISPATCH_Q(64, 192);
+    else if (head_dim == 96 && block_m == 192) DISPATCH_Q(96, 192);
+    else if (head_dim == 128 && block_m == 128) DISPATCH_Q(128, 128);
+    else if (head_dim == 128 && block_m == 192) DISPATCH_Q(128, 192);
+    else if (head_dim == 192 && block_m == 128) DISPATCH_Q(192, 128);
+    else if (head_dim == 256 && block_m == 128) DISPATCH_Q(256, 128);
+    else assert(false && "Unsupported head_dim/block_m for Q");
+    #undef DISPATCH_Q
+}
+
+// K-only runtime dispatcher
+template <typename Element>
+void launch_quantize_k_runtime(
+    const Element* K, int8_t* K_q, const float* k_mean, float* k_scales,
+    int batch, int seqlen_k, int num_heads, int head_dim, int block_n,
+    cudaStream_t stream)
+{
+    #define DISPATCH_K(HD, BN) \
+        launch_quantize_k_config<HD, BN, Element>(K, K_q, k_mean, k_scales, batch, seqlen_k, num_heads, stream)
+
+    if (head_dim == 64 && block_n == 160) DISPATCH_K(64, 160);
+    else if (head_dim == 96 && block_n == 128) DISPATCH_K(96, 128);
+    else if (head_dim == 128 && block_n == 128) DISPATCH_K(128, 128);
+    else if (head_dim == 192 && block_n == 160) DISPATCH_K(192, 160);
+    else if (head_dim == 192 && block_n == 128) DISPATCH_K(192, 128);
+    else if (head_dim == 256 && block_n == 128) DISPATCH_K(256, 128);
+    else if (head_dim == 256 && block_n == 64) DISPATCH_K(256, 64);
+    else assert(false && "Unsupported head_dim/block_n for K");
+    #undef DISPATCH_K
 }
 
 // Instantiations
 template void launch_quantize_qk_runtime<cutlass::half_t>(
     const cutlass::half_t*, const cutlass::half_t*,
     int8_t*, int8_t*,
-    float*, float*, float*,
+    float*, float*, const float*,
     int, int, int, int,
     int, int, int,
     cudaStream_t);
@@ -576,39 +527,19 @@ template void launch_quantize_qk_runtime<cutlass::half_t>(
 template void launch_quantize_qk_runtime<cutlass::bfloat16_t>(
     const cutlass::bfloat16_t*, const cutlass::bfloat16_t*,
     int8_t*, int8_t*,
-    float*, float*, float*,
+    float*, float*, const float*,
     int, int, int, int,
     int, int, int,
     cudaStream_t);
 
-// =============================================================================
-// Standalone pybind11 bindings (for quant/ folder testing)
-// Define QUANT_STANDALONE when building quant.cu independently
-// =============================================================================
+// -----------------------------------------------------------------------------
+// Python Bindings (for standalone quant_tma module)
+// -----------------------------------------------------------------------------
 #ifdef QUANT_STANDALONE
-#include <pybind11/pybind11.h>
-namespace py = pybind11;
 
-void quantize_qk_f16(
-    uintptr_t Q_ptr, uintptr_t K_ptr,
-    uintptr_t Q_q_ptr, uintptr_t K_q_ptr,
-    uintptr_t q_scales_ptr, uintptr_t k_scales_ptr, uintptr_t k_mean_ptr,
-    int batch, int seqlen_q, int seqlen_k, int num_heads, int head_dim,
-    int block_m, int block_n)
-{
-    launch_quantize_qk_runtime<cutlass::half_t>(
-        reinterpret_cast<const cutlass::half_t*>(Q_ptr),
-        reinterpret_cast<const cutlass::half_t*>(K_ptr),
-        reinterpret_cast<int8_t*>(Q_q_ptr),
-        reinterpret_cast<int8_t*>(K_q_ptr),
-        reinterpret_cast<float*>(q_scales_ptr),
-        reinterpret_cast<float*>(k_scales_ptr),
-        reinterpret_cast<float*>(k_mean_ptr),
-        batch, seqlen_q, seqlen_k, num_heads,
-        head_dim, block_m, block_n,
-        cudaStreamDefault);
-    cudaDeviceSynchronize();
-}
+#include <pybind11/pybind11.h>
+
+namespace py = pybind11;
 
 void quantize_qk_bf16(
     uintptr_t Q_ptr, uintptr_t K_ptr,
@@ -624,30 +555,136 @@ void quantize_qk_bf16(
         reinterpret_cast<int8_t*>(K_q_ptr),
         reinterpret_cast<float*>(q_scales_ptr),
         reinterpret_cast<float*>(k_scales_ptr),
-        reinterpret_cast<float*>(k_mean_ptr),
+        reinterpret_cast<const float*>(k_mean_ptr),
         batch, seqlen_q, seqlen_k, num_heads,
         head_dim, block_m, block_n,
-        cudaStreamDefault);
+        0  // default stream
+    );
+    cudaDeviceSynchronize();
+}
+
+void quantize_qk_f16(
+    uintptr_t Q_ptr, uintptr_t K_ptr,
+    uintptr_t Q_q_ptr, uintptr_t K_q_ptr,
+    uintptr_t q_scales_ptr, uintptr_t k_scales_ptr, uintptr_t k_mean_ptr,
+    int batch, int seqlen_q, int seqlen_k, int num_heads, int head_dim,
+    int block_m, int block_n)
+{
+    launch_quantize_qk_runtime<cutlass::half_t>(
+        reinterpret_cast<const cutlass::half_t*>(Q_ptr),
+        reinterpret_cast<const cutlass::half_t*>(K_ptr),
+        reinterpret_cast<int8_t*>(Q_q_ptr),
+        reinterpret_cast<int8_t*>(K_q_ptr),
+        reinterpret_cast<float*>(q_scales_ptr),
+        reinterpret_cast<float*>(k_scales_ptr),
+        reinterpret_cast<const float*>(k_mean_ptr),
+        batch, seqlen_q, seqlen_k, num_heads,
+        head_dim, block_m, block_n,
+        0  // default stream
+    );
+    cudaDeviceSynchronize();
+}
+
+// Separate Q-only wrappers
+void quantize_q_bf16(
+    uintptr_t Q_ptr, uintptr_t Q_q_ptr, uintptr_t q_scales_ptr,
+    int batch, int seqlen_q, int num_heads, int head_dim, int block_m)
+{
+    launch_quantize_q_runtime<cutlass::bfloat16_t>(
+        reinterpret_cast<const cutlass::bfloat16_t*>(Q_ptr),
+        reinterpret_cast<int8_t*>(Q_q_ptr),
+        reinterpret_cast<float*>(q_scales_ptr),
+        batch, seqlen_q, num_heads, head_dim, block_m,
+        0  // default stream
+    );
+    cudaDeviceSynchronize();
+}
+
+void quantize_q_f16(
+    uintptr_t Q_ptr, uintptr_t Q_q_ptr, uintptr_t q_scales_ptr,
+    int batch, int seqlen_q, int num_heads, int head_dim, int block_m)
+{
+    launch_quantize_q_runtime<cutlass::half_t>(
+        reinterpret_cast<const cutlass::half_t*>(Q_ptr),
+        reinterpret_cast<int8_t*>(Q_q_ptr),
+        reinterpret_cast<float*>(q_scales_ptr),
+        batch, seqlen_q, num_heads, head_dim, block_m,
+        0  // default stream
+    );
+    cudaDeviceSynchronize();
+}
+
+// Separate K-only wrappers
+void quantize_k_bf16(
+    uintptr_t K_ptr, uintptr_t K_q_ptr, uintptr_t k_mean_ptr, uintptr_t k_scales_ptr,
+    int batch, int seqlen_k, int num_heads, int head_dim, int block_n)
+{
+    launch_quantize_k_runtime<cutlass::bfloat16_t>(
+        reinterpret_cast<const cutlass::bfloat16_t*>(K_ptr),
+        reinterpret_cast<int8_t*>(K_q_ptr),
+        reinterpret_cast<const float*>(k_mean_ptr),
+        reinterpret_cast<float*>(k_scales_ptr),
+        batch, seqlen_k, num_heads, head_dim, block_n,
+        0  // default stream
+    );
+    cudaDeviceSynchronize();
+}
+
+void quantize_k_f16(
+    uintptr_t K_ptr, uintptr_t K_q_ptr, uintptr_t k_mean_ptr, uintptr_t k_scales_ptr,
+    int batch, int seqlen_k, int num_heads, int head_dim, int block_n)
+{
+    launch_quantize_k_runtime<cutlass::half_t>(
+        reinterpret_cast<const cutlass::half_t*>(K_ptr),
+        reinterpret_cast<int8_t*>(K_q_ptr),
+        reinterpret_cast<const float*>(k_mean_ptr),
+        reinterpret_cast<float*>(k_scales_ptr),
+        batch, seqlen_k, num_heads, head_dim, block_n,
+        0  // default stream
+    );
     cudaDeviceSynchronize();
 }
 
 PYBIND11_MODULE(quant_tma, m) {
-    m.doc() = "TMA-based Q/K quantization kernels";
-    m.def("quantize_qk_f16", &quantize_qk_f16,
-          "Quantize Q and K tensors (FP16 input)",
-          py::arg("Q_ptr"), py::arg("K_ptr"),
-          py::arg("Q_q_ptr"), py::arg("K_q_ptr"),
-          py::arg("q_scales_ptr"), py::arg("k_scales_ptr"), py::arg("k_mean_ptr"),
-          py::arg("batch"), py::arg("seqlen_q"), py::arg("seqlen_k"),
-          py::arg("num_heads"), py::arg("head_dim"),
-          py::arg("block_m"), py::arg("block_n"));
+    m.doc() = "CUDA quantization kernels for Q/K tensors";
+
     m.def("quantize_qk_bf16", &quantize_qk_bf16,
-          "Quantize Q and K tensors (BF16 input)",
+          "Quantize Q and K tensors (bfloat16)",
           py::arg("Q_ptr"), py::arg("K_ptr"),
           py::arg("Q_q_ptr"), py::arg("K_q_ptr"),
           py::arg("q_scales_ptr"), py::arg("k_scales_ptr"), py::arg("k_mean_ptr"),
           py::arg("batch"), py::arg("seqlen_q"), py::arg("seqlen_k"),
           py::arg("num_heads"), py::arg("head_dim"),
           py::arg("block_m"), py::arg("block_n"));
+
+    m.def("quantize_qk_f16", &quantize_qk_f16,
+          "Quantize Q and K tensors (float16)",
+          py::arg("Q_ptr"), py::arg("K_ptr"),
+          py::arg("Q_q_ptr"), py::arg("K_q_ptr"),
+          py::arg("q_scales_ptr"), py::arg("k_scales_ptr"), py::arg("k_mean_ptr"),
+          py::arg("batch"), py::arg("seqlen_q"), py::arg("seqlen_k"),
+          py::arg("num_heads"), py::arg("head_dim"),
+          py::arg("block_m"), py::arg("block_n"));
+
+    m.def("quantize_q_bf16", &quantize_q_bf16,
+          "Quantize Q tensor only (bfloat16)",
+          py::arg("Q_ptr"), py::arg("Q_q_ptr"), py::arg("q_scales_ptr"),
+          py::arg("batch"), py::arg("seqlen_q"), py::arg("num_heads"), py::arg("head_dim"), py::arg("block_m"));
+
+    m.def("quantize_q_f16", &quantize_q_f16,
+          "Quantize Q tensor only (float16)",
+          py::arg("Q_ptr"), py::arg("Q_q_ptr"), py::arg("q_scales_ptr"),
+          py::arg("batch"), py::arg("seqlen_q"), py::arg("num_heads"), py::arg("head_dim"), py::arg("block_m"));
+
+    m.def("quantize_k_bf16", &quantize_k_bf16,
+          "Quantize K tensor only (bfloat16)",
+          py::arg("K_ptr"), py::arg("K_q_ptr"), py::arg("k_mean_ptr"), py::arg("k_scales_ptr"),
+          py::arg("batch"), py::arg("seqlen_k"), py::arg("num_heads"), py::arg("head_dim"), py::arg("block_n"));
+
+    m.def("quantize_k_f16", &quantize_k_f16,
+          "Quantize K tensor only (float16)",
+          py::arg("K_ptr"), py::arg("K_q_ptr"), py::arg("k_mean_ptr"), py::arg("k_scales_ptr"),
+          py::arg("batch"), py::arg("seqlen_k"), py::arg("num_heads"), py::arg("head_dim"), py::arg("block_n"));
 }
-#endif // QUANT_STANDALONE
+
+#endif

@@ -643,8 +643,12 @@ class LiteAttention:
         if self.use_int8:
             kBlockM, kBlockN = LiteAttention.get_MN(query.shape[-1], torch.int8)
 
+            # Pre-compute K mean in Python: mean across seq_dim (dim=1)
+            # K shape: [batch, seqlen_k, num_heads, head_dim] -> mean: [batch, num_heads, head_dim]
+            k_mean = key.float().mean(dim=1).contiguous()
+
             q_int8, k_int8, q_descale, k_descale = _lite_attention_ops.quantize_qk(
-                query, key, kBlockM, kBlockN
+                query, key, k_mean, kBlockM, kBlockN
             )
             
             return q_int8, k_int8, q_descale, k_descale

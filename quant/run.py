@@ -8,14 +8,14 @@ except ImportError as e:
     print(f"Extension not installed. Run: python setup.py build_ext --inplace")
     sys.exit(1)
 
-TILE_SEQ_Q = 128  # kBlockM - Q sequence dimension tile size (always 128)
+TILE_SEQ_Q = 192 # 192  # kBlockM - Q sequence dimension tile size
 
 def get_tile_seq_k(head_dim):
     """Get BLOCK_N size for K tiles based on head_dim"""
     tile_map = {
         64: 224,
         96: 208,
-        128: 176,
+        128: 128, #176,
         192: 112,
         256: 80,
     }
@@ -56,9 +56,11 @@ def quantize_qk(Q, K, dtype='f32'):
 
     q_scales = torch.zeros(total_bh, num_seq_tiles_q, device=device, dtype=torch.float32)
     k_scales = torch.zeros(total_bh, num_seq_tiles_k, device=device, dtype=torch.float32)
-    k_mean = torch.zeros(total_bh, head_dim, device=device, dtype=torch.float32)
+    
+    # Pre-compute K mean in Python: mean across seq_dim (dim=1)
+    k_mean = K.float().mean(dim=1).contiguous()
 
-    # Select kernel based on dtype (f32 removed - only supports fp16/bf16)
+    # Select kernel based on dtype
     func = {'f16': quant_tma.quantize_qk_f16,
             'bf16': quant_tma.quantize_qk_bf16}[dtype]
 
@@ -77,28 +79,30 @@ def quantize_qk(Q, K, dtype='f32'):
 def test_correctness(batch, seqlen_q, seqlen_k, num_heads, head_dim, dtype='f32', name=""):
     """Test quantization correctness."""
     device = torch.device('cuda')
-    
+
     # Map dtype string to torch dtype
     torch_dtype = {'f32': torch.float32, 'f16': torch.float16, 'bf16': torch.bfloat16}[dtype]
-    
-    # Generate random inputs
+
+    # Generate random inputs with non-zero mean to properly test mean centering
+    # Q: standard random with small scale
     Q = torch.randn(batch, seqlen_q, num_heads, head_dim, device=device, dtype=torch_dtype) * 0.1
+
+    # K: add significant non-zero bias to test mean centering
+    # Each dimension gets a different offset to test per-dimension mean computation
     K = torch.randn(batch, seqlen_k, num_heads, head_dim, device=device, dtype=torch_dtype) * 0.1
+    # Add per-dimension bias: offset increases with dimension index
+    dim_offsets = torch.linspace(0.5, 2.0, head_dim, device=device, dtype=torch_dtype)
+    K = K + dim_offsets.view(1, 1, 1, head_dim)
     
     # Run quantization
     Q_q, K_q, q_scales, k_scales, k_mean = quantize_qk(Q.contiguous(), K.contiguous(), dtype)
     torch.cuda.synchronize()
-    
-    # Note: k_mean from kernel is actually the SUM, not mean - needs to be divided by seqlen_k
-    k_mean = k_mean / float(seqlen_k) # TODO: @tarik remove this depending on mean kernel
     
     # Reference implementation
     inv_sqrt_d = 1.0 / np.sqrt(head_dim)
     
     # K mean: mean across seqlen dimension -> [batch, num_heads, head_dim]
     k_mean_ref = K.float().mean(dim=1)  # [batch, num_heads, head_dim]
-    # Reshape to [batch * num_heads, head_dim] to match kernel output
-    k_mean_ref_flat = k_mean_ref.reshape(batch * num_heads, head_dim)
     
     # Dequantize and compare - convert to float only when needed
     Q_f = Q.float()
@@ -111,13 +115,16 @@ def test_correctness(batch, seqlen_q, seqlen_k, num_heads, head_dim, dtype='f32'
     num_seq_tiles_k = (seqlen_k + TILE_SEQ_K - 1) // TILE_SEQ_K
 
     # Dequantize Q tile by tile using per-seq-tile scales (shared across all head_dim)
+    # Note: Q kernel applies dequantizationScale = log2(e) / sqrt(d) during quantization
+    # so dequantized Q = Q * dequantScale, not just Q
+    dequantScale = 1.44269504089 / np.sqrt(head_dim)
     Q_dequant = torch.zeros_like(Q_f)
     for b in range(batch):
         for h in range(num_heads):
             bh = b * num_heads + h
             for st in range(num_seq_tiles_q):
                 s_start, s_end = st * TILE_SEQ_Q, min((st + 1) * TILE_SEQ_Q, seqlen_q)
-                scale = q_scales[bh, st].item() / 1.44269504089 # Divide by ln(2) to match kernel scaling
+                scale = q_scales[bh, st].item()
                 # Scale is shared across all head_dim
                 Q_dequant[b, s_start:s_end, h, :] = \
                     Q_q_f[b, s_start:s_end, h, :] * scale
@@ -134,31 +141,34 @@ def test_correctness(batch, seqlen_q, seqlen_k, num_heads, head_dim, dtype='f32'
                 K_dequant_centered[b, s_start:s_end, h, :] = \
                     K_q_f[b, s_start:s_end, h, :] * scale
     
-    # Q expected: Q * inv_sqrt_d - use in-place multiplication to save memory
-    Q_expected = Q_f * inv_sqrt_d
+    # Q expected: Q * dequantScale (kernel applies this scaling during quantization)
+    Q_expected = Q_f * dequantScale
     # K expected: K - mean (mean-centered)
     K_centered_ref = K_f - k_mean_ref.unsqueeze(1)
     
     # Check k_mean
-    k_mean_err = (k_mean - k_mean_ref_flat).abs().max().item()
-    
+    k_mean_err = (k_mean - k_mean_ref).abs().max().item()
+
+    # Print mean statistics to verify mean centering is working
+    k_mean_magnitude = k_mean_ref.abs().mean().item()
+
     # Check Q quantization error
     Q_err = (Q_expected - Q_dequant).abs().max().item()
-    
+
     # Check K quantization error (comparing mean-centered versions)
     K_err = (K_centered_ref - K_dequant_centered).abs().max().item()
-    
+
     # Tolerance for int8 quantization
     tolerance = 0.05
     passed = Q_err < tolerance and K_err < tolerance and k_mean_err < tolerance
-    
+
     status = "✓" if passed else "✗"
     print(f"  {status} {name} [{batch},{seqlen_q},{seqlen_k},{num_heads},{head_dim}] {dtype}: "
-          f"Q_err={Q_err:.2e}, K_err={K_err:.2e}, mean_err={k_mean_err:.2e}")
+          f"Q_err={Q_err:.2e}, K_err={K_err:.2e}, mean_err={k_mean_err:.2e}, mean_mag={k_mean_magnitude:.3f}")
     
     # Explicitly free large tensors to help with memory management
     del Q, K, Q_f, K_f, Q_q, K_q, Q_q_f, K_q_f, Q_dequant, K_dequant_centered
-    del Q_expected, K_centered_ref, k_mean_ref, k_mean_ref_flat
+    del Q_expected, K_centered_ref, k_mean_ref
     torch.cuda.empty_cache()
     
     return passed
