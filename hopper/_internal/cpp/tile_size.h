@@ -76,7 +76,7 @@ constexpr std::tuple<int, int, bool, bool> tile_size_fwd_sm90(
                 if (is_skipable){
                     return {192, 128, false, true && maybe_intra_wg_overlap};
                 }else{
-                    return {192, 128, false, true && maybe_intra_wg_overlap};
+                    return {192, 128, true, true && maybe_intra_wg_overlap};
                 }
             } else if (headdim <= 192) {
                 return {128, (paged_kv_non_TMA || softcap) && is_local ? 128 : 160, true, true && maybe_intra_wg_overlap};
