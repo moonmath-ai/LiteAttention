@@ -204,8 +204,12 @@ namespace flash
         auto process_element = [&](int mi, int ni, float max_scaled) {
             // Dequantize int32 to float, then compute exp2(dequantized_value - max_scaled)
             // tensor(mi, ni) is int32_t, multiply by dequan_s to get float
+
+            // original
             const float dequantized_value = tensor(mi, ni) * dequan_s - max_scaled;
             tensor_dequantized(mi, ni) = exp2f(dequantized_value);
+
+            // tensor_dequantized(mi, ni) = exp2f((tensor(mi, ni) - max_local)*dequan_s) * expf(max_local*dequan_s - max_global);
         };
         
         if constexpr (outer_loop_is_rows) {
