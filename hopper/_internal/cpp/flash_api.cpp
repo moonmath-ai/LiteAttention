@@ -1822,8 +1822,8 @@
      at::Tensor Q,
      at::Tensor K,
      at::Tensor k_mean,
-     int64_t block_m,
-     int64_t block_n)
+     bool v_colmajor,
+     bool is_skipable)
  {
      TORCH_CHECK(Q.is_cuda(), "Q must be on CUDA");
      TORCH_CHECK(K.is_cuda(), "K must be on CUDA");
@@ -1851,26 +1851,30 @@
      TORCH_CHECK(k_mean.size(0) == batch, "k_mean batch must match Q batch");
      TORCH_CHECK(k_mean.size(1) == num_heads, "k_mean heads must match Q heads");
      TORCH_CHECK(k_mean.size(2) == head_dim, "k_mean head_dim must match Q head_dim");
- 
+
+     // Get tile sizes from tile_size_fwd_sm90
+     auto [block_m, block_n, mma_pv_is_rs, intra_wg_overlap] = tile_size_fwd_sm90(
+         head_dim, head_dim, false, false, 1, v_colmajor, false, false, is_skipable, true);
+
      // Allocate output tensors
-     auto Q_q = at::empty({batch, seqlen_q, num_heads, head_dim}, 
+     auto Q_q = at::empty({batch, seqlen_q, num_heads, head_dim},
                           Q.options().dtype(torch::kInt8));
-     auto K_q = at::empty({batch, seqlen_k, num_heads, head_dim}, 
+     auto K_q = at::empty({batch, seqlen_k, num_heads, head_dim},
                           K.options().dtype(torch::kInt8));
- 
+
      const int num_q_blocks = (seqlen_q + block_m - 1) / block_m;
      const int num_k_blocks = (seqlen_k + block_n - 1) / block_n;
- 
+
      // q_descale: [batch, heads, num_q_blocks]
-     auto q_descale = at::empty({batch, num_heads, num_q_blocks}, 
+     auto q_descale = at::empty({batch, num_heads, num_q_blocks},
                                 Q.options().dtype(torch::kFloat32));
      // k_descale: [batch, heads, num_k_blocks]
-     auto k_descale = at::empty({batch, num_heads, num_k_blocks}, 
+     auto k_descale = at::empty({batch, num_heads, num_k_blocks},
                                 K.options().dtype(torch::kFloat32));
- 
+
      cudaStream_t stream = at::cuda::getCurrentCUDAStream();
      at::cuda::CUDAGuard device_guard(Q.device());
- 
+
      if (Q.dtype() == torch::kHalf) {
          launch_quantize_qk_runtime<cutlass::half_t>(
              reinterpret_cast<const cutlass::half_t*>(Q.data_ptr()),
@@ -1881,7 +1885,7 @@
              reinterpret_cast<float*>(k_descale.data_ptr()),
              reinterpret_cast<float*>(k_mean.data_ptr()),
              batch, seqlen_q, seqlen_k, num_heads,
-             head_dim, static_cast<int>(block_m), static_cast<int>(block_n),
+             head_dim, v_colmajor, is_skipable,
              stream);
      } else {
          launch_quantize_qk_runtime<cutlass::bfloat16_t>(
@@ -1893,10 +1897,10 @@
              reinterpret_cast<float*>(k_descale.data_ptr()),
              reinterpret_cast<float*>(k_mean.data_ptr()),
              batch, seqlen_q, seqlen_k, num_heads,
-             head_dim, static_cast<int>(block_m), static_cast<int>(block_n),
+             head_dim, v_colmajor, is_skipable,
              stream);
      }
- 
+
      return std::make_tuple(Q_q, K_q, q_descale, k_descale);
  }
  
@@ -2012,8 +2016,8 @@
          "Tensor Q,"
          "Tensor K,"
          "Tensor k_mean,"
-         "int block_m,"
-         "int block_n) -> (Tensor, Tensor, Tensor, Tensor)", &quantize_qk);
+         "bool v_colmajor = False,"
+         "bool is_skipable = False) -> (Tensor, Tensor, Tensor, Tensor)", &quantize_qk);
  }
  
  TORCH_LIBRARY_IMPL(lite_attention, CUDA, m) {

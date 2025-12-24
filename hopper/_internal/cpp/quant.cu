@@ -23,6 +23,8 @@
 #include <float.h>
 #include <math.h>
 
+#include "tile_size.h"
+
 using namespace cute;
 
 // -----------------------------------------------------------------------------
@@ -434,77 +436,134 @@ void launch_quantize_qk_config(
     launch_quantize_k_config<HEAD_DIM, BLOCK_N, Element>(K, K_q, k_mean, k_scales, batch, seqlen_k, num_heads, stream);
 }
 
+// -----------------------------------------------------------------------------
+// Compile-time tile size helpers using tile_size.h
+// -----------------------------------------------------------------------------
+
+// Get tile sizes for quantization kernels using tile_size_fwd_sm90
+template <int HEAD_DIM, bool V_COLMAJOR = false, bool IS_SKIPABLE = false>
+struct QuantTileConfig {
+    static constexpr auto tile_info = tile_size_fwd_sm90(
+        HEAD_DIM,           // headdim
+        HEAD_DIM,           // headdim_v (same as headdim for standard attention)
+        false,              // is_causal
+        false,              // is_local
+        1,                  // element_size (1 for int8)
+        V_COLMAJOR,         // v_colmajor
+        false,              // paged_kv_non_TMA
+        false,              // softcap
+        IS_SKIPABLE,        // is_skipable
+        true                // is_int8
+    );
+    static constexpr int kBlockM = std::get<0>(tile_info);
+    static constexpr int kBlockN = std::get<1>(tile_info);
+};
+
 // Runtime Dispatcher (k_mean must be pre-computed externally)
+// Dispatches based on head_dim, v_colmajor, and is_skipable
 template <typename Element>
 void launch_quantize_qk_runtime(
     const Element* Q, const Element* K,
     int8_t* Q_q, int8_t* K_q,
     float* q_scales, float* k_scales, const float* k_mean,
     int batch, int seqlen_q, int seqlen_k, int num_heads,
-    int head_dim, int block_m, int block_n,
+    int head_dim, bool v_colmajor, bool is_skipable,
     cudaStream_t stream)
 {
-    #define DISPATCH_QK(HD, BM, BN) \
-        launch_quantize_qk_config<HD, BM, BN, Element>( \
+    #define DISPATCH_QK(HD, VC, SK) \
+        launch_quantize_qk_config<HD, QuantTileConfig<HD, VC, SK>::kBlockM, QuantTileConfig<HD, VC, SK>::kBlockN, Element>( \
             Q, K, Q_q, K_q, q_scales, k_scales, k_mean, \
             batch, seqlen_q, seqlen_k, num_heads, stream)
 
-    if (head_dim == 32 && block_m == 192 && block_n == 160) DISPATCH_QK(32, 192, 160);
-    else if (head_dim == 64 && block_m == 192 && block_n == 160) DISPATCH_QK(64, 192, 160);
-    else if (head_dim == 96 && block_m == 192 && block_n == 128) DISPATCH_QK(96, 192, 128);
-    else if (head_dim == 128 && block_m == 128 && block_n == 128) DISPATCH_QK(128, 128, 128);
-    else if (head_dim == 128 && block_m == 128 && block_n == 176) DISPATCH_QK(128, 128, 176);
-    else if (head_dim == 128 && block_m == 192 && block_n == 128) DISPATCH_QK(128, 192, 128);
-    else if (head_dim == 192 && block_m == 128 && block_n == 160) DISPATCH_QK(192, 128, 160);
-    else if (head_dim == 192 && block_m == 128 && block_n == 128) DISPATCH_QK(192, 128, 128);
-    else if (head_dim == 256 && block_m == 128 && block_n == 128) DISPATCH_QK(256, 128, 128);
-    else if (head_dim == 256 && block_m == 128 && block_n == 64) DISPATCH_QK(256, 128, 64);
-    else {
-        assert(false && "Unsupported head_dim/block config");
+    #define DISPATCH_QK_SKIPABLE(HD, VC) \
+        if (is_skipable) { DISPATCH_QK(HD, VC, true); } \
+        else { DISPATCH_QK(HD, VC, false); }
+
+    #define DISPATCH_QK_COLMAJOR(HD) \
+        if (v_colmajor) { DISPATCH_QK_SKIPABLE(HD, true); } \
+        else { DISPATCH_QK_SKIPABLE(HD, false); }
+
+    switch (head_dim) {
+        case 32:  DISPATCH_QK_COLMAJOR(32);  break;
+        case 64:  DISPATCH_QK_COLMAJOR(64);  break;
+        case 96:  DISPATCH_QK_COLMAJOR(96);  break;
+        case 128: DISPATCH_QK_COLMAJOR(128); break;
+        case 192: DISPATCH_QK_COLMAJOR(192); break;
+        case 256: DISPATCH_QK_COLMAJOR(256); break;
+        default:
+            assert(false && "Unsupported head_dim");
     }
     #undef DISPATCH_QK
+    #undef DISPATCH_QK_SKIPABLE
+    #undef DISPATCH_QK_COLMAJOR
 }
 
 // Q-only runtime dispatcher
 template <typename Element>
 void launch_quantize_q_runtime(
     const Element* Q, int8_t* Q_q, float* q_scales,
-    int batch, int seqlen_q, int num_heads, int head_dim, int block_m,
+    int batch, int seqlen_q, int num_heads, int head_dim,
+    bool v_colmajor, bool is_skipable,
     cudaStream_t stream)
 {
-    #define DISPATCH_Q(HD, BM) \
-        launch_quantize_q_config<HD, BM, Element>(Q, Q_q, q_scales, batch, seqlen_q, num_heads, stream)
+    #define DISPATCH_Q(HD, VC, SK) \
+        launch_quantize_q_config<HD, QuantTileConfig<HD, VC, SK>::kBlockM, Element>(Q, Q_q, q_scales, batch, seqlen_q, num_heads, stream)
 
-    if (head_dim == 64 && block_m == 192) DISPATCH_Q(64, 192);
-    else if (head_dim == 96 && block_m == 192) DISPATCH_Q(96, 192);
-    else if (head_dim == 128 && block_m == 128) DISPATCH_Q(128, 128);
-    else if (head_dim == 128 && block_m == 192) DISPATCH_Q(128, 192);
-    else if (head_dim == 192 && block_m == 128) DISPATCH_Q(192, 128);
-    else if (head_dim == 256 && block_m == 128) DISPATCH_Q(256, 128);
-    else assert(false && "Unsupported head_dim/block_m for Q");
+    #define DISPATCH_Q_SKIPABLE(HD, VC) \
+        if (is_skipable) { DISPATCH_Q(HD, VC, true); } \
+        else { DISPATCH_Q(HD, VC, false); }
+
+    #define DISPATCH_Q_COLMAJOR(HD) \
+        if (v_colmajor) { DISPATCH_Q_SKIPABLE(HD, true); } \
+        else { DISPATCH_Q_SKIPABLE(HD, false); }
+
+    switch (head_dim) {
+        case 32:  DISPATCH_Q_COLMAJOR(32);  break;
+        case 64:  DISPATCH_Q_COLMAJOR(64);  break;
+        case 96:  DISPATCH_Q_COLMAJOR(96);  break;
+        case 128: DISPATCH_Q_COLMAJOR(128); break;
+        case 192: DISPATCH_Q_COLMAJOR(192); break;
+        case 256: DISPATCH_Q_COLMAJOR(256); break;
+        default:
+            assert(false && "Unsupported head_dim for Q");
+    }
     #undef DISPATCH_Q
+    #undef DISPATCH_Q_SKIPABLE
+    #undef DISPATCH_Q_COLMAJOR
 }
 
 // K-only runtime dispatcher
 template <typename Element>
 void launch_quantize_k_runtime(
     const Element* K, int8_t* K_q, const float* k_mean, float* k_scales,
-    int batch, int seqlen_k, int num_heads, int head_dim, int block_n,
+    int batch, int seqlen_k, int num_heads, int head_dim,
+    bool v_colmajor, bool is_skipable,
     cudaStream_t stream)
 {
-    #define DISPATCH_K(HD, BN) \
-        launch_quantize_k_config<HD, BN, Element>(K, K_q, k_mean, k_scales, batch, seqlen_k, num_heads, stream)
+    #define DISPATCH_K(HD, VC, SK) \
+        launch_quantize_k_config<HD, QuantTileConfig<HD, VC, SK>::kBlockN, Element>(K, K_q, k_mean, k_scales, batch, seqlen_k, num_heads, stream)
 
-    if (head_dim == 64 && block_n == 160) DISPATCH_K(64, 160);
-    else if (head_dim == 96 && block_n == 128) DISPATCH_K(96, 128);
-    else if (head_dim == 128 && block_n == 128) DISPATCH_K(128, 128);
-    else if (head_dim == 128 && block_n == 176) DISPATCH_K(128, 176);
-    else if (head_dim == 192 && block_n == 160) DISPATCH_K(192, 160);
-    else if (head_dim == 192 && block_n == 128) DISPATCH_K(192, 128);
-    else if (head_dim == 256 && block_n == 128) DISPATCH_K(256, 128);
-    else if (head_dim == 256 && block_n == 64) DISPATCH_K(256, 64);
-    else assert(false && "Unsupported head_dim/block_n for K");
+    #define DISPATCH_K_SKIPABLE(HD, VC) \
+        if (is_skipable) { DISPATCH_K(HD, VC, true); } \
+        else { DISPATCH_K(HD, VC, false); }
+
+    #define DISPATCH_K_COLMAJOR(HD) \
+        if (v_colmajor) { DISPATCH_K_SKIPABLE(HD, true); } \
+        else { DISPATCH_K_SKIPABLE(HD, false); }
+
+    switch (head_dim) {
+        case 32:  DISPATCH_K_COLMAJOR(32);  break;
+        case 64:  DISPATCH_K_COLMAJOR(64);  break;
+        case 96:  DISPATCH_K_COLMAJOR(96);  break;
+        case 128: DISPATCH_K_COLMAJOR(128); break;
+        case 192: DISPATCH_K_COLMAJOR(192); break;
+        case 256: DISPATCH_K_COLMAJOR(256); break;
+        default:
+            assert(false && "Unsupported head_dim for K");
+    }
     #undef DISPATCH_K
+    #undef DISPATCH_K_SKIPABLE
+    #undef DISPATCH_K_COLMAJOR
 }
 
 // Instantiations
@@ -513,7 +572,7 @@ template void launch_quantize_qk_runtime<cutlass::half_t>(
     int8_t*, int8_t*,
     float*, float*, const float*,
     int, int, int, int,
-    int, int, int,
+    int, bool, bool,
     cudaStream_t);
 
 template void launch_quantize_qk_runtime<cutlass::bfloat16_t>(
@@ -521,7 +580,31 @@ template void launch_quantize_qk_runtime<cutlass::bfloat16_t>(
     int8_t*, int8_t*,
     float*, float*, const float*,
     int, int, int, int,
-    int, int, int,
+    int, bool, bool,
+    cudaStream_t);
+
+template void launch_quantize_q_runtime<cutlass::half_t>(
+    const cutlass::half_t*, int8_t*, float*,
+    int, int, int, int,
+    bool, bool,
+    cudaStream_t);
+
+template void launch_quantize_q_runtime<cutlass::bfloat16_t>(
+    const cutlass::bfloat16_t*, int8_t*, float*,
+    int, int, int, int,
+    bool, bool,
+    cudaStream_t);
+
+template void launch_quantize_k_runtime<cutlass::half_t>(
+    const cutlass::half_t*, int8_t*, const float*, float*,
+    int, int, int, int,
+    bool, bool,
+    cudaStream_t);
+
+template void launch_quantize_k_runtime<cutlass::bfloat16_t>(
+    const cutlass::bfloat16_t*, int8_t*, const float*, float*,
+    int, int, int, int,
+    bool, bool,
     cudaStream_t);
 
 // -----------------------------------------------------------------------------
@@ -538,7 +621,7 @@ void quantize_qk_bf16(
     uintptr_t Q_q_ptr, uintptr_t K_q_ptr,
     uintptr_t q_scales_ptr, uintptr_t k_scales_ptr, uintptr_t k_mean_ptr,
     int batch, int seqlen_q, int seqlen_k, int num_heads, int head_dim,
-    int block_m, int block_n)
+    bool v_colmajor, bool is_skipable)
 {
     launch_quantize_qk_runtime<cutlass::bfloat16_t>(
         reinterpret_cast<const cutlass::bfloat16_t*>(Q_ptr),
@@ -549,7 +632,7 @@ void quantize_qk_bf16(
         reinterpret_cast<float*>(k_scales_ptr),
         reinterpret_cast<const float*>(k_mean_ptr),
         batch, seqlen_q, seqlen_k, num_heads,
-        head_dim, block_m, block_n,
+        head_dim, v_colmajor, is_skipable,
         0  // default stream
     );
     cudaDeviceSynchronize();
@@ -560,7 +643,7 @@ void quantize_qk_f16(
     uintptr_t Q_q_ptr, uintptr_t K_q_ptr,
     uintptr_t q_scales_ptr, uintptr_t k_scales_ptr, uintptr_t k_mean_ptr,
     int batch, int seqlen_q, int seqlen_k, int num_heads, int head_dim,
-    int block_m, int block_n)
+    bool v_colmajor, bool is_skipable)
 {
     launch_quantize_qk_runtime<cutlass::half_t>(
         reinterpret_cast<const cutlass::half_t*>(Q_ptr),
@@ -571,7 +654,7 @@ void quantize_qk_f16(
         reinterpret_cast<float*>(k_scales_ptr),
         reinterpret_cast<const float*>(k_mean_ptr),
         batch, seqlen_q, seqlen_k, num_heads,
-        head_dim, block_m, block_n,
+        head_dim, v_colmajor, is_skipable,
         0  // default stream
     );
     cudaDeviceSynchronize();
@@ -580,13 +663,15 @@ void quantize_qk_f16(
 // Separate Q-only wrappers
 void quantize_q_bf16(
     uintptr_t Q_ptr, uintptr_t Q_q_ptr, uintptr_t q_scales_ptr,
-    int batch, int seqlen_q, int num_heads, int head_dim, int block_m)
+    int batch, int seqlen_q, int num_heads, int head_dim,
+    bool v_colmajor, bool is_skipable)
 {
     launch_quantize_q_runtime<cutlass::bfloat16_t>(
         reinterpret_cast<const cutlass::bfloat16_t*>(Q_ptr),
         reinterpret_cast<int8_t*>(Q_q_ptr),
         reinterpret_cast<float*>(q_scales_ptr),
-        batch, seqlen_q, num_heads, head_dim, block_m,
+        batch, seqlen_q, num_heads, head_dim,
+        v_colmajor, is_skipable,
         0  // default stream
     );
     cudaDeviceSynchronize();
@@ -594,13 +679,15 @@ void quantize_q_bf16(
 
 void quantize_q_f16(
     uintptr_t Q_ptr, uintptr_t Q_q_ptr, uintptr_t q_scales_ptr,
-    int batch, int seqlen_q, int num_heads, int head_dim, int block_m)
+    int batch, int seqlen_q, int num_heads, int head_dim,
+    bool v_colmajor, bool is_skipable)
 {
     launch_quantize_q_runtime<cutlass::half_t>(
         reinterpret_cast<const cutlass::half_t*>(Q_ptr),
         reinterpret_cast<int8_t*>(Q_q_ptr),
         reinterpret_cast<float*>(q_scales_ptr),
-        batch, seqlen_q, num_heads, head_dim, block_m,
+        batch, seqlen_q, num_heads, head_dim,
+        v_colmajor, is_skipable,
         0  // default stream
     );
     cudaDeviceSynchronize();
@@ -609,14 +696,16 @@ void quantize_q_f16(
 // Separate K-only wrappers
 void quantize_k_bf16(
     uintptr_t K_ptr, uintptr_t K_q_ptr, uintptr_t k_mean_ptr, uintptr_t k_scales_ptr,
-    int batch, int seqlen_k, int num_heads, int head_dim, int block_n)
+    int batch, int seqlen_k, int num_heads, int head_dim,
+    bool v_colmajor, bool is_skipable)
 {
     launch_quantize_k_runtime<cutlass::bfloat16_t>(
         reinterpret_cast<const cutlass::bfloat16_t*>(K_ptr),
         reinterpret_cast<int8_t*>(K_q_ptr),
         reinterpret_cast<const float*>(k_mean_ptr),
         reinterpret_cast<float*>(k_scales_ptr),
-        batch, seqlen_k, num_heads, head_dim, block_n,
+        batch, seqlen_k, num_heads, head_dim,
+        v_colmajor, is_skipable,
         0  // default stream
     );
     cudaDeviceSynchronize();
@@ -624,14 +713,16 @@ void quantize_k_bf16(
 
 void quantize_k_f16(
     uintptr_t K_ptr, uintptr_t K_q_ptr, uintptr_t k_mean_ptr, uintptr_t k_scales_ptr,
-    int batch, int seqlen_k, int num_heads, int head_dim, int block_n)
+    int batch, int seqlen_k, int num_heads, int head_dim,
+    bool v_colmajor, bool is_skipable)
 {
     launch_quantize_k_runtime<cutlass::half_t>(
         reinterpret_cast<const cutlass::half_t*>(K_ptr),
         reinterpret_cast<int8_t*>(K_q_ptr),
         reinterpret_cast<const float*>(k_mean_ptr),
         reinterpret_cast<float*>(k_scales_ptr),
-        batch, seqlen_k, num_heads, head_dim, block_n,
+        batch, seqlen_k, num_heads, head_dim,
+        v_colmajor, is_skipable,
         0  // default stream
     );
     cudaDeviceSynchronize();
@@ -647,7 +738,7 @@ PYBIND11_MODULE(quant_tma, m) {
           py::arg("q_scales_ptr"), py::arg("k_scales_ptr"), py::arg("k_mean_ptr"),
           py::arg("batch"), py::arg("seqlen_q"), py::arg("seqlen_k"),
           py::arg("num_heads"), py::arg("head_dim"),
-          py::arg("block_m"), py::arg("block_n"));
+          py::arg("v_colmajor") = false, py::arg("is_skipable") = false);
 
     m.def("quantize_qk_f16", &quantize_qk_f16,
           "Quantize Q and K tensors (float16)",
@@ -656,27 +747,31 @@ PYBIND11_MODULE(quant_tma, m) {
           py::arg("q_scales_ptr"), py::arg("k_scales_ptr"), py::arg("k_mean_ptr"),
           py::arg("batch"), py::arg("seqlen_q"), py::arg("seqlen_k"),
           py::arg("num_heads"), py::arg("head_dim"),
-          py::arg("block_m"), py::arg("block_n"));
+          py::arg("v_colmajor") = false, py::arg("is_skipable") = false);
 
     m.def("quantize_q_bf16", &quantize_q_bf16,
           "Quantize Q tensor only (bfloat16)",
           py::arg("Q_ptr"), py::arg("Q_q_ptr"), py::arg("q_scales_ptr"),
-          py::arg("batch"), py::arg("seqlen_q"), py::arg("num_heads"), py::arg("head_dim"), py::arg("block_m"));
+          py::arg("batch"), py::arg("seqlen_q"), py::arg("num_heads"), py::arg("head_dim"),
+          py::arg("v_colmajor") = false, py::arg("is_skipable") = false);
 
     m.def("quantize_q_f16", &quantize_q_f16,
           "Quantize Q tensor only (float16)",
           py::arg("Q_ptr"), py::arg("Q_q_ptr"), py::arg("q_scales_ptr"),
-          py::arg("batch"), py::arg("seqlen_q"), py::arg("num_heads"), py::arg("head_dim"), py::arg("block_m"));
+          py::arg("batch"), py::arg("seqlen_q"), py::arg("num_heads"), py::arg("head_dim"),
+          py::arg("v_colmajor") = false, py::arg("is_skipable") = false);
 
     m.def("quantize_k_bf16", &quantize_k_bf16,
           "Quantize K tensor only (bfloat16)",
           py::arg("K_ptr"), py::arg("K_q_ptr"), py::arg("k_mean_ptr"), py::arg("k_scales_ptr"),
-          py::arg("batch"), py::arg("seqlen_k"), py::arg("num_heads"), py::arg("head_dim"), py::arg("block_n"));
+          py::arg("batch"), py::arg("seqlen_k"), py::arg("num_heads"), py::arg("head_dim"),
+          py::arg("v_colmajor") = false, py::arg("is_skipable") = false);
 
     m.def("quantize_k_f16", &quantize_k_f16,
           "Quantize K tensor only (float16)",
           py::arg("K_ptr"), py::arg("K_q_ptr"), py::arg("k_mean_ptr"), py::arg("k_scales_ptr"),
-          py::arg("batch"), py::arg("seqlen_k"), py::arg("num_heads"), py::arg("head_dim"), py::arg("block_n"));
+          py::arg("batch"), py::arg("seqlen_k"), py::arg("num_heads"), py::arg("head_dim"),
+          py::arg("v_colmajor") = false, py::arg("is_skipable") = false);
 }
 
 #endif
