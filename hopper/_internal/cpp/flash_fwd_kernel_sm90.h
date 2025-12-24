@@ -98,8 +98,8 @@ namespace flash
         static_assert(NumMmaWarpGroups == 1 || NumMmaWarpGroups == 2 || NumMmaWarpGroups == 3);
 
         // when using skip optimizations we need 16 registers for the producer
-        static constexpr uint32_t SkipOptimizationRegisterRequirement = Is_skipable ? 8 : 0;
-        // static constexpr uint32_t SkipOptimizationRegisterRequirement = 0;
+        // static constexpr uint32_t SkipOptimizationRegisterRequirement = Is_skipable ? 8 : 0;
+        static constexpr uint32_t SkipOptimizationRegisterRequirement = 0;
 
         static constexpr uint32_t constexpr_max(uint32_t a, uint32_t b) { return (a > b) ? a : b; }
         static constexpr uint32_t constexpr_min(uint32_t a, uint32_t b) { return (a < b) ? a : b; }
@@ -130,7 +130,7 @@ namespace flash
         static constexpr int mainloop_smem_padding_ = int(sizeof(typename CollectiveEpilogue::TensorStorage)) - int(sizeof(decltype((typename CollectiveMainloop::TensorStorage{}).smem_v)));
         static constexpr int mainloop_smem_padding = mainloop_smem_padding_ < 0 ? 0 : mainloop_smem_padding_;
 
-        static constexpr int BufferSize = CollectiveMainloop::kStages * 2;
+        static constexpr int BufferSize = CollectiveMainloop::kStagesForSkips * 2;
         struct SharedStorage
         {
             struct TensorStorage : cute::aligned_struct<128, _1>
@@ -432,7 +432,7 @@ namespace flash
                 // );
                 // consider: move this to shared memory to reduce register pressure + not needing to worry about which thread been elected
                 // Initialize skip_writer with shared memory buffers
-                DelayedSkipListWriter<CollectiveMainloop::kStages, ReverseSkipList, Phase, HasMustDoList> skip_writer(
+                DelayedSkipListWriter<CollectiveMainloop::kStagesForSkips, ReverseSkipList, Phase, HasMustDoList> skip_writer(
                     shared_storage.skip_list_storage.n_blocks_buffer,
                     shared_storage.skip_list_storage.end_range_buffer,
                     shared_storage.skip_list_storage.skip_tests

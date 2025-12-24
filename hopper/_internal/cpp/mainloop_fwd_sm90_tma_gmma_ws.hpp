@@ -69,6 +69,7 @@ namespace flash
     {
 
         static constexpr int kStages = Stages;
+        static constexpr int kStagesForSkips = kStages;
         using ClusterShape = ClusterShape_;
         using TileShape_MNK = TileShape_MNK_;
         // Tile shape for P@V multiplication (M=seq_q, N=head_dim_v, K=seq_k)
@@ -421,7 +422,8 @@ namespace flash
                 (IntraWGOverlap
                     ? (NumMmaWarpGroups >= 2) && (!Is_8Bit ? kHeadDim <= 128 : kHeadDim >= 128)
                     : NumMmaWarpGroups == 2
-                ) || Is_skipable
+                )
+                || Is_skipable
             ) && !LargeHeadDimV;
 
         // static constexpr bool RescaleOBeforeGemm = kHeadDim > 128 && (!Is_FP8 || V_colmajor) && IntraWGOverlap;
@@ -1512,7 +1514,7 @@ namespace flash
             }
 
             // Initialize skip_reader with shared memory buffers
-            DelayedSkipListReader<kStages> skip_reader(
+            DelayedSkipListReader<kStagesForSkips, NumMmaWarpGroups> skip_reader(
                 shared_storage.skip_list_storage.n_blocks_buffer,
                 shared_storage.skip_list_storage.skip_tests,
                 shared_storage.skip_list_storage.last_n_block

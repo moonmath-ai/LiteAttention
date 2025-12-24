@@ -223,7 +223,7 @@ namespace flash
     // Buffers operations and replays them after a specified delay
     // This allows the reader to lag behind the writer by DelayAmount iterations
     // ============================================================================
-    template <int DelayAmount>
+    template <int DelayAmount, int NumMmaWarpGroups>
     struct DelayedSkipListReader
     {
         static constexpr int BufferSize = DelayAmount * 2;
@@ -255,9 +255,11 @@ namespace flash
 
         __device__
         void update_skip(bool skip, int warp_idx_in_warpgroup){
-            // consider: using atomic here
-            // atomicAnd(&(skip_tests[index][warp_idx_in_warpgroup]), static_cast<int>(skip));
-            skip_tests[index][warp_idx_in_warpgroup] &= static_cast<int>(skip);
+            if constexpr (NumMmaWarpGroups > 2) {
+                atomicAnd(&(skip_tests[index][warp_idx_in_warpgroup]), static_cast<int>(skip));
+            }else{
+                skip_tests[index][warp_idx_in_warpgroup] &= static_cast<int>(skip);
+            }
         }
 
         __device__
