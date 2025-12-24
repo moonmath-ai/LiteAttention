@@ -630,7 +630,7 @@ class LiteAttention:
 
         return merged + [s, e]
     
-    def _quantize_query_key(self, query: torch.Tensor, key: torch.Tensor, scale: float) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def _quantize_query_key(self, query: torch.Tensor, key: torch.Tensor, scale: Optional[float] = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         SageAttention-style quantization for Q and K:
         - Q: per-block quantization (kBlockM tokens share a scale per head)
@@ -646,7 +646,11 @@ class LiteAttention:
 
             # Compute q_scale: log2(e) / sqrt(head_dim) = 1.44269504089 / sqrt(head_dim)
             head_dim = query.shape[-1]
-            q_scale = 1.44269504089 / math.sqrt(head_dim)
+
+            if scale is None:
+                q_scale = 1.44269504089 / math.sqrt(head_dim)
+            else:
+                q_scale = 1.44269504089 * scale
 
             q_int8, k_int8, q_descale, k_descale = _lite_attention_ops.quantize_qk(
                 query, key, k_mean, False, self.enable_skipping, q_scale
