@@ -630,7 +630,6 @@ class LiteAttention:
 
         return merged + [s, e]
     
-    # TODO: consider passing the scale as well so to not need to multiply by it inside the kernel
     def _quantize_query_key(self, query: torch.Tensor, key: torch.Tensor, scale: float) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         SageAttention-style quantization for Q and K:
@@ -645,8 +644,12 @@ class LiteAttention:
             # K shape: [batch, seqlen_k, num_heads, head_dim] -> mean: [batch, num_heads, head_dim]
             k_mean = key.mean(dim=1).float().contiguous()
 
+            # Compute q_scale: log2(e) / sqrt(head_dim) = 1.44269504089 / sqrt(head_dim)
+            head_dim = query.shape[-1]
+            q_scale = 1.44269504089 / math.sqrt(head_dim)
+
             q_int8, k_int8, q_descale, k_descale = _lite_attention_ops.quantize_qk(
-                query, key, k_mean, False, self.enable_skipping
+                query, key, k_mean, False, self.enable_skipping, q_scale
             )
             
             # batch, seq_len, heads, head_dim = query.shape
