@@ -100,6 +100,8 @@ namespace flash
         // when using skip optimizations we need 16 registers for the producer
         // static constexpr uint32_t SkipOptimizationRegisterRequirement = Is_skipable ? 8 : 0;
         static constexpr uint32_t SkipOptimizationRegisterRequirement = 0;
+        // static constexpr int kHeadDim = CollectiveMainloop::kHeadDim;
+        // static constexpr uint32_t SkipOptimizationRegisterRequirement = (Is_skipable && Is_INT8 && (kHeadDim > 196)) ? 8 : 0;
 
         static constexpr uint32_t constexpr_max(uint32_t a, uint32_t b) { return (a > b) ? a : b; }
         static constexpr uint32_t constexpr_min(uint32_t a, uint32_t b) { return (a < b) ? a : b; }

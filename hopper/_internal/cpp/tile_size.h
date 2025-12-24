@@ -33,17 +33,19 @@ constexpr std::tuple<int, int, bool, bool> tile_size_fwd_sm90(
                 }else{
                     return {192, use_blockN_128 ? 128 : 192, use_blockN_128, true};
                 }
+                // return {192, use_blockN_128 ? 128 : 192, use_blockN_128, true};
             }
             // Good for long seqlen (>= 4k) but suffers from tile quantization at short seqlen
             // return {192, is_causal || is_local ? 192 : 176, true, false};
         } else if (headdim <= 96) {
             // return {192, is_local || paged_kv_non_TMA ? 128 : 144, false, true && maybe_intra_wg_overlap};
-            if (is_skipable){
-                // return {128, 208, true, true && maybe_intra_wg_overlap};
-                return {128, 176, true, true && maybe_intra_wg_overlap};
-            }else{
-                return {192, is_local || paged_kv_non_TMA ? 128 : 144, false, true && maybe_intra_wg_overlap};
-            }
+            // if (is_skipable){
+            //     // return {128, 208, true, true && maybe_intra_wg_overlap};
+            //     return {128, 176, true, true && maybe_intra_wg_overlap};
+            // }else{
+            //     return {192, is_local || paged_kv_non_TMA ? 128 : 144, false, true && maybe_intra_wg_overlap};
+            // }
+            return {192, is_local || paged_kv_non_TMA ? 128 : 144, false, true && maybe_intra_wg_overlap};
         } else if (headdim <= 128) {
             bool const use_blockN_128 = is_causal || is_local || paged_kv_non_TMA;
             // return {128, use_blockN_128 ? 128 : 176, true, true && maybe_intra_wg_overlap};
@@ -61,27 +63,33 @@ constexpr std::tuple<int, int, bool, bool> tile_size_fwd_sm90(
     } else {
         if (is_int8){
             if (headdim <= 64) {
+                bool const use_blockN_128 = is_causal || is_local || paged_kv_non_TMA;
                 if (is_skipable){
-                    return {192, 160, true, true && maybe_intra_wg_overlap};
+                    // return {128, 224, true, true && maybe_intra_wg_overlap};
+                    // return {128, 176, true, true && maybe_intra_wg_overlap};
+                    return {192, 160, false, true && maybe_intra_wg_overlap};
                 }else{
-                    return {192, 160, true, true && maybe_intra_wg_overlap};
+                    return {192, use_blockN_128 ? 128 : 192, use_blockN_128, true};
                 }
+                // return {192, use_blockN_128 ? 128 : 192, use_blockN_128, true};
             } else if (headdim <= 96) {
-                if (is_skipable){
-                    return {192, 128, true, true && maybe_intra_wg_overlap};
-                }else{
-                    return {192, 128, true, true && maybe_intra_wg_overlap};
-                }
+                // if (is_skipable){
+                //     return {128, 176, true, true && maybe_intra_wg_overlap};
+                // }else{
+                //     return {192, is_local || paged_kv_non_TMA ? 128 : 144, false, true && maybe_intra_wg_overlap};
+                // }
+                return {192, is_local || paged_kv_non_TMA ? 128 : 144, false, true && maybe_intra_wg_overlap};
             } else if (headdim <= 128) {
-                if (is_skipable){
-                    return {192, 128, false, true && maybe_intra_wg_overlap};
-                }else{
-                    return {192, 128, true, true && maybe_intra_wg_overlap};
-                }
+                return {192, 128, false, true && maybe_intra_wg_overlap};
             } else if (headdim <= 192) {
-                return {128, (paged_kv_non_TMA || softcap) && is_local ? 128 : 160, true, true && maybe_intra_wg_overlap};
+                return {128, paged_kv_non_TMA || is_local ? 96 : (headdim_v <= 128 ? 128 : 112), true, true && maybe_intra_wg_overlap};  // 128 x 112 hits the limit of smem
             } else {
-                return {128, is_local ? 64 : 128, true, !paged_kv_non_TMA && maybe_intra_wg_overlap};  // PagedKV uses more registers so we disabled IntraWGOverlap
+                if (is_skipable){
+                    return {128, 128, true, true && maybe_intra_wg_overlap};
+                }else{
+                    return {128, is_local ? 64 : 80, true, true && maybe_intra_wg_overlap};  // 128 x 80 hits the limit of smem
+                }
+                // return {128, is_local ? 64 : 80, true, true && maybe_intra_wg_overlap};  // 128 x 80 hits the limit of smem
             }
         }else{
             if (headdim <= 64) {

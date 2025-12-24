@@ -20,24 +20,44 @@ namespace flash
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-    template <bool const zero_init = true, typename Engine0, typename Layout0, typename Engine1, typename Layout1, typename Operator>
+    template <bool const zero_init = true, bool const outer_loop_is_rows = false, typename Engine0, typename Layout0, typename Engine1, typename Layout1, typename Operator>
     __device__ __forceinline__ void thread_reduce_(Tensor<Engine0, Layout0> &tensor, Tensor<Engine1, Layout1> &summary, Operator &op)
     {
         static_assert(Layout0::rank == 2, "Only support 2D Tensor");
         static_assert(Layout1::rank == 1, "Only support 1D Tensor");
         CUTE_STATIC_ASSERT_V(size<0>(summary) == size<0>(tensor));
-#pragma unroll
-        for (int ni = 0; ni < size<1>(tensor); ni++)
-        {
+        
+        // Helper lambda to reduce code duplication
+        auto reduce_element = [&](int mi, int ni){
+            if constexpr (zero_init){
+                summary(mi) = ni == 0 ? tensor(mi, ni) : op(summary(mi), tensor(mi, ni));
+            }else{
+                summary(mi) = op(summary(mi), tensor(mi, ni));
+            }
+            // summary(mi) = zero_init && ni == 0 ? tensor(mi, ni) : op(summary(mi), tensor(mi, ni));
+        };
+        
+        if constexpr (outer_loop_is_rows) {
+            // Outer loop: rows (mi), Inner loop: columns (ni)
 #pragma unroll
             for (int mi = 0; mi < size<0>(tensor); mi++)
             {
-                if constexpr (zero_init){
-                    summary(mi) = ni == 0 ? tensor(mi, ni) : op(summary(mi), tensor(mi, ni));
-                }else{
-                    summary(mi) = op(summary(mi), tensor(mi, ni));
+#pragma unroll
+                for (int ni = 0; ni < size<1>(tensor); ni++)
+                {
+                    reduce_element(mi, ni);
                 }
-                // summary(mi) = zero_init && ni == 0 ? tensor(mi, ni) : op(summary(mi), tensor(mi, ni));
+            }
+        } else {
+            // Outer loop: columns (ni), Inner loop: rows (mi) - original order
+#pragma unroll
+            for (int ni = 0; ni < size<1>(tensor); ni++)
+            {
+#pragma unroll
+                for (int mi = 0; mi < size<0>(tensor); mi++)
+                {
+                    reduce_element(mi, ni);
+                }
             }
         }
     }
@@ -92,7 +112,8 @@ namespace flash
     {
         MaxOp<int32_t> max_op;
         Tensor max_converted = make_tensor_like<int32_t>(max);
-        thread_reduce_<true>(tensor, max_converted, max_op);
+        // thread_reduce_<true, true /*outer_loop_is_rows*/>(tensor, max_converted, max_op);
+        thread_reduce_<true, false /*outer_loop_is_rows*/>(tensor, max_converted, max_op);
         quad_allreduce_(max_converted, max_converted, max_op);
         dequantize_max_1d_<zero_init>(max_converted, max, dequan_s);
     }
@@ -155,7 +176,7 @@ namespace flash
     // tensor: input tensor with int32_t values (from INT8 MMA)
     // tensor_dequantized: output tensor with float values
     // dequan_s: dequantization scale (q_dequant * k_dequant)
-    template <bool const Scale_max = true, bool const Check_inf = true, int const Max_offset = 0,
+    template <bool const Scale_max = true, bool const Check_inf = true, int const Max_offset = 0, bool const outer_loop_is_rows = true,
               typename Engine0, typename Layout0, typename Engine1, typename Layout1, typename Engine2, typename Layout2>
     __forceinline__ __device__ void scale_apply_exp2_dequantize(Tensor<Engine0, Layout0> &tensor, Tensor<Engine1, Layout1> &max,
                                                                  Tensor<Engine2, Layout2> &tensor_dequantized, const float dequan_s)
@@ -169,30 +190,46 @@ namespace flash
         CUTE_STATIC_ASSERT_V(size<0>(max) == size<0>(tensor));
         CUTE_STATIC_ASSERT_V(size<0>(tensor) == size<0>(tensor_dequantized));
         CUTE_STATIC_ASSERT_V(size<1>(tensor) == size<1>(tensor_dequantized));
-#pragma unroll
-        for (int mi = 0; mi < size<0>(tensor); ++mi)
-        {
-            // If max is -inf, then all elements must have been -inf (possibly due to masking).
-            // We don't want (-inf - (-inf)) since that would give NaN.
-            // Note: max is already dequantized (in float), so we don't multiply by dequan_s here
+        
+        // Helper lambda to compute max_scaled for a given row index
+        auto get_max_scaled = [&](int mi) -> float {
             if constexpr (Check_inf){
-                const float max_scaled = max(mi) == -INFINITY ? 0.f : (!Scale_max ? max(mi) : max(mi)) - max_offset;
-    #pragma unroll
-                for (int ni = 0; ni < size<1>(tensor); ++ni)
-                {
-                    // Dequantize int32 to float, then compute exp2(dequantized_value - max_scaled)
-                    // tensor(mi, ni) is int32_t, multiply by dequan_s to get float
-                    const float dequantized_value = tensor(mi, ni) * dequan_s - max_scaled;
-                    tensor_dequantized(mi, ni) = exp2f(dequantized_value);
-                }
+                return max(mi) == -INFINITY ? 0.f : (!Scale_max ? max(mi) : max(mi)) - max_offset;
             }else{
-                const float max_scaled = (!Scale_max ? max(mi) : max(mi)) - max_offset;
-    #pragma unroll
+                return (!Scale_max ? max(mi) : max(mi)) - max_offset;
+            }
+        };
+        
+        // Helper lambda to process a single element
+        auto process_element = [&](int mi, int ni, float max_scaled) {
+            // Dequantize int32 to float, then compute exp2(dequantized_value - max_scaled)
+            // tensor(mi, ni) is int32_t, multiply by dequan_s to get float
+            const float dequantized_value = tensor(mi, ni) * dequan_s - max_scaled;
+            tensor_dequantized(mi, ni) = exp2f(dequantized_value);
+        };
+        
+        if constexpr (outer_loop_is_rows) {
+            // Outer loop: rows (mi), Inner loop: columns (ni) - original/default order
+#pragma unroll
+            for (int mi = 0; mi < size<0>(tensor); ++mi)
+            {
+                const float max_scaled = get_max_scaled(mi);
+#pragma unroll
                 for (int ni = 0; ni < size<1>(tensor); ++ni)
                 {
-                    // Dequantize int32 to float, then compute exp2(dequantized_value - max_scaled)
-                    const float dequantized_value = tensor(mi, ni) * dequan_s - max_scaled;
-                    tensor_dequantized(mi, ni) = exp2f(dequantized_value);
+                    process_element(mi, ni, max_scaled);
+                }
+            }
+        } else {
+            // Outer loop: columns (ni), Inner loop: rows (mi)
+#pragma unroll
+            for (int ni = 0; ni < size<1>(tensor); ++ni)
+            {
+#pragma unroll
+                for (int mi = 0; mi < size<0>(tensor); ++mi)
+                {
+                    const float max_scaled = get_max_scaled(mi);
+                    process_element(mi, ni, max_scaled);
                 }
             }
         }
