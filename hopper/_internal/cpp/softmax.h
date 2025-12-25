@@ -13,6 +13,8 @@
 #include "utils.h"
 #include "skip_list.h"
 
+#include "exp2.h"
+
 namespace flash
 {
 
@@ -174,9 +176,9 @@ namespace flash
     // tensor: input tensor with int32_t values (from INT8 MMA)
     // tensor_dequantized: output tensor with float values
     // dequan_s: dequantization scale (q_dequant * k_dequant)
-    template <bool const Scale_max = true, bool const Check_inf = true, int const Max_offset = 0, bool const outer_loop_is_rows = true,
+    template <bool const Check_inf = true, int const Max_offset = 0, bool const outer_loop_is_rows = true,
               typename Engine0, typename Layout0, typename Engine1, typename Layout1, typename Engine2, typename Layout2>
-    __forceinline__ __device__ void scale_apply_exp2_dequantize(Tensor<Engine0, Layout0> &tensor, Tensor<Engine1, Layout1> &max,
+    __forceinline__ __device__ void scale_apply_exp2_dequantize(Tensor<Engine0, Layout0> &tensor, Tensor<Engine1, Layout1> &max, Tensor<Engine2, Layout2> &max_local,
                                                                  Tensor<Engine2, Layout2> &tensor_dequantized, const float dequan_s)
     {
         // // For FP8, we can subtract max by 8.0 so that the value after exp2 is in the range of [0, 256].
@@ -189,14 +191,14 @@ namespace flash
         CUTE_STATIC_ASSERT_V(size<0>(tensor) == size<0>(tensor_dequantized));
         CUTE_STATIC_ASSERT_V(size<1>(tensor) == size<1>(tensor_dequantized));
         
-        // // Helper lambda to compute max_scaled for a given row index
-        // auto get_max_scaled = [&](int mi) -> float {
-        //     if constexpr (Check_inf){
-        //         return max(mi) == -INFINITY ? 0.f : (!Scale_max ? max(mi) : max(mi)) - max_offset;
-        //     }else{
-        //         return (!Scale_max ? max(mi) : max(mi)) - max_offset;
-        //     }
-        // };
+        // Helper lambda to compute max_scaled for a given row index
+        auto get_max_scaled = [&](int mi) -> float {
+            if constexpr (Check_inf){
+                return max(mi) == -INFINITY ? 0.f : max(mi) - max_offset;
+            }else{
+                return max(mi) - max_offset;
+            }
+        };
         
         // Helper lambda to process a single element
         auto process_element = [&](int mi, int ni, float max_scaled) {
@@ -481,7 +483,7 @@ namespace flash
             // consider: scores are Int's when Is_INT8 is enabled, so we need to pass the dequan_s instead of scale_apply_exp2
             //           and also we need to define a new scores tensor for float type (we dequantize and take the exp2 inside this function)
             // flash::template scale_apply_exp2</*Scale_max=*/true, Check_inf, Max_offset>(scores, row_max, softmax_scale_log2);
-            flash::template scale_apply_exp2_dequantize</*Scale_max=*/true, Check_inf, Max_offset>(scores, row_max, scores_float, dequan_s);
+            flash::template scale_apply_exp2_dequantize<Check_inf, Max_offset>(scores, row_max, row_max_local, scores_float, dequan_s);
 
             // consider: here we should reduce_sum with the values of the float exp2 scores (which we need to create a float tensor for when Is_INT8 is enabled)
             // We don't do the reduce across threads here since we don't need to use the row_sum.
