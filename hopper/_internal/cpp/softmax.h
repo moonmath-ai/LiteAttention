@@ -107,15 +107,13 @@ namespace flash
         reduce_<zero_init>(tensor, max, max_op);
     }
 
-    template <bool const zero_init = true, typename Engine0, typename Layout0, typename Engine1, typename Layout1>
-    __device__ __forceinline__ void reduce_max_dequantize(Tensor<Engine0, Layout0> &tensor, Tensor<Engine1, Layout1> &max, float const dequan_s)
+    template <bool const zero_init = true, typename Engine0, typename Layout0, typename Engine1, typename Layout1, typename Engine2, typename Layout2>
+    __device__ __forceinline__ void reduce_max_dequantize(Tensor<Engine0, Layout0> &tensor, Tensor<Engine1, Layout1> &max, Tensor<Engine2, Layout2> &max_local, float const dequan_s)
     {
         MaxOp<int32_t> max_op;
-        Tensor max_converted = make_tensor_like<int32_t>(max);
-        // thread_reduce_<true, true /*outer_loop_is_rows*/>(tensor, max_converted, max_op);
-        thread_reduce_<true, false /*outer_loop_is_rows*/>(tensor, max_converted, max_op);
-        quad_allreduce_(max_converted, max_converted, max_op);
-        dequantize_max_1d_<zero_init>(max_converted, max, dequan_s);
+        thread_reduce_<true, false /*outer_loop_is_rows*/>(tensor, max_local, max_op);
+        quad_allreduce_(max_local, max_local, max_op);
+        dequantize_max_1d_<zero_init>(max_local, max, dequan_s);
     }
 
     template <bool const zero_init = true, bool warp_reduce = true, typename Engine0, typename Layout0, typename Engine1, typename Layout1>
@@ -181,9 +179,9 @@ namespace flash
     __forceinline__ __device__ void scale_apply_exp2_dequantize(Tensor<Engine0, Layout0> &tensor, Tensor<Engine1, Layout1> &max,
                                                                  Tensor<Engine2, Layout2> &tensor_dequantized, const float dequan_s)
     {
-        // For FP8, we can subtract max by 8.0 so that the value after exp2 is in the range of [0, 256].
-        // This lets us use more of the FP8 range (instead of just [0, 1]) to reduce underflow.
-        static constexpr float max_offset = float(Max_offset); // We can only template on int, not float
+        // // For FP8, we can subtract max by 8.0 so that the value after exp2 is in the range of [0, 256].
+        // // This lets us use more of the FP8 range (instead of just [0, 1]) to reduce underflow.
+        // static constexpr float max_offset = float(Max_offset); // We can only template on int, not float
         static_assert(Layout0::rank == 2, "Only support 2D Tensor");
         static_assert(Layout1::rank == 1, "Only support 1D Tensor");
         static_assert(Layout2::rank == 2, "Only support 2D Tensor for output");
@@ -191,14 +189,14 @@ namespace flash
         CUTE_STATIC_ASSERT_V(size<0>(tensor) == size<0>(tensor_dequantized));
         CUTE_STATIC_ASSERT_V(size<1>(tensor) == size<1>(tensor_dequantized));
         
-        // Helper lambda to compute max_scaled for a given row index
-        auto get_max_scaled = [&](int mi) -> float {
-            if constexpr (Check_inf){
-                return max(mi) == -INFINITY ? 0.f : (!Scale_max ? max(mi) : max(mi)) - max_offset;
-            }else{
-                return (!Scale_max ? max(mi) : max(mi)) - max_offset;
-            }
-        };
+        // // Helper lambda to compute max_scaled for a given row index
+        // auto get_max_scaled = [&](int mi) -> float {
+        //     if constexpr (Check_inf){
+        //         return max(mi) == -INFINITY ? 0.f : (!Scale_max ? max(mi) : max(mi)) - max_offset;
+        //     }else{
+        //         return (!Scale_max ? max(mi) : max(mi)) - max_offset;
+        //     }
+        // };
         
         // Helper lambda to process a single element
         auto process_element = [&](int mi, int ni, float max_scaled) {
@@ -247,6 +245,8 @@ namespace flash
 
         using TensorT = decltype(make_tensor<float>(Shape<Int<kNRows>>{}));
         TensorT row_max, row_sum;
+        // used only for INT8
+        Tensor row_max_local = make_tensor_like<int32_t>(row_max);
         float const softmax_scale_log2; // (log2(e) * 1/sqrt(128)) * q_dequant * k_dequant
         // int const warp_idx_in_warpgroup = (threadIdx.x / 32) % 4;
         int const warp_idx_in_warpgroup = __shfl_sync(0xffffffff, (threadIdx.x / 32) % 4, 0);
@@ -289,7 +289,7 @@ namespace flash
                 if constexpr (!Is_INT8) {
                     flash::template reduce_max</*zero_init=*/true>(scores, row_max);
                 } else {
-                    flash::template reduce_max_dequantize</*zero_init=*/true>(scores, row_max, dequan_s);
+                    flash::template reduce_max_dequantize</*zero_init=*/true>(scores, row_max, row_max_local, dequan_s);
                 }
                 cute::fill(scores_scale, 1.f);
                 if (is_warp_leader)
@@ -315,7 +315,7 @@ namespace flash
                 if constexpr (!Is_INT8) {
                     flash::template reduce_max</*zero_init=*/true>(scores, scores_max_local);
                 } else {
-                    flash::template reduce_max_dequantize</*zero_init=*/true>(scores, scores_max_local, dequan_s);
+                    flash::template reduce_max_dequantize</*zero_init=*/true>(scores, scores_max_local, scores_max_local_local, dequan_s);
                 }
 
                 // update row max
@@ -407,7 +407,7 @@ namespace flash
                 if constexpr (!Is_INT8) {
                     flash::template reduce_max</*zero_init=*/true>(scores, row_max);
                 } else {
-                    flash::template reduce_max_dequantize</*zero_init=*/true>(scores, row_max, dequan_s);
+                    flash::template reduce_max_dequantize</*zero_init=*/true>(scores, row_max, row_max_local, dequan_s);
                 }
                 cute::fill(scores_scale, 1.f);
             }
@@ -423,7 +423,7 @@ namespace flash
                 } else {
                     // For INT8: reduce to local max first, then manually update row_max
                     // Tensor scores_max_local = make_fragment_like(row_max);
-                    flash::template reduce_max_dequantize</*zero_init=*/false>(scores, row_max, dequan_s);
+                    flash::template reduce_max_dequantize</*zero_init=*/false>(scores, row_max, row_max_local, dequan_s);
                 }
                 
 #pragma unroll
