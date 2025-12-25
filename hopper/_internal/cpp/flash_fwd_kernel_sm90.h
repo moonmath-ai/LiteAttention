@@ -98,18 +98,13 @@ namespace flash
         static_assert(NumMmaWarpGroups == 1 || NumMmaWarpGroups == 2 || NumMmaWarpGroups == 3);
 
         // when using skip optimizations we need 16 registers for the producer
-        // static constexpr uint32_t SkipOptimizationRegisterRequirement = Is_skipable ? 8 : 0;
         static constexpr uint32_t SkipOptimizationRegisterRequirement = 0;
-        // static constexpr int kHeadDim = CollectiveMainloop::kHeadDim;
-        // static constexpr uint32_t SkipOptimizationRegisterRequirement = (Is_skipable && Is_INT8 && (kHeadDim > 196)) ? 8 : 0;
 
         static constexpr uint32_t constexpr_max(uint32_t a, uint32_t b) { return (a > b) ? a : b; }
         static constexpr uint32_t constexpr_min(uint32_t a, uint32_t b) { return (a < b) ? a : b; }
 
         // Register requirement for Load and Math WGs
         // If we use cp.async to load K and V, we need more registers for the producer WG.
-        // static constexpr uint32_t LoadRegisterRequirement = constexpr_max((NumMmaWarpGroups == 1 ? 56 : (NumMmaWarpGroups == 2 ? (Use_TMA_KV ? 24 : 40) : (Is_INT8 ? 24 : 32))) - SkipOptimizationRegisterRequirement, 24);
-        // static constexpr uint32_t MmaRegisterRequirement = (NumMmaWarpGroups == 1 ? 256 : (NumMmaWarpGroups == 2 ? (Use_TMA_KV ? 240 : 232) : (Is_INT8 ? 168 : 160)));
         static constexpr uint32_t LoadRegisterRequirement = constexpr_max((NumMmaWarpGroups == 1 ? 56 : (NumMmaWarpGroups == 2 ? (Use_TMA_KV ? 24 : 40) : 32)) - SkipOptimizationRegisterRequirement, 24);
         static constexpr uint32_t MmaRegisterRequirement = (NumMmaWarpGroups == 1 ? 256 : (NumMmaWarpGroups == 2 ? (Use_TMA_KV ? 240 : 232) : 160));
 

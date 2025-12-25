@@ -1671,11 +1671,9 @@ namespace flash
                         consumer_wait(pipeline_v, smem_pipe_read);
                         flash::gemm</*zero_init=*/false, /*wg_wait=*/0>(tiled_mma_qv, tSrQv, tSrV(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
                     }
-                    // auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
                     if constexpr (!Is_INT8){
                         scoremod_premask_fn(tSrS_ambiguous_type);
                     }
-                    // mask_fn(tSrS, n_block);
                     mask_fn(tSrS_ambiguous_type, new_n_block);
                     if constexpr (Is_skipable){
                         cute::copy(
