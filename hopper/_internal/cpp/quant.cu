@@ -78,6 +78,7 @@ float_vec_to_packed_int8(cute::array<float, 8UL> const& src, float scale) {
     for (size_t i = 0; i < 8; ++i) {
         int32_t res;
         float x = src[i] * scale;
+        // Converts float32 to signed int8 with round-to-nearest-integer, clamps to -128 to 127
         asm("cvt.rni.sat.s8.f32 %0, %1;" : "=r"(res) : "f"(x));
         packed.i8[i] = static_cast<int8_t>(res);
     }

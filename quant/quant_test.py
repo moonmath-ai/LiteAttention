@@ -1,3 +1,6 @@
+# Test the quantization kernel separately from the attention kernel
+# Build the kernel: python setup.py build_ext --inplace
+
 import torch
 import numpy as np
 import sys
@@ -115,9 +118,7 @@ def test_correctness(batch, seqlen_q, seqlen_k, num_heads, head_dim, dtype='f32'
     num_seq_tiles_k = (seqlen_k + TILE_SEQ_K - 1) // TILE_SEQ_K
 
     # Dequantize Q tile by tile using per-seq-tile scales (shared across all head_dim)
-    # Note: Q kernel applies dequantizationScale = log2(e) / sqrt(d) during quantization
-    # so dequantized Q = Q * dequantScale, not just Q
-    dequantScale = 1.44269504089 / np.sqrt(head_dim)
+    # Dequantized value should equal original * scale
     Q_dequant = torch.zeros_like(Q_f)
     for b in range(batch):
         for h in range(num_heads):
@@ -128,7 +129,7 @@ def test_correctness(batch, seqlen_q, seqlen_k, num_heads, head_dim, dtype='f32'
                 # Scale is shared across all head_dim
                 Q_dequant[b, s_start:s_end, h, :] = \
                     Q_q_f[b, s_start:s_end, h, :] * scale
-
+    
     # Dequantize K tile by tile using per-seq-tile scales (K was mean-centered)
     K_dequant_centered = torch.zeros_like(K_f)
     for b in range(batch):
@@ -141,8 +142,8 @@ def test_correctness(batch, seqlen_q, seqlen_k, num_heads, head_dim, dtype='f32'
                 K_dequant_centered[b, s_start:s_end, h, :] = \
                     K_q_f[b, s_start:s_end, h, :] * scale
     
-    # Q expected: Q * dequantScale (kernel applies this scaling during quantization)
-    Q_expected = Q_f * dequantScale
+    # Q expected: original Q (dequantized should equal original * scale, which with q_scale=1.0 is just original)
+    Q_expected = Q_f
     # K expected: K - mean (mean-centered)
     K_centered_ref = K_f - k_mean_ref.unsqueeze(1)
     
