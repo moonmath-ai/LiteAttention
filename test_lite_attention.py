@@ -636,12 +636,30 @@ def run_tests_for_head_dim(head_dim, batch=2, seq_len=18200, heads=32):
     
     return bf16_passed, int8_passed
 
+from mem_calc import assert_valid_MNK
+def test_valid_MNK():
+    for headdim in [64, 96, 128, 160, 192]:
+        for dtype in [torch.bfloat16, torch.int8]:
+            for is_skipable in [True, False]:
+                M, N, MmaPV_is_RS, isIntraWGOverlap = LiteAttention.get_tile_size_fwd_sm90(head_dim=headdim, dtype=dtype, is_skipable=is_skipable, v_colmajor=False)
+                assert_valid_MNK(M, N, headdim, dtype, dtype, torch.bfloat16)
 
 def main():
     """Main test runner."""
     # Set random seeds for reproducibility
     torch.manual_seed(0)
     torch.cuda.manual_seed(0)
+    
+    # Run valid MNK test
+    print(f"\n{'='*60}")
+    print("Running valid MNK test")
+    print(f"{'='*60}")
+    try:
+        test_valid_MNK()
+        print("✅ Valid MNK test: PASSED")
+    except Exception as e:
+        print(f"❌ Valid MNK test: FAILED - {e}")
+        raise
     
     # Test different head dimensions
     head_dims = [32, 64, 96, 128, 192, 256]
