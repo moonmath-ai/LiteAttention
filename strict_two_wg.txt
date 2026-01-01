@@ -2,6 +2,15 @@ dependencies:
 syntax - result : [dependency0, dependency1, ...]
 comments would be marked with '#'
 
+# Q - waits
+# K(t) - waits for K(t) to load to shared memory
+# V(t) - waits for V(t) to load to shared
+# QK(a, t) - calculate  Q[64 * a, 64 * (a + 1)] @ K(t)
+# S(a, t) - find the max of each row in QK and calculate online softmax on what we can.
+# P(a, t) - save S(a, t) to shared memory 
+# PV(a, t) - P(a, t) @ V(t)
+# O(a, t) - rescale O(a, t)
+
 # define base cases (n <= 1)
 Q : []
 K(0) : []
