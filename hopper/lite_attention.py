@@ -254,6 +254,27 @@ class LiteAttention:
         return LiteAttention.calc_percentage_per_head(read_list).mean()
 
     @staticmethod
+    def get_tile_size_fwd_sm90(head_dim, dtype, v_colmajor=False, is_skipable=True):
+        is_int8 = dtype == torch.int8
+        element_size = dtype.itemsize
+        # Call C++ tile_size_fwd_sm90 function
+        # Arguments: headdim, headdim_v, is_causal, is_local, element_size, 
+        #            v_colmajor, paged_kv_non_TMA, softcap, is_skipable, is_int8
+        # Returns: [kBlockM, kBlockN, MmaPV_is_RS, IntraWGOverlap]
+        return _lite_attention_ops.get_tile_size_fwd_sm90(
+            head_dim,           # headdim
+            head_dim,           # headdim_v (same as headdim for standard attention)
+            False,              # is_causal (not relevant for skipable case)
+            False,              # is_local
+            element_size,       # element_size (2 for fp16/bf16, 4 for fp32)
+            v_colmajor,         # v_colmajor
+            False,              # paged_kv_non_TMA
+            False,              # softcap
+            is_skipable,        # is_skipable
+            is_int8             # is_int8
+        )
+
+    @staticmethod
     def get_MN(head_dim, dtype, v_colmajor=False, is_skipable=True):
         """
         Get the tile sizes (block dimensions) for attention computation.
@@ -276,24 +297,25 @@ class LiteAttention:
                 - kBlockM: Number of rows per tile (query dimension)
                 - kBlockN: Number of columns per tile (key dimension)
         """
-        is_int8 = dtype == torch.int8
-        element_size = dtype.itemsize
-        # Call C++ tile_size_fwd_sm90 function
-        # Arguments: headdim, headdim_v, is_causal, is_local, element_size, 
-        #            v_colmajor, paged_kv_non_TMA, softcap, is_skipable, is_int8
-        # Returns: [kBlockM, kBlockN, MmaPV_is_RS, IntraWGOverlap]
-        result = _lite_attention_ops.get_tile_size_fwd_sm90(
-            head_dim,           # headdim
-            head_dim,           # headdim_v (same as headdim for standard attention)
-            False,              # is_causal (not relevant for skipable case)
-            False,              # is_local
-            element_size,       # element_size (2 for fp16/bf16, 4 for fp32)
-            v_colmajor,         # v_colmajor
-            False,              # paged_kv_non_TMA
-            False,              # softcap
-            is_skipable,        # is_skipable
-            is_int8             # is_int8
-        )
+        # is_int8 = dtype == torch.int8
+        # element_size = dtype.itemsize
+        # # Call C++ tile_size_fwd_sm90 function
+        # # Arguments: headdim, headdim_v, is_causal, is_local, element_size, 
+        # #            v_colmajor, paged_kv_non_TMA, softcap, is_skipable, is_int8
+        # # Returns: [kBlockM, kBlockN, MmaPV_is_RS, IntraWGOverlap]
+        # result = _lite_attention_ops.get_tile_size_fwd_sm90(
+        #     head_dim,           # headdim
+        #     head_dim,           # headdim_v (same as headdim for standard attention)
+        #     False,              # is_causal (not relevant for skipable case)
+        #     False,              # is_local
+        #     element_size,       # element_size (2 for fp16/bf16, 4 for fp32)
+        #     v_colmajor,         # v_colmajor
+        #     False,              # paged_kv_non_TMA
+        #     False,              # softcap
+        #     is_skipable,        # is_skipable
+        #     is_int8             # is_int8
+        # )
+        result = LiteAttention.get_tile_size_fwd_sm90(head_dim, dtype, v_colmajor, is_skipable)
         kBlockM, kBlockN = result[0], result[1]
         return kBlockM, kBlockN
 

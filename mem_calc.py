@@ -46,19 +46,36 @@ def memO(m, n, k, dtype):
     return m * k * dtype.itemsize
 
 
-def assert_valid_MNK(m, n, k, q_dtype, k_dtype, v_dtype):
-    assert m % 64 == 0, "m must be divisible by 64"
-    assert n % 8 == 0, "n must be divisible by 16"
-    if q_dtype == torch.int8:
-        assert k % 32 == 0, "k must be divisible by 32"
+def granularity_for_dtype(dtype):
+    if dtype.itemsize == 1:
+        return 32
     else:
-        assert k % 16 == 0, "k must be divisible by 16"
+        return 16
+
+def assert_valid_dim(dim, divisible_by, dim_name):
+    assert dim % divisible_by == 0, dim_name + " must be divisible by " + str(divisible_by)
+
+def assert_valid_m(m, dim_name):
+    assert_valid_dim(m, 64, dim_name)
+
+def assert_valid_n(n, dim_name):
+    assert_valid_dim(n, 8, dim_name)
+
+def assert_valid_k(k, dtype, dim_name):
+    assert_valid_dim(k, granularity_for_dtype(dtype), dim_name)
+
+def assert_valid_MNK(m, n, k, q_dtype, k_dtype, v_dtype):
+    assert_valid_m(m, "m")
+    assert_valid_n(n, "n")
+    assert_valid_k(k, q_dtype, "k")
+
+    assert_valid_k(n, v_dtype, "n also (because of PV)")
 
 
 # Returns the number of BYTES needed for registers and shared memory
 def mem_calc(m, n, k, q_dtype=torch.int8, k_dtype=torch.int8, v_dtype=torch.float16, 
              MmaPV_is_RS=False, isIntraWGOverlap=False):
-    assert_valid_MNK(m, n, k, q_dtype, k_dtype, v_dtype)
+
     q_size = memQ(m, n, k, q_dtype)
     k_size = memK(m, n, k, k_dtype)
     v_size = memV(m, n, k, v_dtype)
@@ -78,7 +95,7 @@ def mem_calc(m, n, k, q_dtype=torch.int8, k_dtype=torch.int8, v_dtype=torch.floa
 
 
 def mem_analysis(m, n, k, q_dtype=torch.int8, k_dtype=torch.int8, v_dtype=torch.float16, 
-                 MmaPV_is_RS=False, isIntraWGOverlap=False):
+                 MmaPV_is_RS=False, isIntraWGOverlap=False, max_wg_num=3):
     mem_bytes = mem_calc(m, n, k, q_dtype, k_dtype, v_dtype, MmaPV_is_RS, isIntraWGOverlap)
     rmem, smem = mem_bytes
     ratio = mem_bytes / torch.tensor([rmem_limit, smem_limit])
@@ -93,8 +110,15 @@ def mem_analysis(m, n, k, q_dtype=torch.int8, k_dtype=torch.int8, v_dtype=torch.
     print(f"remaining smem in bytes: {int(remaining_smem)}")
 
     # tensor cores operations for QK and PV (per warpgroup)
-    num_ts_ops_qk = k // (32 if q_dtype.itemsize == 1 else 16)
-    num_ts_ops_pv = k // (32 if v_dtype.itemsize == 1 else 16)
+    granularity_qk = granularity_for_dtype(q_dtype)
+    num_ts_ops_qk = (k + granularity_qk - 1) // granularity_qk
+    print(f"tensor cores operations for QK: {num_ts_ops_qk} X m{64}n{n}k{granularity_qk}")
+
+    granularity_pv = granularity_for_dtype(v_dtype)
+    num_ts_ops_pv = (n + granularity_pv - 1) // granularity_pv
+    print(f"tensor cores operations for PV: {num_ts_ops_pv} X m{64}n{k}k{granularity_pv}")
+
+    assert_valid_MNK(m, n, k, q_dtype, k_dtype, v_dtype)
     
 
 
