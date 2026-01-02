@@ -1283,10 +1283,6 @@ namespace flash
             int const warp_group_idx = __shfl_sync(0xFFFFFFFF, thread_idx / cutlass::NumThreadsPerWarpGroup, 0);
 
             static_assert(is_rmem<FrgTensorO>::value, "O tensor must be rmem resident.");
-            // DOR: height of the Q block
-            static constexpr int kBlockM = get<0>(TileShape_MNK{});
-            // DOR: height of the K/V block
-            static constexpr int kBlockN = get<1>(TileShape_MNK{});
 
             // can't use auto [m_block, ...] = block_coord since structured binding cannot be captured in lambda
             int const m_block = get<0>(block_coord); // the index of the Q block we are currently processing
