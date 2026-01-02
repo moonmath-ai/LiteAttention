@@ -150,6 +150,10 @@ namespace flash
 
         // DOR: is it (128 / 64 = 2, 1, 1)? it's not making sense to me...
         // oh! it's because we do the atom 2 times for each warpgroup!
+        // Assert that kBlockM=256 is only used with INT8 and requires specific conditions
+        static_assert(kBlockM != 256 || Is_INT8, "kBlockM=256 is only supported with INT8");
+        static_assert(kBlockM != 256 || IntraWGOverlap, "kBlockM=256 requires IntraWGOverlap");
+        static_assert(kBlockM != 256 || !MmaPV_is_RS, "kBlockM=256 requires MmaPV_is_RS == false");
         using AtomLayoutQK = Layout<Shape<Int<kBlockM / 64>, _1, _1>>;
         using TiledMmaQK = decltype(cute::make_tiled_mma(
             std::conditional_t<
@@ -1540,72 +1544,72 @@ namespace flash
             if constexpr (IntraWGOverlap)
             {
                 Tensor tSrS_ambiguous_type = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
-                consumer_wait(pipeline_k, smem_pipe_read);
-                if constexpr (Is_skipable){
-                    n_block = skip_reader.next_n_block();
-                }
-                flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
-                warpgroup_wait<0>();
-                if constexpr (Is_INT8){
-                    softmax.set_dequan_s(KDescaleSliced(n_block));
-                }
-                pipeline_k.consumer_release(smem_pipe_read);
+                    consumer_wait(pipeline_k, smem_pipe_read);
+                    if constexpr (Is_skipable){
+                        n_block = skip_reader.next_n_block();
+                    }
+                    flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
+                    warpgroup_wait<0>();
+                    if constexpr (Is_INT8){
+                        softmax.set_dequan_s(KDescaleSliced(n_block));
+                    }
+                    pipeline_k.consumer_release(smem_pipe_read);
 
-                if constexpr (HasQv)
-                {
-                    shared_storage.pipelines.barrier_Qv.wait(work_idx % 2);
-                    consumer_wait(pipeline_v, smem_pipe_read);
-                    flash::gemm</*zero_init=*/false, /*wg_wait=*/0>(tiled_mma_qv, tSrQv, tSrV(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
-                }
-                if constexpr (!Is_INT8){
-                    scoremod_premask_fn(tSrS_ambiguous_type);
-                }
-                mask.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS_ambiguous_type, m_block, n_block);
+                    if constexpr (HasQv)
+                    {
+                        shared_storage.pipelines.barrier_Qv.wait(work_idx % 2);
+                        consumer_wait(pipeline_v, smem_pipe_read);
+                        flash::gemm</*zero_init=*/false, /*wg_wait=*/0>(tiled_mma_qv, tSrQv, tSrV(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
+                    }
+                    if constexpr (!Is_INT8){
+                        scoremod_premask_fn(tSrS_ambiguous_type);
+                    }
+                    mask.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS_ambiguous_type, m_block, n_block);
 
                 // Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
                 Tensor scores_scale = [&]
-                {
+                    {
                     // TODO: make sure we allowed to do max reduction on the int32_t
-                    if constexpr (Is_skipable){
-                        return softmax.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, /*Is_first=*/true, true>(
-                            tSrS_ambiguous_type, params.qk_skip_mask_args.thr, skip_reader, m_block
-                        );
-                    }
-                    else{
-                        return softmax.template max_get_scale</*Is_first=*/true, /*Check_inf=*/true>(tSrS_ambiguous_type);
-                    }
-                }();
+                        if constexpr (Is_skipable){
+                            return softmax.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, /*Is_first=*/true, true>(
+                                tSrS_ambiguous_type, params.qk_skip_mask_args.thr, skip_reader, m_block
+                            );
+                        }
+                        else{
+                            return softmax.template max_get_scale</*Is_first=*/true, /*Check_inf=*/true>(tSrS_ambiguous_type);
+                        }
+                    }();
                 // Don't need to store scales to send to WG1 (in the case of LargeHeadDimV) since it's 1.f
 
-                auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
+                    auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
 
                 // softmax.template online_softmax</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
-                if constexpr (!Is_INT8){
+                    if constexpr (!Is_INT8){
                     // interesting! if we use tSrS_ambiguous_type here the result is incorrect!
                     // AND LA without optimization becomes faster then FA3 baseline!
-                    softmax.template online_softmax</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
-                } else {
-                    softmax.template online_softmax_dequantize</*Is_first=*/true, /*Check_inf=*/true>(tSrS_ambiguous_type, tSrS);
-                }
-                if constexpr (Is_FP8 && !V_colmajor)
-                {
-                    flash::permute_Cregs_fp8(tSrS);
-                }
-                Tensor tOrP_acc = make_tensor(tSrS.data(), flash::convert_layout_acc_Aregs<TiledMmaPV>(tSrS.layout()));
-                Tensor tOrP = make_tensor_like<ElementV>(tOrP_acc);
-                convert_type_out(tOrP_acc, tOrP);
-                if constexpr (Is_FP8 && V_colmajor)
-                {
-                    flash::permute_Aregs_fp8(tOrP);
-                }
-                if constexpr (!MmaPV_is_RS)
-                {
-                    write_P_to_smem(tOrP);
-                }
-                if constexpr (!MmaPV_is_RS)
-                {
-                    arrive_on_P_write_barrier();
-                }
+                        softmax.template online_softmax</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
+                    } else {
+                        softmax.template online_softmax_dequantize</*Is_first=*/true, /*Check_inf=*/true>(tSrS_ambiguous_type, tSrS);
+                    }
+                    if constexpr (Is_FP8 && !V_colmajor)
+                    {
+                        flash::permute_Cregs_fp8(tSrS);
+                    }
+                    Tensor tOrP_acc = make_tensor(tSrS.data(), flash::convert_layout_acc_Aregs<TiledMmaPV>(tSrS.layout()));
+                    Tensor tOrP = make_tensor_like<ElementV>(tOrP_acc);
+                    convert_type_out(tOrP_acc, tOrP);
+                    if constexpr (Is_FP8 && V_colmajor)
+                    {
+                        flash::permute_Aregs_fp8(tOrP);
+                    }
+                    if constexpr (!MmaPV_is_RS)
+                    {
+                        write_P_to_smem(tOrP);
+                    }
+                    if constexpr (!MmaPV_is_RS)
+                    {
+                        arrive_on_P_write_barrier();
+                    }
                 if constexpr (!Is_skipable){ --n_block; }
 
                 // Need to initialize tOrO in the case of RescaleOBeforeGemm where we will scale tOrO even in the 1st iter

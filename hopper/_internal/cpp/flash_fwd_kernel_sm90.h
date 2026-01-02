@@ -96,6 +96,11 @@ namespace flash
         static constexpr uint32_t MaxThreadsPerBlock = CUTE_STATIC_V(size(TiledMmaPV{})) + (NumLoadWarpGroups * cutlass::NumThreadsPerWarpGroup);
         static constexpr uint32_t MinBlocksPerMultiprocessor = 1;
         static_assert(NumMmaWarpGroups == 1 || NumMmaWarpGroups == 2 || NumMmaWarpGroups == 3);
+        
+        // Extract kBlockM from TileShape_MNK_PV for validation
+        static constexpr int kBlockM = CUTE_STATIC_V(get<0>(TileShape_MNK_PV{}));
+        // Assert that kBlockM=256 is only used with INT8 (enforced in mainloop, but verify here too)
+        static_assert(kBlockM != 256 || Is_INT8, "kBlockM=256 is only supported with INT8");
 
         // when using skip optimizations we need 16 registers for the producer
         static constexpr uint32_t SkipOptimizationRegisterRequirement = 0;

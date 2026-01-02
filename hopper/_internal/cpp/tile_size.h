@@ -80,6 +80,7 @@ constexpr std::tuple<int, int, bool, bool> tile_size_fwd_sm90(
                 // }
                 return {192, is_local || paged_kv_non_TMA ? 128 : 144, false, true && maybe_intra_wg_overlap};
             } else if (headdim <= 128) {
+                // kBlockM=256 is only used with INT8 and forces 2 warpgroups in the MMA
                 return {256, 128, false, true && maybe_intra_wg_overlap};
             } else if (headdim <= 192) {
                 return {128, paged_kv_non_TMA || is_local ? 96 : (headdim_v <= 128 ? 128 : 112), true, true && maybe_intra_wg_overlap};  // 128 x 112 hits the limit of smem
