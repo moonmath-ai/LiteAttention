@@ -98,24 +98,26 @@ namespace flash
 
         static constexpr uint32_t NumLoadWarpGroups = 1;
         // we say derived only because the name NumMmaThreads is already taken in the Operator function below
-        static constexpr uint32_t NumMmaThreads = (kBlockM == 256) ? (2 * cutlass::NumThreadsPerWarpGroup) : CUTE_STATIC_V(size(TiledMmaPV{}));
+        // static constexpr uint32_t NumMmaThreads = (kBlockM == 256) ? (2 * cutlass::NumThreadsPerWarpGroup) : CUTE_STATIC_V(size(TiledMmaPV{}));
+        static constexpr int NumMmaThreads = CollectiveMainloop::NumMmaThreads;
         // static constexpr uint32_t NumMmaWarpGroups = CUTE_STATIC_V(size(TiledMmaPV{})) / cutlass::NumThreadsPerWarpGroup;
-        static constexpr uint32_t NumMmaWarpGroups = NumMmaThreads / cutlass::NumThreadsPerWarpGroup;
+        // static constexpr uint32_t NumMmaWarpGroups = NumMmaThreads / cutlass::NumThreadsPerWarpGroup;
+        static constexpr int NumMmaWarpGroups = CollectiveMainloop::NumMmaWarpGroups;
         // static constexpr uint32_t MaxThreadsPerBlock = CUTE_STATIC_V(size(TiledMmaPV{})) + (NumLoadWarpGroups * cutlass::NumThreadsPerWarpGroup);
-        static constexpr uint32_t MaxThreadsPerBlock = NumMmaThreads + (NumLoadWarpGroups * cutlass::NumThreadsPerWarpGroup);
-        static constexpr uint32_t MinBlocksPerMultiprocessor = 1;
+        static constexpr int MaxThreadsPerBlock = NumMmaThreads + (NumLoadWarpGroups * cutlass::NumThreadsPerWarpGroup);
+        static constexpr int MinBlocksPerMultiprocessor = 1;
         static_assert(NumMmaWarpGroups == 1 || NumMmaWarpGroups == 2 || NumMmaWarpGroups == 3);
 
         // when using skip optimizations we need 16 registers for the producer
-        static constexpr uint32_t SkipOptimizationRegisterRequirement = 0;
+        static constexpr int SkipOptimizationRegisterRequirement = 0;
 
-        static constexpr uint32_t constexpr_max(uint32_t a, uint32_t b) { return (a > b) ? a : b; }
-        static constexpr uint32_t constexpr_min(uint32_t a, uint32_t b) { return (a < b) ? a : b; }
+        static constexpr int constexpr_max(int a, int b) { return (a > b) ? a : b; }
+        static constexpr int constexpr_min(int a, int b) { return (a < b) ? a : b; }
 
         // Register requirement for Load and Math WGs
         // If we use cp.async to load K and V, we need more registers for the producer WG.
-        static constexpr uint32_t LoadRegisterRequirement = constexpr_max((NumMmaWarpGroups == 1 ? 56 : (NumMmaWarpGroups == 2 ? (Use_TMA_KV ? 24 : 40) : 32)) - SkipOptimizationRegisterRequirement, 24);
-        static constexpr uint32_t MmaRegisterRequirement = (NumMmaWarpGroups == 1 ? 256 : (NumMmaWarpGroups == 2 ? (Use_TMA_KV ? 240 : 232) : 160));
+        static constexpr int LoadRegisterRequirement = constexpr_max((NumMmaWarpGroups == 1 ? 56 : (NumMmaWarpGroups == 2 ? (Use_TMA_KV ? 24 : 40) : 32)) - SkipOptimizationRegisterRequirement, 24);
+        static constexpr int MmaRegisterRequirement = (NumMmaWarpGroups == 1 ? 256 : (NumMmaWarpGroups == 2 ? (Use_TMA_KV ? 240 : 232) : 160));
 
         // If you want to print from the producer warp, you'd need to increase the number of registers
         // Otherwise you'll get CUDA error.

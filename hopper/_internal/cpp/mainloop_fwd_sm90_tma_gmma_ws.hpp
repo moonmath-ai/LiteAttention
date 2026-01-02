@@ -181,8 +181,11 @@ namespace flash
             cute::GMMA::rs_op_selector<ElementV, ElementV, ElementAccum, TileShape_MNK_PV, GMMA::Major::K, MmaMajorV>(),
             AtomLayoutPV{}));
 
-        static constexpr int NumMmaThreadsQK = size(TiledMmaQK{});
-        static constexpr int NumMmaThreads = size(TiledMmaPV{});
+        static constexpr int NumMmaThreads = (kBlockM == 256) ? (2 * cutlass::NumThreadsPerWarpGroup) : CUTE_STATIC_V(size(TiledMmaPV{}));
+        static constexpr int NumMmaThreadsQK = (kBlockM == 256) ? NumMmaThreads : CUTE_STATIC_V(size(TiledMmaQK{}));
+
+        // static constexpr int NumMmaThreadsQK = size(TiledMmaQK{});
+        // static constexpr int NumMmaThreads = size(TiledMmaPV{});
         static constexpr int NumProducerThreads = !Transpose_V && Use_TMA_KV && Use_TMA_Q ? cutlass::NumThreadsPerWarp : cutlass::NumThreadsPerWarpGroup;
         static_assert(NumMmaThreadsQK % cutlass::NumThreadsPerWarpGroup == 0);
         static_assert(NumMmaThreads % cutlass::NumThreadsPerWarpGroup == 0);
