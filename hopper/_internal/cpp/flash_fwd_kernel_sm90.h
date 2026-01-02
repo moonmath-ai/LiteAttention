@@ -90,17 +90,21 @@ namespace flash
         using TileScheduler = TileScheduler_;
         using TileSchedulerArguments = typename flash::TileSchedulerArguments;
         using TileSchedulerParams = typename TileScheduler::Params;
-
-        static constexpr uint32_t NumLoadWarpGroups = 1;
-        static constexpr uint32_t NumMmaWarpGroups = CUTE_STATIC_V(size(TiledMmaPV{})) / cutlass::NumThreadsPerWarpGroup;
-        static constexpr uint32_t MaxThreadsPerBlock = CUTE_STATIC_V(size(TiledMmaPV{})) + (NumLoadWarpGroups * cutlass::NumThreadsPerWarpGroup);
-        static constexpr uint32_t MinBlocksPerMultiprocessor = 1;
-        static_assert(NumMmaWarpGroups == 1 || NumMmaWarpGroups == 2 || NumMmaWarpGroups == 3);
         
         // Extract kBlockM from TileShape_MNK_PV for validation
         static constexpr int kBlockM = CUTE_STATIC_V(get<0>(TileShape_MNK_PV{}));
         // Assert that kBlockM=256 is only used with INT8 (enforced in mainloop, but verify here too)
         static_assert(kBlockM != 256 || Is_INT8, "kBlockM=256 is only supported with INT8");
+
+        static constexpr uint32_t NumLoadWarpGroups = 1;
+        // we say derived only because the name NumMmaThreads is already taken in the Operator function below
+        static constexpr uint32_t NumMmaThreads = (kBlockM == 256) ? (2 * cutlass::NumThreadsPerWarpGroup) : CUTE_STATIC_V(size(TiledMmaPV{}));
+        // static constexpr uint32_t NumMmaWarpGroups = CUTE_STATIC_V(size(TiledMmaPV{})) / cutlass::NumThreadsPerWarpGroup;
+        static constexpr uint32_t NumMmaWarpGroups = NumMmaThreads / cutlass::NumThreadsPerWarpGroup;
+        // static constexpr uint32_t MaxThreadsPerBlock = CUTE_STATIC_V(size(TiledMmaPV{})) + (NumLoadWarpGroups * cutlass::NumThreadsPerWarpGroup);
+        static constexpr uint32_t MaxThreadsPerBlock = NumMmaThreads + (NumLoadWarpGroups * cutlass::NumThreadsPerWarpGroup);
+        static constexpr uint32_t MinBlocksPerMultiprocessor = 1;
+        static_assert(NumMmaWarpGroups == 1 || NumMmaWarpGroups == 2 || NumMmaWarpGroups == 3);
 
         // when using skip optimizations we need 16 registers for the producer
         static constexpr uint32_t SkipOptimizationRegisterRequirement = 0;
@@ -233,9 +237,9 @@ namespace flash
         operator()(Params const &params, char *smem_buf)
         {
 
-            static constexpr int NumMmaThreads = NumMmaWarpGroups * cutlass::NumThreadsPerWarpGroup;
+            // static constexpr int NumMmaThreads = NumMmaWarpGroups * cutlass::NumThreadsPerWarpGroup;
             static constexpr int MmaThreadOffset = NumLoadWarpGroups * cutlass::NumThreadsPerWarpGroup;
-            static constexpr int kBlockM = get<0>(TileShape_MNK_PV{});
+            // static constexpr int kBlockM = get<0>(TileShape_MNK_PV{});
 
             using MainloopPipelineK = typename CollectiveMainloop::MainloopPipelineK;
             using MainloopPipelineV = typename CollectiveMainloop::MainloopPipelineV;
