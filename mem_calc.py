@@ -128,6 +128,102 @@ def mem_analysis(m, n, k, q_dtype=torch.int8, k_dtype=torch.int8, v_dtype=torch.
     
 
 
+def mem_analysis_table(m, n, k, q_dtype=torch.int8, k_dtype=torch.int8, v_dtype=torch.float16):
+    """
+    Print an analysis table for all combinations of MmaPV_is_RS, isIntraWGOverlap, and strictly_two_wg.
+    """
+    # Collect data for all combinations
+    rows = []
+    
+    for MmaPV_is_RS in [False, True]:
+        for isIntraWGOverlap in [False, True]:
+            for strictly_two_wg in [False, True]:
+                try:
+                    mem_bytes = mem_calc(m, n, k, q_dtype, k_dtype, v_dtype, MmaPV_is_RS, isIntraWGOverlap, strictly_two_wg)
+                    rmem, smem = mem_bytes
+                    ratio = mem_bytes / torch.tensor([rmem_limit, smem_limit])
+                    
+                    num_wg = 2 if strictly_two_wg else m // 64
+                    registers_per_mma_thread = rmem / (WARP_SIZE * BYTES_PER_REGISTER * WARPS_PER_WG * num_wg)
+                    
+                    remaining_registers = (rmem_per_sub_partition - (rmem / NUM_SUB_PARTITIONS)) / BYTES_PER_REGISTER
+                    remaining_smem = smem_limit - smem
+                    
+                    granularity_qk = granularity_for_dtype(q_dtype)
+                    num_ts_ops_qk = (k + granularity_qk - 1) // granularity_qk
+                    num_ts_ops_strictly_two_wg_string = f"{m // 128} X " if strictly_two_wg else ""
+                    qk_ops_str = f"{num_ts_ops_strictly_two_wg_string}{num_ts_ops_qk} X m{64}n{n}k{granularity_qk}"
+                    
+                    granularity_pv = granularity_for_dtype(v_dtype)
+                    num_ts_ops_pv = (n + granularity_pv - 1) // granularity_pv
+                    pv_ops_str = f"{num_ts_ops_strictly_two_wg_string}{num_ts_ops_pv} X m{64}n{k}k{granularity_pv}"
+                    
+                    rows.append({
+                        'MmaPV_is_RS': MmaPV_is_RS,
+                        'isIntraWGOverlap': isIntraWGOverlap,
+                        'strictly_two_wg': strictly_two_wg,
+                        'rmem_ratio': ratio[0].item(),
+                        'smem_ratio': ratio[1].item(),
+                        'registers_per_mma_thread': int(registers_per_mma_thread),
+                        'remaining_registers': int(remaining_registers),
+                        'remaining_smem': int(remaining_smem),
+                        'qk_ops': qk_ops_str,
+                        'pv_ops': pv_ops_str,
+                        'valid': True
+                    })
+                except AssertionError:
+                    rows.append({
+                        'MmaPV_is_RS': MmaPV_is_RS,
+                        'isIntraWGOverlap': isIntraWGOverlap,
+                        'strictly_two_wg': strictly_two_wg,
+                        'rmem_ratio': None,
+                        'smem_ratio': None,
+                        'registers_per_mma_thread': None,
+                        'remaining_registers': None,
+                        'remaining_smem': None,
+                        'qk_ops': None,
+                        'pv_ops': None,
+                        'valid': False
+                    })
+    
+    # Print table header
+    print(f"\nMemory Analysis Table for m={m}, n={n}, k={k}")
+    print(f"q_dtype={q_dtype}, k_dtype={k_dtype}, v_dtype={v_dtype}\n")
+    
+    # Format table
+    header = f"{'MmaPV_is_RS':<12} {'isIntraWG':<10} {'strict_2wg':<10} {'rmem/lim':<10} {'smem/lim':<10} {'reg/mma':<10} {'rem_reg':<10} {'rem_smem':<12} {'QK ops':<25} {'PV ops':<25}"
+    print(header)
+    print("-" * len(header))
+    
+    for row in rows:
+        if row['valid']:
+            mma_str = str(row['MmaPV_is_RS'])
+            intra_str = str(row['isIntraWGOverlap'])
+            strict_str = str(row['strictly_two_wg'])
+            rmem_str = f"{row['rmem_ratio']:.2f}"
+            smem_str = f"{row['smem_ratio']:.2f}"
+            reg_str = str(row['registers_per_mma_thread'])
+            rem_reg_str = str(row['remaining_registers'])
+            rem_smem_str = str(row['remaining_smem'])
+            qk_str = row['qk_ops']
+            pv_str = row['pv_ops']
+        else:
+            mma_str = str(row['MmaPV_is_RS'])
+            intra_str = str(row['isIntraWGOverlap'])
+            strict_str = str(row['strictly_two_wg'])
+            rmem_str = "INVALID"
+            smem_str = "INVALID"
+            reg_str = "INVALID"
+            rem_reg_str = "INVALID"
+            rem_smem_str = "INVALID"
+            qk_str = "INVALID"
+            pv_str = "INVALID"
+        
+        print(f"{mma_str:<12} {intra_str:<10} {strict_str:<10} {rmem_str:<10} {smem_str:<10} {reg_str:<10} {rem_reg_str:<10} {rem_smem_str:<12} {qk_str:<25} {pv_str:<25}")
+    
+    print()
+
+
 def config_score(m, n, k, MmaPV_is_RS=False, isIntraWGOverlap=False):
     mem_bytes = mem_calc(m=m, n=n, k=k, MmaPV_is_RS=MmaPV_is_RS, isIntraWGOverlap=isIntraWGOverlap)
     rmem, smem = mem_bytes
@@ -166,3 +262,4 @@ def top_k_configs(k, top_k=3):
     
     # Return top k configs
     return configs[:top_k]
+
