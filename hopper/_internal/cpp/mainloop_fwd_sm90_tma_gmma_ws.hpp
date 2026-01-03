@@ -197,7 +197,6 @@ namespace flash
         using SmemLayoutAtomQ = decltype(cutlass::gemm::collective::detail::ss_smem_selector<GMMA::Major::K, Element,
                                                                                              decltype(cute::get<0>(TileShape_MNK{})), decltype(cute::get<2>(TileShape_MNK{}))>());
         using SmemLayoutQ = decltype(tile_to_shape(SmemLayoutAtomQ{}, select<0, 2>(TileShape_MNK{})));
-
         using SmemLayoutAtomK = decltype(cutlass::gemm::collective::detail::ss_smem_selector<GMMA::Major::K, Element,
                                                                                              decltype(cute::get<1>(TileShape_MNK{})), decltype(cute::get<2>(TileShape_MNK{}))>());
         using SmemLayoutK = decltype(tile_to_shape(
@@ -1335,12 +1334,10 @@ namespace flash
                 }
             }
 
-            // int warp_group_idx = __shfl_sync(0xFFFFFFFF, thread_idx / cutlass::NumThreadsPerWarpGroup, 0);
-
-            Tensor sQ_full = make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_q.data()), SmemLayoutQ{}); // (kBlockM, kHeadSize)
+            Tensor sQ = make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_q.data()), SmemLayoutQ{}); // (kBlockM, kHeadSize)
             Tensor sK = make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_k.data()), SmemLayoutK{});      // (kBlockN, kHeadSize, kStages)
             Tensor sV = make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_v.data()), SmemLayoutVtMma{});  // (kHeadSize, kBlockN, kStages)
-            Tensor sP_full = [&]
+            Tensor sP = [&]
             {
                 if constexpr (MmaPV_is_RS)
                 {
@@ -1364,58 +1361,9 @@ namespace flash
                     return make_tensor(make_smem_ptr(static_cast<float *>(nullptr)), SmemLayoutScale{});
                 }
             }();
-            Tensor sQv_full = make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_qv.data()), SmemLayoutQv{});
+            Tensor sQv = make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_qv.data()), SmemLayoutQv{});
             // SmemLayoutVMmaQV now uses ElementV to match TiledMmaQV, and smem_v also uses ElementV
             Tensor sVMmaQV = make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_v.data()), SmemLayoutVMmaQV{});
-
-            // When kBlockM == 256, split into 2 parts of 128 rows each for 2 warp groups
-            // Each warp group processes 128 rows instead of the usual 64 rows
-            Tensor sQ = [&]()
-            {
-                if constexpr (StrictlyTwoWG)
-                {
-                    // Slice sQ_full along M dimension: warp_group_idx 0 gets rows 0-127, warp_group_idx 1 gets rows 128-255
-                    constexpr int M_per_wg = 128;
-                    int m_offset = warp_group_idx * M_per_wg;
-                    // Use local_tile to create a view of 128 rows starting at m_offset
-                    // local_tile(tensor, tile_shape, tile_coord) creates a tile view
-                    return local_tile(sQ_full, make_shape(Int<M_per_wg>{}, _), make_coord(warp_group_idx, _0{}));
-                }
-                else
-                {
-                    return sQ_full;
-                }
-            }();
-            Tensor sP = [&]()
-            {
-                if constexpr (StrictlyTwoWG)
-                {
-                    // Slice sP_full along M dimension: warp_group_idx 0 gets rows 0-127, warp_group_idx 1 gets rows 128-255
-                    constexpr int M_per_wg = 128;
-                    int m_offset = warp_group_idx * M_per_wg;
-                    // Use local_tile to create a view of 128 rows starting at m_offset
-                    return local_tile(sP_full, make_shape(Int<M_per_wg>{}, _), make_coord(warp_group_idx, _0{}));
-                }
-                else
-                {
-                    return sP_full;
-                }
-            }();
-            Tensor sQv = [&]()
-            {
-                if constexpr (StrictlyTwoWG)
-                {
-                    // Slice sQv_full along M dimension: warp_group_idx 0 gets rows 0-127, warp_group_idx 1 gets rows 128-255
-                    constexpr int M_per_wg = 128;
-                    int m_offset = warp_group_idx * M_per_wg;
-                    // Use local_tile to create a view of 128 rows starting at m_offset
-                    return local_tile(sQv_full, make_shape(Int<M_per_wg>{}, _), make_coord(warp_group_idx, _0{}));
-                }
-                else
-                {
-                    return sQv_full;
-                }
-            }();
 
             if constexpr (!MmaQK_is_RS)
             {
