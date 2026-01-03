@@ -55,8 +55,8 @@ def granularity_for_dtype(dtype):
 def assert_valid_dim(dim, divisible_by, dim_name):
     assert dim % divisible_by == 0, dim_name + " must be divisible by " + str(divisible_by)
 
-def assert_valid_m(m, dim_name):
-    assert_valid_dim(m, 64, dim_name)
+def assert_valid_m(m, dim_name, strictly_two_wg=False):
+    assert_valid_dim(m, 128 if strictly_two_wg else 64, dim_name)
 
 def assert_valid_n(n, dim_name):
     assert_valid_dim(n, 8, dim_name)
@@ -64,7 +64,7 @@ def assert_valid_n(n, dim_name):
 def assert_valid_k(k, dtype, dim_name):
     assert_valid_dim(k, granularity_for_dtype(dtype), dim_name)
 
-def assert_valid_MNK(m, n, k, q_dtype, k_dtype, v_dtype):
+def assert_valid_MNK(m, n, k, q_dtype, k_dtype, v_dtype, strictly_two_wg=False):
     assert_valid_m(m, "m")
     assert_valid_n(n, "n")
     assert_valid_k(k, q_dtype, "k")
@@ -74,13 +74,17 @@ def assert_valid_MNK(m, n, k, q_dtype, k_dtype, v_dtype):
 
 # Returns the number of BYTES needed for registers and shared memory
 def mem_calc(m, n, k, q_dtype=torch.int8, k_dtype=torch.int8, v_dtype=torch.float16, 
-             MmaPV_is_RS=False, isIntraWGOverlap=False):
+             MmaPV_is_RS=False, isIntraWGOverlap=False, strictly_two_wg=False):
 
     q_size = memQ(m, n, k, q_dtype)
     k_size = memK(m, n, k, k_dtype)
     v_size = memV(m, n, k, v_dtype)
-    qk_size = memQK(m, n, k, torch.int32)
-    p_size = memP(m, n, k, torch.float16)
+    # qk_size = memQK(m, n, k, torch.int32)
+    
+    # m_for_qk = 64 * 2 if strictly_two_wg else m
+    m_for_qk = m // 2 if strictly_two_wg else m
+    qk_size = memQK(m_for_qk, n, k, torch.int32)
+    p_size = memP(m, n, k, torch.bfloat16)
     o_size = memO(m, n, k, torch.float32)
 
     rmem = qk_size + o_size  # the results of wgmma op always in registers
@@ -95,12 +99,13 @@ def mem_calc(m, n, k, q_dtype=torch.int8, k_dtype=torch.int8, v_dtype=torch.floa
 
 
 def mem_analysis(m, n, k, q_dtype=torch.int8, k_dtype=torch.int8, v_dtype=torch.float16, 
-                 MmaPV_is_RS=False, isIntraWGOverlap=False, max_wg_num=3):
-    mem_bytes = mem_calc(m, n, k, q_dtype, k_dtype, v_dtype, MmaPV_is_RS, isIntraWGOverlap)
+                 MmaPV_is_RS=False, isIntraWGOverlap=False, strictly_two_wg=False):
+    mem_bytes = mem_calc(m, n, k, q_dtype, k_dtype, v_dtype, MmaPV_is_RS, isIntraWGOverlap, strictly_two_wg)
     rmem, smem = mem_bytes
     ratio = mem_bytes / torch.tensor([rmem_limit, smem_limit])
     print(f"rmem/rmem_limit: {ratio[0]:.2f}, smem/smem_limit: {ratio[1]:.2f}")
-    num_wg = m // 64
+    # num_wg = m // 64
+    num_wg = 2 if strictly_two_wg else m // 64
     registers_per_mma_thread = rmem / (WARP_SIZE * BYTES_PER_REGISTER * WARPS_PER_WG * num_wg)
     print(f"registers needed to be allocated for each mma thread: {int(registers_per_mma_thread)}")
 
@@ -112,13 +117,14 @@ def mem_analysis(m, n, k, q_dtype=torch.int8, k_dtype=torch.int8, v_dtype=torch.
     # tensor cores operations for QK and PV (per warpgroup)
     granularity_qk = granularity_for_dtype(q_dtype)
     num_ts_ops_qk = (k + granularity_qk - 1) // granularity_qk
-    print(f"tensor cores operations for QK: {num_ts_ops_qk} X m{64}n{n}k{granularity_qk}")
+    num_ts_ops_strictly_two_wg_string = f"{m // 128} X " if strictly_two_wg else ""
+    print(f"tensor cores operations for QK: {num_ts_ops_strictly_two_wg_string}{num_ts_ops_qk} X m{64}n{n}k{granularity_qk}")
 
     granularity_pv = granularity_for_dtype(v_dtype)
     num_ts_ops_pv = (n + granularity_pv - 1) // granularity_pv
-    print(f"tensor cores operations for PV: {num_ts_ops_pv} X m{64}n{k}k{granularity_pv}")
+    print(f"tensor cores operations for PV: {num_ts_ops_strictly_two_wg_string}{num_ts_ops_pv} X m{64}n{k}k{granularity_pv}")
 
-    assert_valid_MNK(m, n, k, q_dtype, k_dtype, v_dtype)
+    assert_valid_MNK(m, n, k, q_dtype, k_dtype, v_dtype, strictly_two_wg)
     
 
 
@@ -160,4 +166,3 @@ def top_k_configs(k, top_k=3):
     
     # Return top k configs
     return configs[:top_k]
-
