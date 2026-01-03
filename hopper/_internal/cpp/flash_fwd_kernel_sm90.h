@@ -93,8 +93,6 @@ namespace flash
         
         // Extract kBlockM from TileShape_MNK_PV for validation
         static constexpr int kBlockM = CUTE_STATIC_V(get<0>(TileShape_MNK_PV{}));
-        // Assert that kBlockM=256 is only used with INT8 (enforced in mainloop, but verify here too)
-        static_assert(kBlockM != 256 || Is_INT8, "kBlockM=256 is only supported with INT8");
 
         static constexpr uint32_t NumLoadWarpGroups = 1;
         // we say derived only because the name NumMmaThreads is already taken in the Operator function below

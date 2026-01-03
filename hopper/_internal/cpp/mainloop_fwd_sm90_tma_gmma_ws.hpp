@@ -148,12 +148,14 @@ namespace flash
         // Slightly faster in this case to have WG1 use RS instead of SS to avoid waiting for the P smem write
         static constexpr bool MmaPV_use_RS_WG1 = !MmaPV_is_RS && kHeadDim == 64 && kHeadDimV == 512;
 
+        static constexpr bool StrictlyTwoWG = kBlockM == 256;
+
         // DOR: is it (128 / 64 = 2, 1, 1)? it's not making sense to me...
         // oh! it's because we do the atom 2 times for each warpgroup!
         // Assert that kBlockM=256 is only used with INT8 and requires specific conditions
-        static_assert(kBlockM != 256 || Is_INT8, "kBlockM=256 is only supported with INT8");
-        static_assert(kBlockM != 256 || IntraWGOverlap, "kBlockM=256 requires IntraWGOverlap");
-        static_assert(kBlockM != 256 || !MmaPV_is_RS, "kBlockM=256 requires MmaPV_is_RS == false");
+        static_assert(!StrictlyTwoWG || Is_INT8, "kBlockM=256 is only supported with INT8");
+        static_assert(!StrictlyTwoWG || IntraWGOverlap, "kBlockM=256 requires IntraWGOverlap");
+        static_assert(!StrictlyTwoWG || !MmaPV_is_RS, "kBlockM=256 requires MmaPV_is_RS == false");
         using AtomLayoutQK = Layout<Shape<Int<kBlockM / 64>, _1, _1>>;
         using TiledMmaQK = decltype(cute::make_tiled_mma(
             std::conditional_t<
@@ -181,8 +183,8 @@ namespace flash
             cute::GMMA::rs_op_selector<ElementV, ElementV, ElementAccum, TileShape_MNK_PV, GMMA::Major::K, MmaMajorV>(),
             AtomLayoutPV{}));
 
-        static constexpr int NumMmaThreads = (kBlockM == 256) ? (2 * cutlass::NumThreadsPerWarpGroup) : CUTE_STATIC_V(size(TiledMmaPV{}));
-        static constexpr int NumMmaThreadsQK = (kBlockM == 256) ? NumMmaThreads : CUTE_STATIC_V(size(TiledMmaQK{}));
+        static constexpr int NumMmaThreads = StrictlyTwoWG ? (2 * cutlass::NumThreadsPerWarpGroup) : CUTE_STATIC_V(size(TiledMmaPV{}));
+        static constexpr int NumMmaThreadsQK = StrictlyTwoWG ? NumMmaThreads : CUTE_STATIC_V(size(TiledMmaQK{}));
 
         // static constexpr int NumMmaThreadsQK = size(TiledMmaQK{});
         // static constexpr int NumMmaThreads = size(TiledMmaPV{});
@@ -1370,7 +1372,7 @@ namespace flash
             // Each warp group processes 128 rows instead of the usual 64 rows
             Tensor sQ = [&]()
             {
-                if constexpr (kBlockM == 256)
+                if constexpr (StrictlyTwoWG)
                 {
                     // Slice sQ_full along M dimension: warp_group_idx 0 gets rows 0-127, warp_group_idx 1 gets rows 128-255
                     constexpr int M_per_wg = 128;
@@ -1386,7 +1388,7 @@ namespace flash
             }();
             Tensor sP = [&]()
             {
-                if constexpr (kBlockM == 256)
+                if constexpr (StrictlyTwoWG)
                 {
                     // Slice sP_full along M dimension: warp_group_idx 0 gets rows 0-127, warp_group_idx 1 gets rows 128-255
                     constexpr int M_per_wg = 128;
@@ -1401,7 +1403,7 @@ namespace flash
             }();
             Tensor sQv = [&]()
             {
-                if constexpr (kBlockM == 256)
+                if constexpr (StrictlyTwoWG)
                 {
                     // Slice sQv_full along M dimension: warp_group_idx 0 gets rows 0-127, warp_group_idx 1 gets rows 128-255
                     constexpr int M_per_wg = 128;
