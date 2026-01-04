@@ -1886,7 +1886,7 @@ namespace flash
                 {
                     n_block = skip_reader.next_n_block();
                 }
-                flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
+                flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ(_, _, 0), tSrK(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
                 warpgroup_wait<0>();
                 if constexpr (Is_INT8)
                 {
@@ -1898,13 +1898,13 @@ namespace flash
                 {
                     shared_storage.pipelines.barrier_Qv.wait(work_idx % 2);
                     consumer_wait(pipeline_v, smem_pipe_read);
-                    flash::gemm</*zero_init=*/false, /*wg_wait=*/0>(tiled_mma_qv, tSrQv, tSrV(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
+                    flash::gemm</*zero_init=*/false, /*wg_wait=*/0>(tiled_mma_qv, tSrQv(_, _, 0), tSrV(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
                 }
                 if constexpr (!Is_INT8)
                 {
                     scoremod_premask_fn(tSrS_ambiguous_type);
                 }
-                mask.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS_ambiguous_type, m_block, n_block);
+                mask.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local, inner_idx>(tSrS_ambiguous_type, m_block, n_block);
 
                 // Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
                 Tensor scores_scale = [&]
@@ -1912,12 +1912,12 @@ namespace flash
                     // TODO: make sure we allowed to do max reduction on the int32_t
                     if constexpr (Is_skipable)
                     {
-                        return softmax.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, /*Is_first=*/true, true>(
+                        return softmax.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, /*Is_first=*/true, true, inner_idx>(
                             tSrS_ambiguous_type, params.qk_skip_mask_args.thr, skip_reader, m_block);
                     }
                     else
                     {
-                        return softmax.template max_get_scale</*Is_first=*/true, /*Check_inf=*/true>(tSrS_ambiguous_type);
+                        return softmax.template max_get_scale</*Is_first=*/true, /*Check_inf=*/true, inner_idx>(tSrS_ambiguous_type);
                     }
                 }();
                 // Don't need to store scales to send to WG1 (in the case of LargeHeadDimV) since it's 1.f
@@ -1929,11 +1929,11 @@ namespace flash
                 {
                     // interesting! if we use tSrS_ambiguous_type here the result is incorrect!
                     // AND LA without optimization becomes faster then FA3 baseline!
-                    softmax.template online_softmax</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
+                    softmax.template online_softmax</*Is_first=*/true, /*Check_inf=*/true, inner_idx>(tSrS);
                 }
                 else
                 {
-                    softmax.template online_softmax_dequantize</*Is_first=*/true, /*Check_inf=*/true>(tSrS_ambiguous_type, tSrS);
+                    softmax.template online_softmax_dequantize</*Is_first=*/true, /*Check_inf=*/true, inner_idx>(tSrS_ambiguous_type, tSrS);
                 }
                 if constexpr (Is_FP8 && !V_colmajor)
                 {
@@ -1948,7 +1948,7 @@ namespace flash
                 }
                 if constexpr (!MmaPV_is_RS)
                 {
-                    write_P_to_smem(tOrP);
+                    write_P_to_smem(tOrP, inner_idx);
                 }
                 if constexpr (!MmaPV_is_RS)
                 {
@@ -1999,11 +1999,11 @@ namespace flash
                         has_more = skip_reader.has_more(new_n_block);
                     }
 
-                    flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
+                    flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ(_, _, inner_idx), tSrK(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
 
                     if constexpr (RescaleOBeforeGemm)
                     {
-                        softmax.rescale_o(tOrO, scores_scale);
+                        softmax.rescale_o(tOrO(_, _, inner_idx), scores_scale);
                     }
                     if constexpr (!HasQv)
                     {
@@ -2012,7 +2012,7 @@ namespace flash
                             consumer_wait(pipeline_v, smem_pipe_read_v);
                         }
                     }
-                    flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP), tOrV(_, _, _, smem_pipe_read_v.index()), tOrO);
+                    flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP(_, _, inner_idx)), tOrV(_, _, _, smem_pipe_read_v.index()), tOrO(_, _, inner_idx));
                     warp_scheduler_barrier_arrive();
 
                     if constexpr (Is_INT8)
@@ -2027,7 +2027,7 @@ namespace flash
                         warpgroup_wait<0>();
                         pipeline_v.consumer_release(smem_pipe_read_v); // release V
                         consumer_wait(pipeline_v, smem_pipe_read);
-                        flash::gemm</*zero_init=*/false, /*wg_wait=*/0>(tiled_mma_qv, tSrQv, tSrV(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
+                        flash::gemm</*zero_init=*/false, /*wg_wait=*/0>(tiled_mma_qv, tSrQv(_, _, inner_idx), tSrV(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
                     }
                     if constexpr (!Is_INT8)
                     {
@@ -2037,13 +2037,13 @@ namespace flash
                     if constexpr (Is_skipable)
                     {
                         cute::copy(
-                            softmax.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, /*Is_first=*/false, Check_inf>(
+                            softmax.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, /*Is_first=*/false, Check_inf, inner_idx>(
                                 tSrS_ambiguous_type, params.qk_skip_mask_args.thr, skip_reader, m_block),
                             scores_scale);
                     }
                     else
                     {
-                        cute::copy(softmax.template max_get_scale</*Is_first=*/false, Check_inf>(tSrS_ambiguous_type), scores_scale);
+                        cute::copy(softmax.template max_get_scale</*Is_first=*/false, Check_inf, inner_idx>(tSrS_ambiguous_type), scores_scale);
                     }
 
                     if constexpr (LargeHeadDimV)
@@ -2054,11 +2054,11 @@ namespace flash
                     auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
                     if constexpr (!Is_INT8)
                     {
-                        softmax.template online_softmax</*Is_first=*/false, Check_inf>(tSrS);
+                        softmax.template online_softmax</*Is_first=*/false, Check_inf, inner_idx>(tSrS);
                     }
                     else
                     {
-                        softmax.template online_softmax_dequantize</*Is_first=*/false, Check_inf>(tSrS_ambiguous_type, tSrS);
+                        softmax.template online_softmax_dequantize</*Is_first=*/false, Check_inf, inner_idx>(tSrS_ambiguous_type, tSrS);
                     }
                     if constexpr (!HasQv)
                     {
@@ -2076,11 +2076,11 @@ namespace flash
                     }
                     if constexpr (!MmaPV_is_RS)
                     {
-                        write_P_to_smem(tOrP);
+                        write_P_to_smem(tOrP, inner_idx);
                     }
                     if constexpr (!RescaleOBeforeGemm)
                     {
-                        softmax.rescale_o(tOrO, scores_scale);
+                        softmax.rescale_o(tOrO(_, _, inner_idx), scores_scale);
                     }
                     if constexpr (!MmaPV_is_RS)
                     {
@@ -2148,16 +2148,16 @@ namespace flash
                 cutlass::arch::NamedBarrier::arrive(NumMmaThreadsQK + (Use_TMA_Q ? cutlass::NumThreadsPerWarp : NumProducerThreads), static_cast<uint32_t>(FwdNamedBarriers::QueryEmpty) /*id*/);
                 if constexpr (RescaleOBeforeGemm)
                 {
-                    softmax.rescale_o(tOrO, scores_scale);
+                    softmax.rescale_o(tOrO(_, _, inner_idx), scores_scale);
                 }
                 if constexpr (!HasQv)
                 {
                     consumer_wait(pipeline_v, smem_pipe_read);
                 }
-                flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP), tOrV(_, _, _, smem_pipe_read.index()), tOrO);
+                flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP(_, _, inner_idx)), tOrV(_, _, _, smem_pipe_read.index()), tOrO(_, _, inner_idx));
                 // For INT8, V is bf16, so no v_descale needed (use Is_FP8)
                 float const v_descale = !Is_FP8 || params.ptr_v_descale == nullptr ? 1.0f : params.ptr_v_descale[bidb * get<0>(params.stride_v_descale) + bidh_kv * get<1>(params.stride_v_descale)];
-                cute::copy(softmax.finalize(v_descale), scores_scale);
+                cute::copy(softmax.finalize<inner_idx>(v_descale), scores_scale);
                 if constexpr (LargeHeadDimV)
                 {
                     cutlass::arch::NamedBarrier::sync(NumMmaThreads, static_cast<uint32_t>(FwdNamedBarriers::PEmpty) /*id*/);
@@ -2166,7 +2166,7 @@ namespace flash
                 }
                 warpgroup_wait<0>();
                 pipeline_v.consumer_release(smem_pipe_read); // release V, otherwise producers will hang
-                softmax.rescale_o(tOrO, scores_scale);
+                softmax.rescale_o(tOrO(_, _, inner_idx), scores_scale);
                 if constexpr (Is_FP8 && !V_colmajor)
                 {
                     flash::permute_output_fp8(tOrO);
