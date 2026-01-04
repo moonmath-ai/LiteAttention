@@ -1414,13 +1414,49 @@ namespace flash
             auto smem_thr_copy_P = smem_tiled_copy_P.get_thread_slice(thread_idx);
 
             // Allocate "fragments/descriptors"
-            Tensor tSrQ = wg_mma_qk.partition_fragment_A(sQ);
+            Tensor tSrQ_base = wg_mma_qk.partition_fragment_A(sQ);
             Tensor tSrK = wg_mma_qk.partition_fragment_B(sK);
             Tensor tOrV = wg_mma_pv.partition_fragment_B(sV);
-            Tensor tOsP = wg_mma_pv.partition_fragment_A(sP);
+            Tensor tOsP_base = wg_mma_pv.partition_fragment_A(sP);
             Tensor tSrQv = wg_mma_qv.partition_fragment_A(sQv);
             Tensor tSrV = wg_mma_qv.partition_fragment_B(sVMmaQV);
             Tensor tPsP = smem_thr_copy_P.partition_D(cute::as_position_independent_swizzle_tensor(sP));
+
+            // Add dummy dimension of size 1 to IntraWGOverlap tensors to enable uniform access pattern
+            // In StrictlyTwoWG, these tensors already have the dimension (size 2)
+            // Create tensors with uniform access pattern: tSrQ(_, _, inner_idx) where inner_idx is 0 for IntraWGOverlap
+            auto tSrQ = [&]() {
+                if constexpr (StrictlyTwoWG) {
+                    return tSrQ_base;
+                } else {
+                    // Add dummy dimension of size 1: reshape to (..., 1) with stride 0 for the last dimension
+                    return make_tensor(tSrQ_base.data(), 
+                        make_layout(append<3>(shape(tSrQ_base), _1{}), 
+                                   append<3>(stride(tSrQ_base), Int<0>{})));
+                }
+            }();
+            auto tOsP = [&]() {
+                if constexpr (StrictlyTwoWG) {
+                    return tOsP_base;
+                } else {
+                    // Add dummy dimension of size 1: reshape to (..., 1) with stride 0 for the last dimension
+                    return make_tensor(tOsP_base.data(), 
+                        make_layout(append<3>(shape(tOsP_base), _1{}), 
+                                   append<3>(stride(tOsP_base), Int<0>{})));
+                }
+            }();
+            // Helper to get tOrO view with inner_idx (tOrO is passed as parameter, so we handle it differently)
+            auto get_tOrO_view = [&](int inner_idx) {
+                if constexpr (StrictlyTwoWG) {
+                    return tOrO(_, _, inner_idx);
+                } else {
+                    // For IntraWGOverlap, add dummy dimension and access with inner_idx=0
+                    auto tOrO_with_dim = make_tensor(tOrO.data(), 
+                        make_layout(append<3>(shape(tOrO), _1{}), 
+                                   append<3>(stride(tOrO), Int<0>{})));
+                    return tOrO_with_dim(_, _, _, inner_idx);
+                }
+            };
 
             // For storing scales to smem, only used when LargeHeadDimV
             auto thread_mma_pv = tiled_mma_pv.get_thread_slice(thread_idx);
@@ -1501,15 +1537,9 @@ namespace flash
                 {
                     cutlass::arch::NamedBarrier::sync(NumMmaThreads, static_cast<uint32_t>(FwdNamedBarriers::PEmpty) /*id*/);
                 }
-                if constexpr (StrictlyTwoWG)
-                {
-                    cute::copy(smem_tiled_copy_P, smem_thr_copy_P.retile_S(tOrP(_, _, inner_idx)), tPsP);
-                }
-                else
-                {
-                    cute::copy(smem_tiled_copy_P, smem_thr_copy_P.retile_S(tOrP), tPsP);
-                }
-                // cute::copy(smem_tiled_copy_P, smem_thr_copy_P.retile_S(tOrP), tPsP);
+                // Use uniform access pattern: tOrP(_, _, inner_idx) works for both StrictlyTwoWG and IntraWGOverlap
+                // For IntraWGOverlap, inner_idx should be 0 and the tensor has a dummy dimension of size 1
+                cute::copy(smem_tiled_copy_P, smem_thr_copy_P.retile_S(tOrP(_, _, inner_idx)), tPsP);
             };
 
             auto arrive_on_P_write_barrier = [&]
@@ -1601,80 +1631,167 @@ namespace flash
                 }
             };
 
-            if constexpr (StrictlyTwoWG)
+            // Helper function to process QK gemm + softmax + P conversion for a given inner_idx
+            // This reduces duplication in StrictlyTwoWG where we process inner_idx=0 and inner_idx=1
+            auto process_qk_softmax_p = [&](int n_block_val, bool is_first, bool check_inf, bool release_pipeline_k = true, int inner_idx = 0) -> Tensor
             {
-                static constexpr int inner_idx = 0;
+                // Process inner_idx=0 and inner_idx=1 using helper function to reduce duplication
                 Tensor tSrS_ambiguous_type = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
-                consumer_wait(pipeline_k, smem_pipe_read);
-                if constexpr (Is_skipable)
-                {
-                    n_block = skip_reader.next_n_block();
-                }
+
                 flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ(_, _, inner_idx), tSrK(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
                 warpgroup_wait<0>();
 
-                softmax.set_dequan_s(KDescaleSliced(n_block));
+                if constexpr (Is_INT8 && inner_idx == 0)
+                {
+                    softmax.set_dequan_s(KDescaleSliced(n_block_val));
+                }
 
-                mask.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local, inner_idx /*inner_idx*/>(tSrS_ambiguous_type, m_block, n_block);
+                if constexpr (release_pipeline_k)
+                {
+                    pipeline_k.consumer_release(smem_pipe_read);
+                }
+
+                if constexpr (HasQv)
+                {
+                    shared_storage.pipelines.barrier_Qv.wait(work_idx % 2);
+                    consumer_wait(pipeline_v, smem_pipe_read);
+                    flash::gemm</*zero_init=*/false, /*wg_wait=*/0>(tiled_mma_qv, tSrQv, tSrV(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
+                }
+
+                if constexpr (!Is_INT8)
+                {
+                    scoremod_premask_fn(tSrS_ambiguous_type);
+                }
+
+                // Apply mask - inner_idx defaults to 0, so no need to split cases
+                mask.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local, inner_idx>(tSrS_ambiguous_type, m_block, n_block_val);
 
                 Tensor scores_scale = [&]
                 {
                     if constexpr (Is_skipable)
                     {
-                        return softmax.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, /*Is_first=*/true, true, inner_idx /*inner_idx*/>(
+                        return softmax.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, is_first, check_inf, inner_idx>(
                             tSrS_ambiguous_type, params.qk_skip_mask_args.thr, skip_reader, m_block);
                     }
                     else
                     {
-                        return softmax.template max_get_scale</*Is_first=*/true, /*Check_inf=*/true, inner_idx /*inner_idx*/>(tSrS_ambiguous_type);
+                        return softmax.template max_get_scale<is_first, check_inf, inner_idx>(tSrS_ambiguous_type);
                     }
                 }();
-                // Don't need to store scales to send to WG1 (in the case of LargeHeadDimV) since it's 1.f
 
                 auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
 
-                softmax.template online_softmax_dequantize</*Is_first=*/true, /*Check_inf=*/true, inner_idx /*inner_idx*/>(tSrS_ambiguous_type, tSrS);
-
+                if constexpr (Is_INT8)
+                {
+                    softmax.template online_softmax_dequantize<is_first, check_inf, inner_idx>(tSrS_ambiguous_type, tSrS);
+                }
+                else
+                {
+                    softmax.template online_softmax<is_first, check_inf, inner_idx>(tSrS);
+                }
+                if constexpr (Is_FP8 && !V_colmajor)
+                {
+                    flash::permute_Cregs_fp8(tSrS);
+                }
                 Tensor tOrP_acc = make_tensor(tSrS.data(), flash::convert_layout_acc_Aregs<TiledMmaPV>(tSrS.layout()));
                 Tensor tOrP = make_tensor_like<ElementV>(tOrP_acc);
                 convert_type_out(tOrP_acc, tOrP);
-                write_P_to_smem(tOrP, inner_idx);
+                if constexpr (Is_FP8 && V_colmajor)
+                {
+                    flash::permute_Aregs_fp8(tOrP);
+                }
+                if constexpr (!MmaPV_is_RS)
+                {
+                    write_P_to_smem(tOrP, inner_idx);
+                }
+
+                return scores_scale;
+            };
+
+            // Helper function to process softmax for one iteration (inner_idx) to reduce duplication
+            // Shared between StrictlyTwoWG and IntraWGOverlap
+            auto process_softmax_iteration = [&](const int new_n_block, auto &mask_fn, const bool Check_inf, auto &skip_reader,
+                                                 Tensor &tSrS_ambiguous_type, PipelineState &smem_pipe_read_v,
+                                                 Tensor &scores_scale_out, const bool release_pipeline_v, 
+                                                 const bool is_first = false, const int iter_inner_idx = 0)
+            {
+                if constexpr (!Is_INT8)
+                {
+                    scoremod_premask_fn(tSrS_ambiguous_type);
+                }
+                mask_fn(tSrS_ambiguous_type, new_n_block);
+                if constexpr (Is_skipable)
+                {
+                    cute::copy(
+                        softmax.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, is_first, Check_inf, iter_inner_idx>(
+                            tSrS_ambiguous_type, params.qk_skip_mask_args.thr, skip_reader, m_block),
+                        scores_scale_out);
+                }
+                else
+                {
+                    cute::copy(softmax.template max_get_scale<is_first, Check_inf, iter_inner_idx>(tSrS_ambiguous_type), scores_scale_out);
+                }
+
+                if constexpr (LargeHeadDimV)
+                {
+                    store_scales(scores_scale_out, smem_pipe_read_v.index());
+                }
+
+                auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
+                if constexpr (!Is_INT8)
+                {
+                    softmax.template online_softmax<is_first, Check_inf, iter_inner_idx>(tSrS);
+                }
+                else
+                {
+                    softmax.template online_softmax_dequantize<is_first, Check_inf, iter_inner_idx>(tSrS_ambiguous_type, tSrS);
+                }
+
+                if constexpr (!HasQv)
+                {
+                    warpgroup_wait<0>();
+                    if constexpr (release_pipeline_v)
+                    {
+                        pipeline_v.consumer_release(smem_pipe_read_v); // release V
+                    }
+                }
+                if constexpr (Is_FP8 && !V_colmajor)
+                {
+                    flash::permute_Cregs_fp8(tSrS);
+                }
+                convert_type_out(make_tensor(tSrS.data(), tOrP.layout()), tOrP);
+                if constexpr (Is_FP8 && V_colmajor)
+                {
+                    flash::permute_Aregs_fp8(tOrP);
+                }
+                if constexpr (!MmaPV_is_RS)
+                {
+                    // TODO: maybe allocate a bit more space for P3 and remove the warpgroup_wait<0>(); and push pipeline_v.consumer_release(smem_pipe_read_v); // release V
+                    write_P_to_smem(tOrP, iter_inner_idx);
+                }
+            };
+
+            if constexpr (StrictlyTwoWG)
+            {
+                // // Process inner_idx=0 and inner_idx=1 using helper function to reduce duplication
+                // Tensor tSrS_ambiguous_type = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
+                consumer_wait(pipeline_k, smem_pipe_read);
+                if constexpr (Is_skipable)
+                {
+                    n_block = skip_reader.next_n_block();
+                }
+
+                // Process inner_idx=0
+                Tensor scores_scale = process_qk_softmax_p(n_block, /*is_first=*/true, /*check_inf=*/true, /*release_pipeline_k=*/false, 0);
+                // Don't need to store scales to send to WG1 (in the case of LargeHeadDimV) since it's 1.f
 
                 // Need to initialize tOrO in the case of RescaleOBeforeGemm where we will scale tOrO even in the 1st iter
                 clear(tOrO);
 
-                static constexpr int inner_idx1 = 1;
-                flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ(_, _, inner_idx1), tSrK(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
-                warpgroup_wait<0>();
-
-                pipeline_k.consumer_release(smem_pipe_read);
-
-                mask.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local, inner_idx1 /*inner_idx*/>(tSrS_ambiguous_type, m_block, n_block);
-
-                Tensor scores_scale1 = [&]
-                {
-                    if constexpr (Is_skipable)
-                    {
-                        return softmax.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, /*Is_first=*/true, true, inner_idx1 /*inner_idx*/>(
-                            tSrS_ambiguous_type, params.qk_skip_mask_args.thr, skip_reader, m_block);
-                    }
-                    else
-                    {
-                        return softmax.template max_get_scale</*Is_first=*/true, /*Check_inf=*/true, inner_idx1 /*inner_idx*/>(tSrS_ambiguous_type);
-                    }
-                }();
+                // Process inner_idx=1
+                Tensor scores_scale1 = process_qk_softmax_p(n_block, /*is_first=*/true, /*check_inf=*/true, /*release_pipeline_k=*/true, 1);
                 // Don't need to store scales to send to WG1 (in the case of LargeHeadDimV) since it's 1.f
-                tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
 
-                softmax.template online_softmax_dequantize</*Is_first=*/true, /*Check_inf=*/true, inner_idx1 /*inner_idx*/>(tSrS_ambiguous_type, tSrS);
-
-                tOrP_acc = make_tensor(tSrS.data(), flash::convert_layout_acc_Aregs<TiledMmaPV>(tSrS.layout()));
-                tOrP = make_tensor_like<ElementV>(tOrP_acc);
-                convert_type_out(tOrP_acc, tOrP);
-                if constexpr (!MmaPV_is_RS)
-                {
-                    write_P_to_smem(tOrP, inner_idx1);
-                }
                 if constexpr (!MmaPV_is_RS)
                 {
                     arrive_on_P_write_barrier();
@@ -1737,31 +1854,7 @@ namespace flash
 
                     softmax.rescale_o(tOrO(_, _, inner_idx1), scores_scale1);
 
-                    mask_fn(tSrS_ambiguous_type, new_n_block);
-                    if constexpr (Is_skipable)
-                    {
-                        cute::copy(
-                            softmax.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, /*Is_first=*/false, Check_inf, inner_idx>(
-                                tSrS_ambiguous_type, params.qk_skip_mask_args.thr, skip_reader, m_block),
-                            scores_scale);
-                    }
-                    else
-                    {
-                        cute::copy(softmax.template max_get_scale</*Is_first=*/false, Check_inf, inner_idx>(tSrS_ambiguous_type), scores_scale);
-                    }
-
-                    auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
-                    softmax.template online_softmax_dequantize</*Is_first=*/false, Check_inf, inner_idx>(tSrS_ambiguous_type, tSrS);
-
-                    warpgroup_wait<0>();
-                    // pipeline_v.consumer_release(smem_pipe_read_v); // release V
-
-                    convert_type_out(make_tensor(tSrS.data(), tOrP.layout()), tOrP);
-                    if constexpr (!MmaPV_is_RS)
-                    {
-                        // TODO: maybe allocate a bit more space for P3 and remove the warpgroup_wait<0>(); and push pipeline_v.consumer_release(smem_pipe_read_v); // release V
-                        write_P_to_smem(tOrP, inner_idx);
-                    }
+                    process_softmax_iteration(new_n_block, mask_fn, Check_inf, skip_reader, tSrS_ambiguous_type, smem_pipe_read_v, scores_scale, /*release_pipeline_v=*/false, /*is_first=*/false, inner_idx);
 
                     flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ(_, _, inner_idx1), tSrK(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
                     flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP(_, _, inner_idx1)), tOrV(_, _, _, smem_pipe_read_v.index()), tOrO(_, _, inner_idx1));
@@ -1772,112 +1865,25 @@ namespace flash
 
                     softmax.rescale_o(tOrO(_, _, inner_idx), scores_scale);
 
-                    mask_fn(tSrS_ambiguous_type, new_n_block);
-                    if constexpr (Is_skipable)
-                    {
-                        cute::copy(
-                            softmax.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, /*Is_first=*/false, Check_inf, inner_idx>(
-                                tSrS_ambiguous_type, params.qk_skip_mask_args.thr, skip_reader, m_block),
-                            scores_scale1);
-                    }
-                    else
-                    {
-                        cute::copy(softmax.template max_get_scale</*Is_first=*/false, Check_inf, inner_idx>(tSrS_ambiguous_type), scores_scale1);
-                    }
-
-                    auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
-                    softmax.template online_softmax_dequantize</*Is_first=*/false, Check_inf, inner_idx1>(tSrS_ambiguous_type, tSrS);
-
-                    warpgroup_wait<0>();
-                    pipeline_v.consumer_release(smem_pipe_read_v); // release V
-
-                    convert_type_out(make_tensor(tSrS.data(), tOrP.layout()), tOrP);
-                    if constexpr (!MmaPV_is_RS)
-                    {
-                        // TODO: maybe allocate a bit more space for P3 and remove the warpgroup_wait<0>(); and push pipeline_v.consumer_release(smem_pipe_read_v); // release V
-                        write_P_to_smem(tOrP, inner_idx);
-                    }
+                    process_softmax_iteration(new_n_block, mask_fn, Check_inf, skip_reader, tSrS_ambiguous_type, smem_pipe_read_v, scores_scale1, /*release_pipeline_v=*/true, /*is_first=*/false, inner_idx1);
 
                     if constexpr (!MmaPV_is_RS)
                     {
                         arrive_on_P_write_barrier();
                     }
-                    // return new_n_block;
+
                     return has_more;
                 };
             }
             else if constexpr (IntraWGOverlap)
             {
-                Tensor tSrS_ambiguous_type = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
+                // Tensor tSrS_ambiguous_type = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
                 consumer_wait(pipeline_k, smem_pipe_read);
                 if constexpr (Is_skipable)
                 {
                     n_block = skip_reader.next_n_block();
                 }
-                flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
-                warpgroup_wait<0>();
-                if constexpr (Is_INT8)
-                {
-                    softmax.set_dequan_s(KDescaleSliced(n_block));
-                }
-                pipeline_k.consumer_release(smem_pipe_read);
-
-                if constexpr (HasQv)
-                {
-                    shared_storage.pipelines.barrier_Qv.wait(work_idx % 2);
-                    consumer_wait(pipeline_v, smem_pipe_read);
-                    flash::gemm</*zero_init=*/false, /*wg_wait=*/0>(tiled_mma_qv, tSrQv, tSrV(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
-                }
-                if constexpr (!Is_INT8)
-                {
-                    scoremod_premask_fn(tSrS_ambiguous_type);
-                }
-                mask.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS_ambiguous_type, m_block, n_block);
-
-                // Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
-                Tensor scores_scale = [&]
-                {
-                    // TODO: make sure we allowed to do max reduction on the int32_t
-                    if constexpr (Is_skipable)
-                    {
-                        return softmax.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, /*Is_first=*/true, true>(
-                            tSrS_ambiguous_type, params.qk_skip_mask_args.thr, skip_reader, m_block);
-                    }
-                    else
-                    {
-                        return softmax.template max_get_scale</*Is_first=*/true, /*Check_inf=*/true>(tSrS_ambiguous_type);
-                    }
-                }();
-                // Don't need to store scales to send to WG1 (in the case of LargeHeadDimV) since it's 1.f
-
-                auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
-
-                // softmax.template online_softmax</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
-                if constexpr (!Is_INT8)
-                {
-                    // interesting! if we use tSrS_ambiguous_type here the result is incorrect!
-                    // AND LA without optimization becomes faster then FA3 baseline!
-                    softmax.template online_softmax</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
-                }
-                else
-                {
-                    softmax.template online_softmax_dequantize</*Is_first=*/true, /*Check_inf=*/true>(tSrS_ambiguous_type, tSrS);
-                }
-                if constexpr (Is_FP8 && !V_colmajor)
-                {
-                    flash::permute_Cregs_fp8(tSrS);
-                }
-                Tensor tOrP_acc = make_tensor(tSrS.data(), flash::convert_layout_acc_Aregs<TiledMmaPV>(tSrS.layout()));
-                Tensor tOrP = make_tensor_like<ElementV>(tOrP_acc);
-                convert_type_out(tOrP_acc, tOrP);
-                if constexpr (Is_FP8 && V_colmajor)
-                {
-                    flash::permute_Aregs_fp8(tOrP);
-                }
-                if constexpr (!MmaPV_is_RS)
-                {
-                    write_P_to_smem(tOrP);
-                }
+                Tensor scores_scale = process_qk_softmax_p(n_block, /*is_first=*/true, /*check_inf=*/true, /*release_pipeline_k=*/true);
                 if constexpr (!MmaPV_is_RS)
                 {
                     arrive_on_P_write_barrier();
@@ -1895,6 +1901,7 @@ namespace flash
                 auto fwd_step = [&](const int n_block, auto mask_fn, auto check_inf_type, auto &skip_reader) -> bool
                 {
                     static constexpr bool Check_inf = decltype(check_inf_type)::value;
+                    static constexpr int inner_idx = 0; // For IntraWGOverlap, always use inner_idx=0
                     PipelineState smem_pipe_read_v(smem_pipe_read.index(), smem_pipe_read.phase(), smem_pipe_read.count());
                     ++smem_pipe_read;
                     Tensor tSrS_ambiguous_type = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
@@ -1927,7 +1934,8 @@ namespace flash
                         has_more = skip_reader.has_more(new_n_block);
                     }
 
-                    flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
+                    // Use uniform access pattern: tSrQ(_, _, inner_idx) where inner_idx=0 for IntraWGOverlap
+                    flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ(_, _, inner_idx), tSrK(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
 
                     if constexpr (RescaleOBeforeGemm)
                     {
@@ -1940,7 +1948,9 @@ namespace flash
                             consumer_wait(pipeline_v, smem_pipe_read_v);
                         }
                     }
-                    flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP), tOrV(_, _, _, smem_pipe_read_v.index()), tOrO);
+                    // Use uniform access pattern: tOsP(_, _, inner_idx) where inner_idx=0 for IntraWGOverlap
+                    // For tOrO, use directly since it's a reference parameter and inner_idx is always 0 for IntraWGOverlap
+                    flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP(_, _, inner_idx)), tOrV(_, _, _, smem_pipe_read_v.index()), tOrO);
                     warp_scheduler_barrier_arrive();
 
                     if constexpr (Is_INT8)
@@ -1957,55 +1967,9 @@ namespace flash
                         consumer_wait(pipeline_v, smem_pipe_read);
                         flash::gemm</*zero_init=*/false, /*wg_wait=*/0>(tiled_mma_qv, tSrQv, tSrV(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
                     }
-                    if constexpr (!Is_INT8)
-                    {
-                        scoremod_premask_fn(tSrS_ambiguous_type);
-                    }
-                    mask_fn(tSrS_ambiguous_type, new_n_block);
-                    if constexpr (Is_skipable)
-                    {
-                        cute::copy(
-                            softmax.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, /*Is_first=*/false, Check_inf>(
-                                tSrS_ambiguous_type, params.qk_skip_mask_args.thr, skip_reader, m_block),
-                            scores_scale);
-                    }
-                    else
-                    {
-                        cute::copy(softmax.template max_get_scale</*Is_first=*/false, Check_inf>(tSrS_ambiguous_type), scores_scale);
-                    }
 
-                    if constexpr (LargeHeadDimV)
-                    {
-                        store_scales(scores_scale, smem_pipe_read_v.index());
-                    }
+                    process_softmax_iteration(new_n_block, mask_fn, Check_inf, skip_reader, tSrS_ambiguous_type, smem_pipe_read_v, scores_scale, /*release_pipeline_v=*/!HasQv);
 
-                    auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
-                    if constexpr (!Is_INT8)
-                    {
-                        softmax.template online_softmax</*Is_first=*/false, Check_inf>(tSrS);
-                    }
-                    else
-                    {
-                        softmax.template online_softmax_dequantize</*Is_first=*/false, Check_inf>(tSrS_ambiguous_type, tSrS);
-                    }
-                    if constexpr (!HasQv)
-                    {
-                        warpgroup_wait<0>();
-                        pipeline_v.consumer_release(smem_pipe_read_v); // release V
-                    }
-                    if constexpr (Is_FP8 && !V_colmajor)
-                    {
-                        flash::permute_Cregs_fp8(tSrS);
-                    }
-                    convert_type_out(make_tensor(tSrS.data(), tOrP.layout()), tOrP);
-                    if constexpr (Is_FP8 && V_colmajor)
-                    {
-                        flash::permute_Aregs_fp8(tOrP);
-                    }
-                    if constexpr (!MmaPV_is_RS)
-                    {
-                        write_P_to_smem(tOrP);
-                    }
                     if constexpr (!RescaleOBeforeGemm)
                     {
                         softmax.rescale_o(tOrO, scores_scale);
@@ -2082,7 +2046,9 @@ namespace flash
                 {
                     consumer_wait(pipeline_v, smem_pipe_read);
                 }
-                flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP), tOrV(_, _, _, smem_pipe_read.index()), tOrO);
+                // Use uniform access pattern: tOsP(_, _, inner_idx) where inner_idx=0 for IntraWGOverlap
+                static constexpr int inner_idx_final = 0;
+                flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP(_, _, inner_idx_final)), tOrV(_, _, _, smem_pipe_read.index()), tOrO);
                 // For INT8, V is bf16, so no v_descale needed (use Is_FP8)
                 float const v_descale = !Is_FP8 || params.ptr_v_descale == nullptr ? 1.0f : params.ptr_v_descale[bidb * get<0>(params.stride_v_descale) + bidh_kv * get<1>(params.stride_v_descale)];
                 cute::copy(softmax.finalize(v_descale), scores_scale);
