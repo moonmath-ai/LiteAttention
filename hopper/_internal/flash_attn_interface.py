@@ -306,6 +306,8 @@ class FlashAttnFunc(torch.autograd.Function):
         return_softmax_lse=False,
         reverse_skip_list=False,
         phase=False,
+        seqused_q=None,
+        seqused_k=None,
     ):
         if softmax_scale is None:
             softmax_scale = (q.shape[-1] + (qv.shape[-1] if qv is not None else 0)) ** (-0.5)
@@ -318,7 +320,7 @@ class FlashAttnFunc(torch.autograd.Function):
             qv,  # qv
             None,  # out
             None, None, None,   # cu_seqlens_q/k/k_new
-            None, None,   # seqused_q/k
+            seqused_q, seqused_k,   # seqused_q/k
             None, None,   # max_seqlen_q/k
             None, None, None,   # page_table, kv_batch_idx, leftpad_k,
             None, None, None,  # rotary_cos/sin, seqlens_rotary
@@ -340,7 +342,7 @@ class FlashAttnFunc(torch.autograd.Function):
             phase=phase,
         )
         # ctx.save_for_backward(q, k, v, out_padded, softmax_lse)
-        ctx.save_for_backward(q, k, v, out, softmax_lse)
+        ctx.save_for_backward(q, k, v, out, softmax_lse) ## TODO @tarik: Check if we need to add seqused_q and seqused_k here?
         ctx.softmax_scale = softmax_scale
         ctx.causal = causal
         ctx.window_size = window_size
@@ -579,6 +581,8 @@ def flash_attn_func(
     return_softmax_lse=False,
     reverse_skip_list=False,
     phase=False,
+    seqused_q=None,
+    seqused_k=None,
 ):
     """dropout_p should be set to 0.0 during evaluation
     Supports multi-query and grouped-query attention (MQA/GQA) by passing in KV with fewer heads
@@ -648,6 +652,8 @@ def flash_attn_func(
         return_softmax_lse,
         reverse_skip_list,
         phase,
+        seqused_q,
+        seqused_k,
     )
 
 

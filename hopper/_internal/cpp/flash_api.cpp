@@ -888,7 +888,10 @@
      }
  
      // This is what we will template on
-     bool const is_varlen = is_varlen_q || is_varlen_k || seqused_q_.has_value() || seqused_k_.has_value() || leftpad_k_.has_value();
+     // Note: seqused_q and seqused_k are NOT considered varlen - they work with dense tensors
+     // and the mainloop handles them by checking seqused pointers in load/mma functions.
+     // Only cu_seqlens (packed/ragged tensors) and leftpad_k require full varlen support.
+     bool const is_varlen = is_varlen_q || is_varlen_k || leftpad_k_.has_value();
      #ifdef FLASHATTENTION_DISABLE_VARLEN
          TORCH_CHECK(!is_varlen, "This flash attention build does not support varlen.");
      #endif
@@ -1465,7 +1468,8 @@
          TORCH_CHECK(max_seqlen_k_.has_value(), "max_seqlen_k must be provided if cu_seqlens_k is provided");
      }
      // This is what we will template on
-     bool const is_varlen = is_varlen_q || is_varlen_k || seqused_q_.has_value() || seqused_k_.has_value();
+     // Note: seqused_q and seqused_k are NOT considered varlen - they work with dense tensors
+     bool const is_varlen = is_varlen_q || is_varlen_k;
      #ifdef FLASHATTENTION_DISABLE_VARLEN
          TORCH_CHECK(!is_varlen, "This flash attention build does not support varlen.");
      #endif

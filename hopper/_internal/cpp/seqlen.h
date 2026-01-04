@@ -49,9 +49,7 @@ struct SeqlenInfoQK {
         , seqlen_q(!Varlen
                    ? seqlen_q_static
                    : (seqused_q ? seqused_q[bidb] : (cu_seqlens_q ? cu_seqlens_q[bidb + 1] - cu_seqlens_q[bidb] : seqlen_q_static)))
-        , seqlen_k(!Varlen
-                   ? seqlen_k_static
-                   : (seqused_k ? seqused_k[bidb] : (cu_seqlens_k ? cu_seqlens_k[bidb + 1] - cu_seqlens_k[bidb] : seqlen_k_static)))
+        , seqlen_k(seqused_k ? seqused_k[bidb] : (!Varlen ? seqlen_k_static : (cu_seqlens_k ? cu_seqlens_k[bidb + 1] - cu_seqlens_k[bidb] : seqlen_k_static)))
     {
     }
 
@@ -79,9 +77,7 @@ struct SeqlenInfoQKNewK {
         , seqlen_q(!Varlen
                    ? seqlen_q_static
                    : (seqused_q ? seqused_q[bidb] : (cu_seqlens_q ? cu_seqlens_q[bidb + 1] - cu_seqlens_q[bidb] : seqlen_q_static)))
-        , seqlen_k_og(!Varlen
-                      ? seqlen_k_static
-                      : (seqused_k ? seqused_k[bidb] : (cu_seqlens_k ? cu_seqlens_k[bidb + 1] - cu_seqlens_k[bidb] : seqlen_k_static)) - leftpad_k)
+        , seqlen_k_og((seqused_k ? seqused_k[bidb] : (!Varlen ? seqlen_k_static : (cu_seqlens_k ? cu_seqlens_k[bidb + 1] - cu_seqlens_k[bidb] : seqlen_k_static))) - leftpad_k)
         , seqlen_k_new(!AppendKV
                        ? 0
                        : (cu_seqlens_k_new ? cu_seqlens_k_new[bidb + 1] - cu_seqlens_k_new[bidb] : shape_K_new_0))

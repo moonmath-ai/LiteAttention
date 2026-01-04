@@ -1399,10 +1399,17 @@ namespace flash
 
             int const seqlen_q = seqlen_info.seqlen_q;
             int const seqlen_k = seqlen_info.seqlen_k;
+
+            int actual_seqlen_k = seqlen_k;
+            
+            if (params.seqused_k) { 
+                actual_seqlen_k = params.seqused_k[bidb]; 
+            }
+
             int n_block = n_block_max - 1;
 
             flash::Mask<kBlockM, kBlockN, PackGQA, TiledMmaQK> mask(
-                thread_idx, seqlen_q, seqlen_k, params.window_size_left, params.window_size_right, 0 /*sink_token_length*/,
+                thread_idx, seqlen_q, actual_seqlen_k, params.window_size_left, params.window_size_right, 0 /*sink_token_length*/,
                 params.attention_chunk_divmod, params.qhead_per_khead_divmod);
 
             float softcap_val = params.softcap_val;
@@ -1744,11 +1751,13 @@ namespace flash
                     params.attention_chunk_divmod, params.qhead_per_khead_divmod);
                 // auto no_mask_fn = [](auto &tSrS, int n_block) {};
                 if constexpr (!Is_skipable){
-                    auto no_mask_fn = [](auto &tSrS, int n_block) {};
+                    auto mask_fn = [&](auto &tSrS, int n_block) {
+                        mask.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS, m_block, n_block); 
+                    };
                     #pragma unroll 1
                     for (; n_block >= n_block_min_before_local_mask; --n_block)
                     {
-                        fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/, skip_reader);
+                        fwd_step(n_block, mask_fn, cute::true_type{} /*check_inf*/, skip_reader);
                     }
                 }else{
                     auto mask_fn = [&](auto &tSrS, int n_block) {
@@ -1970,15 +1979,17 @@ namespace flash
                     params.attention_chunk_divmod, params.qhead_per_khead_divmod);
                 // auto no_mask_fn = [](auto &tSrS, int n_block) {};
                 if constexpr (!Is_skipable){
-                    auto no_mask_fn = [](auto &tSrS, int n_block) {};
+                    auto mask_fn = [&](auto &tSrS, int n_block) {
+                        mask.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS, m_block, n_block); 
+                    };
                     #pragma unroll 1
                     for (; n_block >= n_block_min_before_local_mask; --n_block)
                     {
-                        fwd_step(n_block, no_mask_fn, cute::false_type{} /*is_first_iter*/, cute::false_type{} /*check_inf*/, skip_reader);
+                        fwd_step(n_block, mask_fn, cute::false_type{} /*is_first_iter*/, cute::true_type{} /*check_inf*/, skip_reader);
                     }
                 }else{
                     auto mask_fn = [&](auto &tSrS, int n_block) {
-                        mask.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS, m_block, n_block); 
+                        mask.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local, true /*Seqlenq_mask*/>(tSrS, m_block, n_block); 
                     };
                     // while(skip_reader.has_more(n_block)){
                     while(has_more_outer){

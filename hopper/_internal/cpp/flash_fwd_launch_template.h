@@ -387,7 +387,7 @@ void run_mha_fwd_(Flash_fwd_params &params, cudaStream_t stream)
                         { VCOLMAJOR_SWITCH(params.v_dim_stride != 1, V_colmajor_, [&]
                                            {
             static constexpr bool V_colmajor = V_colmajor_ && sizeof(T) == 1;
-            VARLEN_SWITCH(params.cu_seqlens_q || params.cu_seqlens_k || params.seqused_q || params.seqused_k || params.leftpad_k, Varlen, [&] {
+            VARLEN_SWITCH(params.cu_seqlens_q || params.cu_seqlens_k || params.seqused_q || params.leftpad_k, Varlen, [&] {
                 // Reorder switches: HasQV_ -> AppendKV -> Is_skipable -> HasMustDoList -> ReverseSkipList -> Phase
                 // This ensures invalid combinations (HasMustDoList or ReverseSkipList true when Is_skipable false) are never generated
                 BOOL_SWITCH(params.qv_ptr, HasQV_, [&] {

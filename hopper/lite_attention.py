@@ -661,7 +661,8 @@ class LiteAttention:
             return query, key, None, None
     
     def __call__(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, 
-                 scale: Optional[float] = None, return_softmax_lse: bool = False, must_do_list: list = None, must_skip_list: list = None) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+                 scale: Optional[float] = None, return_softmax_lse: bool = False, must_do_list: list = None, must_skip_list: list = None,
+                 seqused_q: Optional[torch.Tensor] = None, seqused_k: Optional[torch.Tensor] = None) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """
         Perform Flash Attention 3 computation with optional skip list optimization.
         
@@ -745,6 +746,8 @@ class LiteAttention:
             phase=(self._phase == 1) if self.reverse_skip_list else False,
             q_descale=q_descale,
             k_descale=k_descale,
+            seqused_q=seqused_q,
+            seqused_k=seqused_k,
         )
 
         # Calculate and store statistics if enabled
