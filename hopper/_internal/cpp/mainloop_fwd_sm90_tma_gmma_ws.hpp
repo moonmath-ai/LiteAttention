@@ -1805,6 +1805,78 @@ namespace flash
                     // return new_n_block;
                     return has_more;
                 };
+
+                if constexpr ((Is_causal || Is_local) && !Is_skipable)
+                { // Separate iterations with causal or local masking
+                    auto mask_fn = [&](auto &tSrS, int n_block)
+                    { mask.template apply<false /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS, m_block, n_block); };
+                    int const n_block_min_causal_local_mask = BlockMN_t::get_n_block_min_causal_local_mask(
+                        seqlen_info, m_block, n_block_min, params.window_size_right,
+                        params.attention_chunk_divmod, params.qhead_per_khead_divmod);
+#pragma unroll 1
+                    for (; n_block >= n_block_min_causal_local_mask; --n_block)
+                    {
+                        fwd_step(n_block, mask_fn, cute::true_type{} /*check_inf*/, skip_reader);
+                    }
+                }
+
+                int const n_block_min_before_local_mask = BlockMN_t::get_n_block_min_before_local_mask(
+                    seqlen_info, m_block, n_block_min, params.window_size_left,
+                    params.attention_chunk_divmod, params.qhead_per_khead_divmod);
+                // auto no_mask_fn = [](auto &tSrS, int n_block) {};
+                if constexpr (!Is_skipable)
+                {
+                    auto no_mask_fn = [](auto &tSrS, int n_block) {};
+#pragma unroll 1
+                    for (; n_block >= n_block_min_before_local_mask; --n_block)
+                    {
+                        fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/, skip_reader);
+                    }
+                }
+                else
+                {
+                    auto mask_fn = [&](auto &tSrS, int n_block)
+                    {
+                        mask.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS, m_block, n_block);
+                    };
+                    bool has_more_outer = skip_reader.has_more(n_block);
+                    // while(skip_reader.has_more(n_block)){
+                    while (has_more_outer)
+                    {
+                        has_more_outer = fwd_step(0, mask_fn, cute::true_type{} /*check_inf*/, skip_reader);
+                    }
+                }
+
+                // Separate masking iterations on the left for local attention
+                if constexpr ((Is_local) && !Is_skipable)
+                {
+                    auto local_mask_fn = [&](auto &tSrS, int n_block)
+                    { mask.template apply<false /*Seqlenk_mask*/, false /*Causal_mask*/, Is_local>(tSrS, m_block, n_block); };
+#pragma unroll 1
+                    for (; n_block >= n_block_min; --n_block)
+                    {
+                        fwd_step(n_block, local_mask_fn, cute::bool_constant<Is_local>{} /*check_inf*/, skip_reader);
+                    }
+                }
+
+                // Tell producers that smem_q is ready
+                cutlass::arch::NamedBarrier::arrive(NumMmaThreadsQK + (Use_TMA_Q ? cutlass::NumThreadsPerWarp : NumProducerThreads), static_cast<uint32_t>(FwdNamedBarriers::QueryEmpty) /*id*/);
+                if constexpr (!HasQv)
+                {
+                    consumer_wait(pipeline_v, smem_pipe_read);
+                }
+                flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP(_, _, inner_idx)), tOrV(_, _, _, smem_pipe_read.index()), tOrO(_, _, inner_idx));
+                softmax.rescale_o(tOrO(_, _, inner_idx1), scores_scale1);
+                // For INT8, V is bf16, so no v_descale needed (use Is_FP8)
+                float const v_descale = !Is_FP8 || params.ptr_v_descale == nullptr ? 1.0f : params.ptr_v_descale[bidb * get<0>(params.stride_v_descale) + bidh_kv * get<1>(params.stride_v_descale)];
+                cute::copy(softmax.finalize<inner_idx>(v_descale), scores_scale);
+                warpgroup_wait<0>();
+                flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP(_, _, inner_idx1)), tOrV(_, _, _, smem_pipe_read.index()), tOrO(_, _, inner_idx1));
+                cute::copy(softmax.finalize<inner_idx1>(v_descale), scores_scale1);
+                warpgroup_wait<0>();
+                pipeline_v.consumer_release(smem_pipe_read); // release V, otherwise producers will hang
+                // softmax.rescale_o(tOrO, scores_scale);
+                ++smem_pipe_read;
             }
             else if constexpr (IntraWGOverlap)
             {
