@@ -7,7 +7,7 @@
 
 using namespace cute;
 
-// static constexpr bool ReInt8 = true;
+static constexpr bool ReInt8 = true;
 
 static constexpr int kStages = 2;
 
@@ -25,15 +25,22 @@ static constexpr cute::GMMA::Major MmaMajorV = GMMA::Major::MN;
 
 using TileShape_MNK = Shape<Int<kBlockM>, Int<kHeadDim>, Int<kBlockN>>;
 using TileShape_MINK = Shape<Int<kBlockMI>, Int<kHeadDim>, Int<kBlockN>>;
-using TileShape_MNK_PV = Shape<decltype(get<0>(TileShape_MINK{})), Int<kHeadDim>, decltype(get<1>(TileShape_MINK{}))>;
+using TileShape_MNK_PV = std::conditional_t<ReInt8,
+    Shape<decltype(get<0>(TileShape_MINK{})), Int<kHeadDim>, decltype(get<1>(TileShape_MINK{}))>,
+    Shape<decltype(get<0>(TileShape_MNK{})), Int<kHeadDim>, decltype(get<1>(TileShape_MNK{}))>>;
 
-using AtomLayoutQK = Layout<Shape<Int<kBlockMI / 64>, Int<InnerDimSize>, _1>>; // (num mma wg, inner dim size, 1)
+using AtomLayoutQK = Layout<std::conditional_t<ReInt8,
+    Shape<Int<kBlockMI / 64>, Int<InnerDimSize>, _1>,
+    Shape<Int<kBlockM / 64>, Int<InnerDimSize>, _1>>>; // (num mma wg, inner dim size, 1)
 
 using TiledMmaQK = decltype(cute::make_tiled_mma(
-    cute::GMMA::ss_op_selector<Element, Element, ElementAccumQK, TileShape_MINK>(),
-    AtomLayoutQK{}));
-using AtomLayoutPV = AtomLayoutQK;
+    std::conditional_t<ReInt8,
+        decltype(cute::GMMA::ss_op_selector<Element, Element, ElementAccumQK, TileShape_MINK>()),
+        decltype(cute::GMMA::ss_op_selector<Element, Element, ElementAccumQK, TileShape_MNK>())>{},
+    AtomLayoutQK{})
+);
 
+using AtomLayoutPV = AtomLayoutQK;
 using TiledMmaPV = decltype(cute::make_tiled_mma(
     cute::GMMA::ss_op_selector<ElementV, ElementV, ElementAccum,
                                TileShape_MNK_PV, GMMA::Major::K, MmaMajorV>(),
