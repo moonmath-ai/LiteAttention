@@ -7,11 +7,11 @@
 
 using namespace cute;
 
-static constexpr bool ReInt8 = true;
+static constexpr bool ReInt8 = false;
 
 static constexpr int kStages = 2;
 
-static constexpr int kBlockM = 256;
+static constexpr int kBlockM = 128;
 static constexpr int kBlockMI = 128;
 static constexpr int kBlockN = 128;
 static constexpr int kHeadDim = 128;
@@ -160,14 +160,32 @@ int main()
     printf("\n");
 
     // (thread_idx, value ) -> index in some op or memory
-    auto wg_mma_qk = tiled_mma_qk.get_slice(warp_group_thread_layout(0));
-    auto wg_mma_pv = tiled_mma_pv.get_slice(warp_group_thread_layout(0));
+    auto wg_mma_qk = tiled_mma_qk.get_slice(warp_group_thread_layout(1));
+    auto wg_mma_pv = tiled_mma_pv.get_slice(warp_group_thread_layout(1));
     printf("wg_mma_qk:\n");
     print(wg_mma_qk);
     printf("\n");
     printf("wg_mma_pv:\n");
     print(wg_mma_pv);
     printf("\n");
+
+    // sliced sliced wg_mma's
+    auto wg_mma_qk_slice = [&]() {
+        if constexpr (ReInt8) {
+            return wg_mma_qk.get_slice(256);
+        } else {
+            return wg_mma_qk;
+        }
+    }();
+    auto wg_mma_pv_slice = [&]() {
+        if constexpr (ReInt8) {
+            return wg_mma_pv.get_slice(256);
+        } else {
+            return wg_mma_pv;
+        }
+    }();
+    printf("wg_mma_qk_slice:\n"); print(wg_mma_qk_slice); printf("\n");
+    printf("wg_mma_pv_slice:\n"); print(wg_mma_pv_slice); printf("\n");
     // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
     return 0;
@@ -176,4 +194,7 @@ int main()
 /*
 nvcc -std=c++20 -O3 --use_fast_math -I./csrc/cutlass/include -arch=sm_90 -o reint8 reint8.cu && \
 ./reint8 > shapes_and_such.txt 2>&1
+
+nvcc -std=c++20 -O3 --use_fast_math -I./csrc/cutlass/include -arch=sm_90 -o reint8 reint8.cu && \
+./reint8 > shapes_and_such_no_reint8.txt 2>&1
 */
