@@ -26,48 +26,42 @@ static constexpr cute::GMMA::Major MmaMajorV = GMMA::Major::MN;
 using TileShape_MNK = Shape<Int<kBlockM>, Int<kHeadDim>, Int<kBlockN>>;
 using TileShape_MINK = Shape<Int<kBlockMI>, Int<kHeadDim>, Int<kBlockN>>;
 using TileShape_MNK_PV = std::conditional_t<ReInt8,
-    Shape<decltype(get<0>(TileShape_MINK{})), Int<kHeadDim>, decltype(get<1>(TileShape_MINK{}))>,
-    Shape<decltype(get<0>(TileShape_MNK{})), Int<kHeadDim>, decltype(get<1>(TileShape_MNK{}))>>;
+                                            Shape<decltype(get<0>(TileShape_MINK{})), Int<kHeadDim>, decltype(get<1>(TileShape_MINK{}))>,
+                                            Shape<decltype(get<0>(TileShape_MNK{})), Int<kHeadDim>, decltype(get<1>(TileShape_MNK{}))>>;
 
 using AtomLayoutQK = Layout<std::conditional_t<ReInt8,
-    Shape<Int<kBlockMI / 64>, Int<InnerDimSize>, _1>,
-    Shape<Int<kBlockM / 64>, Int<InnerDimSize>, _1>>>; // (num mma wg, inner dim size, 1)
+                                               Shape<Int<kBlockMI / 64>, Int<InnerDimSize>, _1>,
+                                               Shape<Int<kBlockM / 64>, _1, _1>>>; // (num mma wg, inner dim size, 1)
 
 using TiledMmaQK = decltype(cute::make_tiled_mma(
     std::conditional_t<ReInt8,
-        decltype(cute::GMMA::ss_op_selector<Element, Element, ElementAccumQK, TileShape_MINK>()),
-        decltype(cute::GMMA::ss_op_selector<Element, Element, ElementAccumQK, TileShape_MNK>())>{},
-    AtomLayoutQK{})
-);
+                       decltype(cute::GMMA::ss_op_selector<Element, Element, ElementAccumQK, TileShape_MINK>()),
+                       decltype(cute::GMMA::ss_op_selector<Element, Element, ElementAccumQK, TileShape_MNK>())>{},
+    AtomLayoutQK{}));
 
 using AtomLayoutPV = AtomLayoutQK;
 using TiledMmaPV = decltype(cute::make_tiled_mma(
-    cute::GMMA::ss_op_selector<ElementV, ElementV, ElementAccum,
-                               TileShape_MNK_PV, GMMA::Major::K, MmaMajorV>(),
+    cute::GMMA::ss_op_selector<ElementV, ElementV, ElementAccum, TileShape_MNK_PV, GMMA::Major::K, MmaMajorV>(),
     AtomLayoutPV{}));
 
 static constexpr int NumMmaThreadsQK = size(TiledMmaQK{});
 static constexpr int NumMmaThreads = size(TiledMmaPV{});
 
-using SmemLayoutAtomQ = decltype(cutlass::gemm::collective::detail::ss_smem_selector<
-                                 GMMA::Major::K,
-                                 Element,
-                                 decltype(cute::get<0>(TileShape_MINK{})),
-                                 decltype(cute::get<2>(TileShape_MINK{}))>());
+using SmemLayoutAtomQ = decltype(
+    std::conditional_t<ReInt8,
+                       decltype(cutlass::gemm::collective::detail::ss_smem_selector<GMMA::Major::K, Element, decltype(cute::get<0>(TileShape_MINK{})), decltype(cute::get<2>(TileShape_MINK{}))>()),
+                       decltype(cutlass::gemm::collective::detail::ss_smem_selector<GMMA::Major::K, Element, decltype(cute::get<0>(TileShape_MNK{})), decltype(cute::get<2>(TileShape_MNK{}))>())>{});
 
 // using SmemLayoutQ = decltype(tile_to_shape(SmemLayoutAtomQ{}, select<0, 2>(TileShape_MNK{})));
-using SmemLayoutQ = decltype(tile_to_shape(
-    SmemLayoutAtomQ{},
-    make_shape(
-        shape<0>(TileShape_MINK{}),
-        shape<2>(TileShape_MINK{}),
-        Int<InnerDimSize>{})));
+using SmemLayoutQ = std::conditional_t<ReInt8,
+                                       decltype(tile_to_shape(SmemLayoutAtomQ{}, make_shape(shape<0>(TileShape_MINK{}), shape<2>(TileShape_MINK{}), Int<InnerDimSize>{}))),
+                                       decltype(tile_to_shape(SmemLayoutAtomQ{}, select<0, 2>(TileShape_MNK{})))>;
 
 using SmemLayoutAtomK = decltype(cutlass::gemm::collective::detail::ss_smem_selector<
                                  GMMA::Major::K,
                                  Element,
-                                 decltype(cute::get<1>(TileShape_MINK{})),
-                                 decltype(cute::get<2>(TileShape_MINK{}))>());
+                                 decltype(cute::get<1>(TileShape_MNK{})),
+                                 decltype(cute::get<2>(TileShape_MNK{}))>());
 
 using SmemLayoutK = decltype(tile_to_shape(
     SmemLayoutAtomK{},
@@ -82,15 +76,13 @@ using SmemLayoutVtMma = decltype(tile_to_shape(
     make_shape(Int<kHeadDim>{}, shape<2>(TileShape_MNK_PV{}), Int<kStages>{}),
     std::conditional_t<MmaMajorV == GMMA::Major::K, cute::Step<_1, _2, _3>, cute::Step<_2, _1, _3>>{}));
 
-using SmemLayoutAtomP = decltype(cutlass::gemm::collective::detail::ss_smem_selector<
-                                 GMMA::Major::K,
-                                 ElementV,
-                                 decltype(cute::get<0>(TileShape_MINK{})),
-                                 decltype(cute::get<1>(TileShape_MINK{}))>());
+using SmemLayoutAtomP = std::conditional_t<ReInt8,
+                                           decltype(cutlass::gemm::collective::detail::ss_smem_selector<GMMA::Major::K, ElementV, decltype(cute::get<0>(TileShape_MINK{})), decltype(cute::get<1>(TileShape_MINK{}))>()),
+                                           decltype(cutlass::gemm::collective::detail::ss_smem_selector<GMMA::Major::K, ElementV, decltype(cute::get<0>(TileShape_MNK{})), decltype(cute::get<1>(TileShape_MNK{}))>())>;
 
-using SmemLayoutP = decltype(tile_to_shape(
-    SmemLayoutAtomP{},
-    make_shape(shape<0>(TileShape_MINK{}), shape<1>(TileShape_MINK{}), Int<InnerDimSize>{})));
+using SmemLayoutP = std::conditional_t<ReInt8,
+                                       decltype(tile_to_shape(SmemLayoutAtomP{}, make_shape(shape<0>(TileShape_MINK{}), shape<1>(TileShape_MINK{}), Int<InnerDimSize>{}))),
+                                       decltype(tile_to_shape(SmemLayoutAtomP{}, select<0, 1>(TileShape_MNK{})))>;
 
 int main()
 {
@@ -161,17 +153,21 @@ int main()
     TiledMmaQK tiled_mma_qk;
     TiledMmaPV tiled_mma_pv;
     printf("tiled_mma_qk:\n");
-    print(tiled_mma_qk); printf("\n");
+    print(tiled_mma_qk);
+    printf("\n");
     printf("tiled_mma_pv:\n");
-    print(tiled_mma_pv); printf("\n");
+    print(tiled_mma_pv);
+    printf("\n");
 
     // (thread_idx, value ) -> index in some op or memory
     auto wg_mma_qk = tiled_mma_qk.get_slice(warp_group_thread_layout(0));
     auto wg_mma_pv = tiled_mma_pv.get_slice(warp_group_thread_layout(0));
     printf("wg_mma_qk:\n");
-    print(wg_mma_qk); printf("\n");
+    print(wg_mma_qk);
+    printf("\n");
     printf("wg_mma_pv:\n");
-    print(wg_mma_pv); printf("\n");
+    print(wg_mma_pv);
+    printf("\n");
     // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
     return 0;
