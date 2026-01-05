@@ -7,6 +7,8 @@
 
 using namespace cute;
 
+// static constexpr bool ReInt8 = true;
+
 static constexpr int kStages = 2;
 
 static constexpr int kBlockM = 256;
@@ -20,7 +22,6 @@ using ElementAccumQK = int32_t;
 using ElementAccum = float;
 using ElementV = cutlass::bfloat16_t;
 static constexpr cute::GMMA::Major MmaMajorV = GMMA::Major::MN;
-static constexpr cute::GMMA::Major TmaMajorV = GMMA::Major::MN;
 
 using TileShape_MNK = Shape<Int<kBlockM>, Int<kHeadDim>, Int<kBlockN>>;
 using TileShape_MINK = Shape<Int<kBlockMI>, Int<kHeadDim>, Int<kBlockN>>;
@@ -130,10 +131,35 @@ int main() {
     // print_layout(SmemLayoutP{});  // 3D layout, use print() instead
     print(SmemLayoutP{}); printf("\n");
 
+    // ~~~~~~~~~~~~~~~~~~~~~~~~~ inner kernel code ~~~~~~~~~~~~~~~~~~~~~~~~~
+    static constexpr int MmaWarpGroups = size(TiledMmaPV{}) / cutlass::NumThreadsPerWarpGroup;
+    printf("MmaWarpGroups: %d\n", MmaWarpGroups);
+    Layout warp_group_thread_layout = make_layout(make_shape(Int<MmaWarpGroups>{}),
+                                                    make_stride(Int<cutlass::NumThreadsPerWarpGroup>{}));
+
+    printf("warp_group_thread_layout:\n");
+    print_layout(warp_group_thread_layout);
+
+    // TiledMmaQK tiled_mma_qk;
+    // TiledMmaPV tiled_mma_pv;
+    // printf("tiled_mma_qk:\n");
+    // print(tiled_mma_qk); printf("\n");
+    // printf("tiled_mma_pv:\n");
+    // print(tiled_mma_pv); printf("\n");
+
+    // // (thread_idx, value ) -> index in some op or memory
+    // auto wg_mma_qk = tiled_mma_qk.get_slice(warp_group_thread_layout(0));
+    // auto wg_mma_pv = tiled_mma_pv.get_slice(warp_group_thread_layout(0));
+    // printf("wg_mma_qk:\n");
+    // print(wg_mma_qk); printf("\n");
+    // printf("wg_mma_pv:\n");
+    // print(wg_mma_pv); printf("\n");
+    // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
     return 0;
 }
 
 /*
-nvcc -std=c++20 -O3 --use_fast_math -I./csrc/cutlass/include -arch=sm_90 -o reint8 reint8.cu
-./reint8 > shaped_analysis.txt 2>&1
+nvcc -std=c++20 -O3 --use_fast_math -I./csrc/cutlass/include -arch=sm_90 -o reint8 reint8.cu && \
+./reint8 > shapes_and_such.txt 2>&1
 */
