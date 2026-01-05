@@ -85,57 +85,66 @@ using SmemLayoutP = decltype(tile_to_shape(
     SmemLayoutAtomP{},
     make_shape(shape<0>(TileShape_MINK{}), shape<1>(TileShape_MINK{}), Int<InnerDimSize>{})));
 
-int main() {
+int main()
+{
 
     printf("AtomLayoutQK:\n");
     // print_layout(AtomLayoutQK{});  // 3D layout, use print() instead
-    print(AtomLayoutQK{}); printf("\n");
+    print(AtomLayoutQK{});
+    printf("\n");
 
     printf("TiledMmaQK:\n");
     // print_layout(TiledMmaQK{});  // Complex type, use print() instead
-    print(TiledMmaQK{}); printf("\n");
+    print(TiledMmaQK{});
+    printf("\n");
 
     printf("AtomLayoutPV:\n");
     // print_layout(AtomLayoutPV{});  // 3D layout, use print() instead
-    print(AtomLayoutPV{}); printf("\n");
+    print(AtomLayoutPV{});
+    printf("\n");
 
     printf("TiledMmaPV:\n");
     // print_layout(TiledMmaPV{});  // Complex type, use print() instead
-    print(TiledMmaPV{}); printf("\n");
+    print(TiledMmaPV{});
+    printf("\n");
 
     printf("SmemLayoutAtomQ:\n");
     print_layout(SmemLayoutAtomQ{});
 
     printf("SmemLayoutQ:\n");
     // print_layout(SmemLayoutQ{});  // 3D layout, use print() instead
-    print(SmemLayoutQ{}); printf("\n");
+    print(SmemLayoutQ{});
+    printf("\n");
 
     printf("SmemLayoutAtomK:\n");
     print_layout(SmemLayoutAtomK{});
 
     printf("SmemLayoutK:\n");
     // print_layout(SmemLayoutK{});  // 3D layout, use print() instead
-    print(SmemLayoutK{}); printf("\n");
+    print(SmemLayoutK{});
+    printf("\n");
 
     printf("SmemLayoutAtomVt:\n");
     print_layout(SmemLayoutAtomVtMma{});
 
     printf("SmemLayoutVt:\n");
     // print_layout(SmemLayoutVtMma{});  // 3D layout, use print() instead
-    print(SmemLayoutVtMma{}); printf("\n");
+    print(SmemLayoutVtMma{});
+    printf("\n");
 
     printf("SmemLayoutAtomP:\n");
     print_layout(SmemLayoutAtomP{});
 
     printf("SmemLayoutP:\n");
     // print_layout(SmemLayoutP{});  // 3D layout, use print() instead
-    print(SmemLayoutP{}); printf("\n");
+    print(SmemLayoutP{});
+    printf("\n");
 
     // ~~~~~~~~~~~~~~~~~~~~~~~~~ inner kernel code ~~~~~~~~~~~~~~~~~~~~~~~~~
     static constexpr int MmaWarpGroups = size(TiledMmaPV{}) / cutlass::NumThreadsPerWarpGroup;
     printf("MmaWarpGroups: %d\n", MmaWarpGroups);
     Layout warp_group_thread_layout = make_layout(make_shape(Int<MmaWarpGroups>{}),
-                                                    make_stride(Int<cutlass::NumThreadsPerWarpGroup>{}));
+                                                  make_stride(Int<cutlass::NumThreadsPerWarpGroup>{}));
 
     printf("warp_group_thread_layout:\n");
     print_layout(warp_group_thread_layout);
