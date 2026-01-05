@@ -141,28 +141,30 @@ int main()
     printf("\n");
 
     // ~~~~~~~~~~~~~~~~~~~~~~~~~ inner kernel code ~~~~~~~~~~~~~~~~~~~~~~~~~
+
     static constexpr int MmaWarpGroups = size(TiledMmaPV{}) / cutlass::NumThreadsPerWarpGroup;
     printf("MmaWarpGroups: %d\n", MmaWarpGroups);
     Layout warp_group_thread_layout = make_layout(make_shape(Int<MmaWarpGroups>{}),
                                                   make_stride(Int<cutlass::NumThreadsPerWarpGroup>{}));
 
     printf("warp_group_thread_layout:\n");
-    print_layout(warp_group_thread_layout);
+    print(warp_group_thread_layout);
+    printf("\n");
 
-    // TiledMmaQK tiled_mma_qk;
-    // TiledMmaPV tiled_mma_pv;
-    // printf("tiled_mma_qk:\n");
-    // print(tiled_mma_qk); printf("\n");
-    // printf("tiled_mma_pv:\n");
-    // print(tiled_mma_pv); printf("\n");
+    TiledMmaQK tiled_mma_qk;
+    TiledMmaPV tiled_mma_pv;
+    printf("tiled_mma_qk:\n");
+    print(tiled_mma_qk); printf("\n");
+    printf("tiled_mma_pv:\n");
+    print(tiled_mma_pv); printf("\n");
 
-    // // (thread_idx, value ) -> index in some op or memory
-    // auto wg_mma_qk = tiled_mma_qk.get_slice(warp_group_thread_layout(0));
-    // auto wg_mma_pv = tiled_mma_pv.get_slice(warp_group_thread_layout(0));
-    // printf("wg_mma_qk:\n");
-    // print(wg_mma_qk); printf("\n");
-    // printf("wg_mma_pv:\n");
-    // print(wg_mma_pv); printf("\n");
+    // (thread_idx, value ) -> index in some op or memory
+    auto wg_mma_qk = tiled_mma_qk.get_slice(warp_group_thread_layout(0));
+    auto wg_mma_pv = tiled_mma_pv.get_slice(warp_group_thread_layout(0));
+    printf("wg_mma_qk:\n");
+    print(wg_mma_qk); printf("\n");
+    printf("wg_mma_pv:\n");
+    print(wg_mma_pv); printf("\n");
     // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
     return 0;
