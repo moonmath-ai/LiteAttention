@@ -130,18 +130,30 @@ using SmemCopyAtomP = Copy_Atom<cute::SM90_U32x4_STSM_N, ElementV>;
 
 __global__ void kernel_inspect_layouts()
 {
+    // Use extern shared memory pattern: declare as char array and cast to our type
+    extern __shared__ char shared_memory[];
+    TensorStorage &shared_storage = *reinterpret_cast<TensorStorage *>(shared_memory);
+
+    Tensor sQ = make_tensor(make_smem_ptr(shared_storage.smem_q.data()), SmemLayoutQ{});     // (kBlockM, kHeadSize, InnerDimSize[optional])
+    Tensor sK = make_tensor(make_smem_ptr(shared_storage.smem_k.data()), SmemLayoutK{});     // (kBlockN, kHeadSize, kStages)
+    Tensor sV = make_tensor(make_smem_ptr(shared_storage.smem_v.data()), SmemLayoutVtMma{}); // (kHeadSize, kBlockN, kStages)
+    Tensor sP = [&]
+    {
+        if constexpr (MmaPV_is_RS)
+        {
+            // We might not have smem_p if !MmaPV_is_RS, just use smem_q as a placeholder since we don't use it
+            // Cast to ElementV* since SmemLayoutP expects ElementV type (this placeholder is never actually used)
+            return make_tensor(make_smem_ptr(reinterpret_cast<ElementV *>(shared_storage.smem_q.data())), SmemLayoutP{});
+        }
+        else
+        {
+            return make_tensor(make_smem_ptr(shared_storage.smem_p.data()), SmemLayoutP{});
+        }
+    }();
+
     static constexpr int MmaWarpGroups = size(TiledMmaPV{}) / cutlass::NumThreadsPerWarpGroup;
-    // static constexpr int MmaWarpGroups = kBlockMI / cutlass::NumThreadsPerWarpGroup;
     printf("MmaWarpGroups: %d\n", MmaWarpGroups);
     Layout warp_group_thread_layout = make_layout(make_shape(Int<MmaWarpGroups>{}), make_stride(Int<cutlass::NumThreadsPerWarpGroup>{}));
-    // Layout warp_group_thread_layout = [&]() {
-    //     if constexpr (ReInt8) {
-    //         // return make_layout(make_shape(Int<MmaWarpGroups>{}, Int<InnerDimSize>{}), make_stride(Int<cutlass::NumThreadsPerWarpGroup>{}, Int<InnerDimSize*cutlass::NumThreadsPerWarpGroup>{}));
-    //         return make_layout(select<0, 1>(shape(AtomLayoutQK{})), make_stride(Int<cutlass::NumThreadsPerWarpGroup>{}, Int<InnerDimSize*cutlass::NumThreadsPerWarpGroup>{}));
-    //     } else {
-    //         return make_layout(make_shape(Int<MmaWarpGroups>{}), make_stride(Int<cutlass::NumThreadsPerWarpGroup>{}));
-    //     }
-    // }();
 
     printf("warp_group_thread_layout:\n");
     print(warp_group_thread_layout);
@@ -166,63 +178,6 @@ __global__ void kernel_inspect_layouts()
     print(wg_mma_pv);
     printf("\n");
 
-    // // sliced sliced wg_mma's
-    // auto wg_mma_qk_slice = [&]()
-    // {
-    //     if constexpr (ReInt8)
-    //     {
-    //         // In ReInt8, tiled_mma_qk has ThrLayoutVMNK: (_128,_2,_2,_1) (third dim is 2)
-    //         // To match no ReInt8 case which has (_128,_2,_1,_1), slice on the third dimension (N)
-    //         // First get wg_mma_qk, then slice it further to get one N warp group
-    //         // return wg_mma_qk.get_slice((_, _, 0, _));
-    //         return tiled_mma_qk.get_slice(warp_group_thread_layout((1, 0)));
-    //         // return wg_mma_qk.get_slice(0);
-    //     }
-    //     else
-    //     {
-    //         return wg_mma_qk;
-    //     }
-    // }();
-    // auto wg_mma_pv_slice = [&]()
-    // {
-    //     if constexpr (ReInt8)
-    //     {
-    //         // Same for pv - slice to get one N warp group
-    //         // return wg_mma_pv.get_slice((_, _, 0, _));
-    //         return tiled_mma_pv.get_slice(warp_group_thread_layout((1, 0)));
-    //     }
-    //     else
-    //     {
-    //         return wg_mma_pv;
-    //     }
-    // }();
-    // printf("wg_mma_qk_slice:\n");
-    // print(wg_mma_qk_slice);
-    // printf("\n");
-    // printf("wg_mma_pv_slice:\n");
-    // print(wg_mma_pv_slice);
-    // printf("\n");
-
-    // Use extern shared memory pattern: declare as char array and cast to our type
-    extern __shared__ char shared_memory[];
-    TensorStorage &shared_storage = *reinterpret_cast<TensorStorage *>(shared_memory);
-
-    Tensor sQ = make_tensor(make_smem_ptr(shared_storage.smem_q.data()), SmemLayoutQ{});     // (kBlockM, kHeadSize, InnerDimSize[optional])
-    Tensor sK = make_tensor(make_smem_ptr(shared_storage.smem_k.data()), SmemLayoutK{});     // (kBlockN, kHeadSize, kStages)
-    Tensor sV = make_tensor(make_smem_ptr(shared_storage.smem_v.data()), SmemLayoutVtMma{}); // (kHeadSize, kBlockN, kStages)
-    Tensor sP = [&]
-    {
-        if constexpr (MmaPV_is_RS)
-        {
-            // We might not have smem_p if !MmaPV_is_RS, just use smem_q as a placeholder since we don't use it
-            // Cast to ElementV* since SmemLayoutP expects ElementV type (this placeholder is never actually used)
-            return make_tensor(make_smem_ptr(reinterpret_cast<ElementV *>(shared_storage.smem_q.data())), SmemLayoutP{});
-        }
-        else
-        {
-            return make_tensor(make_smem_ptr(shared_storage.smem_p.data()), SmemLayoutP{});
-        }
-    }();
 
     printf("smem_tiled_copy_P:\n");
     auto smem_tiled_copy_P = make_tiled_copy_C(SmemCopyAtomP{}, tiled_mma_qk);
