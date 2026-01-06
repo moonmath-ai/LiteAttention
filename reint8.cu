@@ -129,8 +129,6 @@ using SmemCopyAtomP = Copy_Atom<cute::SM90_U32x4_STSM_N, ElementV>;
 
 __global__ void kernel_inspect_layouts()
 {
-    // ~~~~~~~~~~~~~~~~~~~~~~~~~ inner kernel code ~~~~~~~~~~~~~~~~~~~~~~~~~
-
     static constexpr int MmaWarpGroups = size(TiledMmaPV{}) / cutlass::NumThreadsPerWarpGroup;
     printf("MmaWarpGroups: %d\n", MmaWarpGroups);
     Layout warp_group_thread_layout = make_layout(make_shape(Int<MmaWarpGroups>{}),
@@ -189,7 +187,9 @@ __global__ void kernel_inspect_layouts()
     print(wg_mma_pv_slice);
     printf("\n");
 
-    __shared__ TensorStorage shared_storage;
+    // Use extern shared memory pattern: declare as char array and cast to our type
+    extern __shared__ char shared_memory[];
+    TensorStorage& shared_storage = *reinterpret_cast<TensorStorage*>(shared_memory);
 
     Tensor sQ = make_tensor(make_smem_ptr(shared_storage.smem_q.data()), SmemLayoutQ{});     // (kBlockM, kHeadSize)
     Tensor sK = make_tensor(make_smem_ptr(shared_storage.smem_k.data()), SmemLayoutK{});     // (kBlockN, kHeadSize, kStages)
@@ -208,17 +208,42 @@ __global__ void kernel_inspect_layouts()
         }
     }();
 
+    printf("smem_tiled_copy_P:\n");
     auto smem_tiled_copy_P = make_tiled_copy_C(SmemCopyAtomP{}, tiled_mma_qk);
+    print(smem_tiled_copy_P);
+    printf("\n");
+
     const int thread_idx = 0;
+    printf("smem_thr_copy_P:\n");
     auto smem_thr_copy_P = smem_tiled_copy_P.get_thread_slice(thread_idx);
+    print(smem_thr_copy_P);
+    printf("\n");
 
     // Allocate "fragments/descriptors"
+    printf("tSrQ (partition_fragment_A(sQ)):\n");
     Tensor tSrQ = wg_mma_qk.partition_fragment_A(sQ);
+    print(tSrQ);
+    printf("\n");
+
+    printf("tSrK (partition_fragment_B(sK)):\n");
     Tensor tSrK = wg_mma_qk.partition_fragment_B(sK);
+    print(tSrK);
+    printf("\n");
+
+    printf("tOrV (partition_fragment_B(sV)):\n");
     Tensor tOrV = wg_mma_pv.partition_fragment_B(sV);
+    print(tOrV);
+    printf("\n");
+
+    printf("tOsP (partition_fragment_A(sP)):\n");
     Tensor tOsP = wg_mma_pv.partition_fragment_A(sP);
+    print(tOsP);
+    printf("\n");
+
+    printf("tPsP (partition_D(as_position_independent_swizzle_tensor(sP))):\n");
     Tensor tPsP = smem_thr_copy_P.partition_D(cute::as_position_independent_swizzle_tensor(sP));
-    // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    print(tPsP);
+    printf("\n");
 }
 
 int main()
@@ -277,18 +302,49 @@ int main()
     printf("\n");
 
     // Launch kernel to run device code that uses smem_ptr
-    kernel_inspect_layouts<<<1, 1>>>();
-    cudaDeviceSynchronize();
+    // Calculate exact shared memory size needed
+    constexpr size_t smem_size = sizeof(TensorStorage);
+    
+    // Set maximum dynamic shared memory for this function
+    // Use the exact size needed (not the maximum), as per CUTLASS examples
+    // Only set if size >= 48KB (default limit)
+    if (smem_size >= (48 << 10)) {
+        cudaError_t err = cudaFuncSetAttribute(
+            kernel_inspect_layouts,
+            cudaFuncAttributeMaxDynamicSharedMemorySize,
+            smem_size); // Use exact size needed
+        if (err != cudaSuccess) {
+            printf("ERROR: cudaFuncSetAttribute failed: %s\n", cudaGetErrorString(err));
+            return 1;
+        }
+    }
+    
+    // Launch kernel with exact shared memory size needed
+    kernel_inspect_layouts<<<1, 1, smem_size>>>();
+    
+    // Check for launch errors
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        printf("ERROR: Kernel launch failed: %s\n", cudaGetErrorString(err));
+        return 1;
+    }
+    
+    // Synchronize and check for runtime errors
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess) {
+        printf("ERROR: cudaDeviceSynchronize failed: %s\n", cudaGetErrorString(err));
+        return 1;
+    }
 
     return 0;
 }
 
 /*
 # Compile with ReInt8 = true
-nvcc -std=c++20 --use_fast_math -I./csrc/cutlass/include -arch=sm_90 -DREINT8_ENABLED -o reint8 reint8.cu && \
+nvcc -std=c++20 --use_fast_math -I./csrc/cutlass/include -arch=sm_90a -DREINT8_ENABLED -o reint8 reint8.cu && \
 ./reint8 > shapes_and_such.txt 2>&1
 
 # Compile with ReInt8 = false
-nvcc -std=c++20 --use_fast_math -I./csrc/cutlass/include -arch=sm_90 -o reint8 reint8.cu && \
+nvcc -std=c++20 --use_fast_math -I./csrc/cutlass/include -arch=sm_90a -o reint8 reint8.cu && \
 ./reint8 > shapes_and_such_no_reint8.txt 2>&1
 */
