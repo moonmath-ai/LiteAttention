@@ -265,7 +265,7 @@ namespace flash
             dequan_s = __shfl_sync(0xffffffff, dequan_k * softmax_scale_log2, 0);
         }
 
-        template <int kBlockM, typename TiledMma, bool const Is_first, bool const Check_inf = false, typename Tensor0>
+        template <int kBlockM, typename TiledMma, bool const Is_first, bool const Check_inf = false, int const inner_idx = 0, typename Tensor0>
         __forceinline__ __device__ TensorT max_get_scale_detect_qk_skip(
             Tensor0 &acc_s,
             const float threshold,
@@ -388,7 +388,7 @@ namespace flash
         };
 
         // TONY: acc_s is Q times K for one tile
-        template <bool const Is_first, bool const Check_inf = false, typename Tensor0>
+        template <bool const Is_first, bool const Check_inf = false, int const inner_idx = 0, typename Tensor0>
         __forceinline__ __device__ TensorT max_get_scale(Tensor0 &acc_s)
         { // pass in a bool ref
             // For INT8: acc_s contains int32 values from INT8 MMA
@@ -449,7 +449,7 @@ namespace flash
             return scores_scale;
         };
 
-        template <bool const Is_first, bool const Check_inf = false, typename Tensor0>
+        template <bool const Is_first, bool const Check_inf = false, int const inner_idx = 0, typename Tensor0>
         __forceinline__ __device__ void online_softmax(Tensor0 &acc_s)
         {
             // consider: assume acc_s is int's tensor when Is_INT8 is enabled
@@ -466,7 +466,7 @@ namespace flash
             flash::reduce_sum</*zero_init=*/Is_first, /*warp_reduce=*/false>(scores, row_sum);
         };
 
-        template <bool const Is_first, bool const Check_inf = false, typename Tensor0, typename Tensor1>
+        template <bool const Is_first, bool const Check_inf = false, int const inner_idx = 0, typename Tensor0, typename Tensor1>
         __forceinline__ __device__ void online_softmax_dequantize(Tensor0 &acc_s, Tensor1 &acc_s_float)
         {
             // consider: assume acc_s is int's tensor when Is_INT8 is enabled
@@ -514,7 +514,7 @@ namespace flash
             return scores_scale;
         };
 
-        template <typename Tensor1>
+        template <int const inner_idx = 0, typename Tensor1>
         __forceinline__ __device__ void rescale_o(Tensor1 &acc_o, TensorT const &scores_scale)
         {
             // consider: nothing change in this function when Is_INT8 is enabled (it's the same for both cases)
