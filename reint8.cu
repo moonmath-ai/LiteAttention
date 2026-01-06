@@ -11,17 +11,19 @@ static constexpr bool ReInt8 = false;
 
 static constexpr int kStages = 2;
 
-static constexpr int kBlockM = 128;
+static constexpr int kBlockM = ReInt8 ? 256 : 128;
 static constexpr int kBlockMI = 128;
 static constexpr int kBlockN = 128;
 static constexpr int kHeadDim = 128;
 static constexpr int InnerDimSize = 2;
 
+static constexpr bool MmaPV_is_RS = false;
 using Element = int8_t;
 using ElementAccumQK = int32_t;
 using ElementAccum = float;
 using ElementV = cutlass::bfloat16_t;
 static constexpr cute::GMMA::Major MmaMajorV = GMMA::Major::MN;
+static constexpr cute::GMMA::Major TmaMajorV = GMMA::Major::K;
 
 using TileShape_MNK = Shape<Int<kBlockM>, Int<kHeadDim>, Int<kBlockN>>;
 using TileShape_MINK = Shape<Int<kBlockMI>, Int<kHeadDim>, Int<kBlockN>>;
@@ -67,6 +69,13 @@ using SmemLayoutK = decltype(tile_to_shape(
     SmemLayoutAtomK{},
     make_shape(shape<1>(TileShape_MNK{}), shape<2>(TileShape_MNK{}), Int<kStages>{})));
 
+using SmemLayoutAtomVt = decltype(cutlass::gemm::collective::detail::ss_smem_selector<TmaMajorV, ElementV, Int<kHeadDim>, decltype(cute::get<2>(TileShape_MNK_PV{}))>());
+
+using SmemLayoutVt = decltype(tile_to_shape(
+    SmemLayoutAtomVt{},
+    make_shape(Int<kHeadDim>{}, shape<2>(TileShape_MNK_PV{}), Int<kStages>{}),
+    std::conditional_t<TmaMajorV == GMMA::Major::K, cute::Step<_1, _2, _3>, cute::Step<_2, _1, _3>>{}));
+
 using SmemLayoutAtomVtMma = decltype(cutlass::gemm::collective::detail::ss_smem_selector<
                                      MmaMajorV, ElementV,
                                      Int<kHeadDim>,
@@ -83,6 +92,36 @@ using SmemLayoutAtomP = std::conditional_t<ReInt8,
 using SmemLayoutP = std::conditional_t<ReInt8,
                                        decltype(tile_to_shape(SmemLayoutAtomP{}, make_shape(shape<0>(TileShape_MINK{}), shape<1>(TileShape_MINK{}), Int<InnerDimSize>{}))),
                                        decltype(tile_to_shape(SmemLayoutAtomP{}, select<0, 1>(TileShape_MNK{})))>;
+
+static constexpr bool Use_TMA_Q = true;
+static constexpr bool MmaQK_is_RS = false;
+static constexpr bool Use_TMA_KV = true;
+static constexpr bool AppendKV = false;
+
+// If PackGQA, we use cp.async (instead of TMA) to load Q, so we want smem_q to be aligned
+// and have sQ being position_independent_swizzle_tensor.
+// If !Use_TMA_KV, we use cp.async (instead of TMA) to load K & V, so we want smem_k and smem_v to be aligned.
+static constexpr size_t SmemAlignmentQ = Use_TMA_Q && !MmaQK_is_RS ? 128 : cutlass::detail::alignment_for_swizzle(SmemLayoutQ{});
+static constexpr size_t SmemAlignmentK = Use_TMA_KV && !AppendKV ? 128 : cutlass::detail::alignment_for_swizzle(SmemLayoutK{});
+static constexpr size_t SmemAlignmentVtNoTranspose = cutlass::detail::alignment_for_swizzle(SmemLayoutVt{});
+static_assert(SmemAlignmentQ >= 128 and SmemAlignmentK >= 128 && SmemAlignmentVtNoTranspose >= 128, "Require at least 128B alignment");
+static constexpr size_t SmemAlignmentP = cutlass::detail::alignment_for_swizzle(SmemLayoutP{});
+static_assert(SmemAlignmentP >= 128, "Require at least 128B alignment");
+
+using SmemP_t = std::conditional_t<MmaPV_is_RS, cute::array<ElementV, 0>, cute::array_aligned<ElementV, cute::cosize_v<SmemLayoutP>, SmemAlignmentP>>;
+
+struct TensorStorageWithPNoTranspose : cute::aligned_struct<cute::max(SmemAlignmentQ, SmemAlignmentK, SmemAlignmentVtNoTranspose, SmemAlignmentP), _0>
+{
+    cute::array_aligned<ElementV, cute::cosize_v<SmemLayoutVt>, SmemAlignmentVtNoTranspose> smem_v;
+    cute::array_aligned<Element, cute::cosize_v<SmemLayoutQ>, SmemAlignmentQ> smem_q;
+    cute::array_aligned<Element, cute::cosize_v<SmemLayoutK>, SmemAlignmentK> smem_k;
+    // SmemQv_t smem_qv;
+    SmemP_t smem_p;
+};
+
+using TensorStorage = TensorStorageWithPNoTranspose;
+
+using SmemCopyAtomP = Copy_Atom<cute::SM90_U32x4_STSM_N, ElementV>;
 
 int main()
 {
@@ -186,6 +225,36 @@ int main()
     }();
     printf("wg_mma_qk_slice:\n"); print(wg_mma_qk_slice); printf("\n");
     printf("wg_mma_pv_slice:\n"); print(wg_mma_pv_slice); printf("\n");
+
+    TensorStorage shared_storage;
+
+    Tensor sQ = make_tensor(make_smem_ptr(shared_storage.smem_q.data()), SmemLayoutQ{});     // (kBlockM, kHeadSize)
+    Tensor sK = make_tensor(make_smem_ptr(shared_storage.smem_k.data()), SmemLayoutK{});     // (kBlockN, kHeadSize, kStages)
+    Tensor sV = make_tensor(make_smem_ptr(shared_storage.smem_v.data()), SmemLayoutVtMma{}); // (kHeadSize, kBlockN, kStages)
+    Tensor sP = [&]
+    {
+        if constexpr (MmaPV_is_RS)
+        {
+            // We might not have smem_p if !MmaPV_is_RS, just use smem_q as a placeholder since we don't use it
+            // Cast to ElementV* since SmemLayoutP expects ElementV type (this placeholder is never actually used)
+            return make_tensor(make_smem_ptr(reinterpret_cast<ElementV *>(shared_storage.smem_q.data())), SmemLayoutP{});
+        }
+        else
+        {
+            return make_tensor(make_smem_ptr(shared_storage.smem_p.data()), SmemLayoutP{});
+        }
+    }();
+
+    auto smem_tiled_copy_P = make_tiled_copy_C(SmemCopyAtomP{}, tiled_mma_qk);
+    const int thread_idx = 0;
+    auto smem_thr_copy_P = smem_tiled_copy_P.get_thread_slice(thread_idx);
+
+    // Allocate "fragments/descriptors"
+    Tensor tSrQ = wg_mma_qk.partition_fragment_A(sQ);
+    Tensor tSrK = wg_mma_qk.partition_fragment_B(sK);
+    Tensor tOrV = wg_mma_pv.partition_fragment_B(sV);
+    Tensor tOsP = wg_mma_pv.partition_fragment_A(sP);
+    Tensor tPsP = smem_thr_copy_P.partition_D(cute::as_position_independent_swizzle_tensor(sP));
     // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
     return 0;
