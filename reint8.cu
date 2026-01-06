@@ -7,7 +7,11 @@
 
 using namespace cute;
 
+#ifndef REINT8_ENABLED
 static constexpr bool ReInt8 = false;
+#else
+static constexpr bool ReInt8 = true;
+#endif
 
 static constexpr int kStages = 2;
 
@@ -261,9 +265,11 @@ int main()
 }
 
 /*
-nvcc -std=c++20 -O3 --use_fast_math -I./csrc/cutlass/include -arch=sm_90 -o reint8 reint8.cu && \
+# Compile with ReInt8 = true
+nvcc -std=c++20 -O3 --use_fast_math -I./csrc/cutlass/include -arch=sm_90 -DREINT8_ENABLED -o reint8 reint8.cu && \
 ./reint8 > shapes_and_such.txt 2>&1
 
+# Compile with ReInt8 = false
 nvcc -std=c++20 -O3 --use_fast_math -I./csrc/cutlass/include -arch=sm_90 -o reint8 reint8.cu && \
 ./reint8 > shapes_and_such_no_reint8.txt 2>&1
 */
