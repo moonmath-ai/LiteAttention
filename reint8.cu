@@ -260,6 +260,11 @@ __global__ void kernel_inspect_layouts()
     Tensor tPsP = smem_thr_copy_P.partition_D(cute::as_position_independent_swizzle_tensor(sP));
     print(tPsP);
     printf("\n");
+
+    printf("tOrO (partition_fragment_C(tiled_mma_pv, select<0, 1>(TileShape_MNK_PV{}))):\n");
+    Tensor tOrO = partition_fragment_C(tiled_mma_pv, select<0, 1>(TileShape_MNK_PV{}));
+    print(tOrO);
+    printf("\n");
 }
 
 int main()
