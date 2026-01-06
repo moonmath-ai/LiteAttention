@@ -90,32 +90,23 @@ namespace flash
         using TileScheduler = TileScheduler_;
         using TileSchedulerArguments = typename flash::TileSchedulerArguments;
         using TileSchedulerParams = typename TileScheduler::Params;
-        
-        // Extract kBlockM from TileShape_MNK_PV for validation
-        static constexpr int kBlockM = CUTE_STATIC_V(get<0>(TileShape_MNK_PV{}));
 
         static constexpr uint32_t NumLoadWarpGroups = 1;
-        // we say derived only because the name NumMmaThreads is already taken in the Operator function below
-        // static constexpr uint32_t NumMmaThreads = (kBlockM == 256) ? (2 * cutlass::NumThreadsPerWarpGroup) : CUTE_STATIC_V(size(TiledMmaPV{}));
-        static constexpr int NumMmaThreads = CollectiveMainloop::NumMmaThreads;
-        // static constexpr uint32_t NumMmaWarpGroups = CUTE_STATIC_V(size(TiledMmaPV{})) / cutlass::NumThreadsPerWarpGroup;
-        // static constexpr uint32_t NumMmaWarpGroups = NumMmaThreads / cutlass::NumThreadsPerWarpGroup;
-        static constexpr int NumMmaWarpGroups = CollectiveMainloop::NumMmaWarpGroups;
-        // static constexpr uint32_t MaxThreadsPerBlock = CUTE_STATIC_V(size(TiledMmaPV{})) + (NumLoadWarpGroups * cutlass::NumThreadsPerWarpGroup);
-        static constexpr int MaxThreadsPerBlock = NumMmaThreads + (NumLoadWarpGroups * cutlass::NumThreadsPerWarpGroup);
-        static constexpr int MinBlocksPerMultiprocessor = 1;
+        static constexpr uint32_t NumMmaWarpGroups = CUTE_STATIC_V(size(TiledMmaPV{})) / cutlass::NumThreadsPerWarpGroup;
+        static constexpr uint32_t MaxThreadsPerBlock = CUTE_STATIC_V(size(TiledMmaPV{})) + (NumLoadWarpGroups * cutlass::NumThreadsPerWarpGroup);
+        static constexpr uint32_t MinBlocksPerMultiprocessor = 1;
         static_assert(NumMmaWarpGroups == 1 || NumMmaWarpGroups == 2 || NumMmaWarpGroups == 3);
 
         // when using skip optimizations we need 16 registers for the producer
-        static constexpr int SkipOptimizationRegisterRequirement = 0;
+        static constexpr uint32_t SkipOptimizationRegisterRequirement = 0;
 
-        static constexpr int constexpr_max(int a, int b) { return (a > b) ? a : b; }
-        static constexpr int constexpr_min(int a, int b) { return (a < b) ? a : b; }
+        static constexpr uint32_t constexpr_max(uint32_t a, uint32_t b) { return (a > b) ? a : b; }
+        static constexpr uint32_t constexpr_min(uint32_t a, uint32_t b) { return (a < b) ? a : b; }
 
         // Register requirement for Load and Math WGs
         // If we use cp.async to load K and V, we need more registers for the producer WG.
-        static constexpr int LoadRegisterRequirement = constexpr_max((NumMmaWarpGroups == 1 ? 56 : (NumMmaWarpGroups == 2 ? (Use_TMA_KV ? 24 : 40) : 32)) - SkipOptimizationRegisterRequirement, 24);
-        static constexpr int MmaRegisterRequirement = (NumMmaWarpGroups == 1 ? 256 : (NumMmaWarpGroups == 2 ? (Use_TMA_KV ? 240 : 232) : 160));
+        static constexpr uint32_t LoadRegisterRequirement = constexpr_max((NumMmaWarpGroups == 1 ? 56 : (NumMmaWarpGroups == 2 ? (Use_TMA_KV ? 24 : 40) : 32)) - SkipOptimizationRegisterRequirement, 24);
+        static constexpr uint32_t MmaRegisterRequirement = (NumMmaWarpGroups == 1 ? 256 : (NumMmaWarpGroups == 2 ? (Use_TMA_KV ? 240 : 232) : 160));
 
         // If you want to print from the producer warp, you'd need to increase the number of registers
         // Otherwise you'll get CUDA error.
@@ -237,9 +228,9 @@ namespace flash
         operator()(Params const &params, char *smem_buf)
         {
 
-            // static constexpr int NumMmaThreads = NumMmaWarpGroups * cutlass::NumThreadsPerWarpGroup;
+            static constexpr int NumMmaThreads = NumMmaWarpGroups * cutlass::NumThreadsPerWarpGroup;
             static constexpr int MmaThreadOffset = NumLoadWarpGroups * cutlass::NumThreadsPerWarpGroup;
-            // static constexpr int kBlockM = get<0>(TileShape_MNK_PV{});
+            static constexpr int kBlockM = get<0>(TileShape_MNK_PV{});
 
             using MainloopPipelineK = typename CollectiveMainloop::MainloopPipelineK;
             using MainloopPipelineV = typename CollectiveMainloop::MainloopPipelineV;
@@ -441,10 +432,9 @@ namespace flash
                 DelayedSkipListWriter<CollectiveMainloop::kStagesForSkips, ReverseSkipList, Phase, HasMustDoList> skip_writer(
                     shared_storage.skip_list_storage.n_blocks_buffer,
                     shared_storage.skip_list_storage.end_range_buffer,
-                    shared_storage.skip_list_storage.skip_tests
-                );
+                    shared_storage.skip_list_storage.skip_tests);
 
-                bool should_load_KV=false;
+                bool should_load_KV = false;
                 // Load Q, K, V
                 for (auto work_tile_info = SingleProducerWarp || warp_idx_in_warpgroup == 0
                                                ? scheduler.template get_initial_work</*IsProducerWarp=*/true>(params.scheduler)
@@ -483,10 +473,9 @@ namespace flash
                     };
 
                     should_load_KV = mainloop.load(params.mainloop, pipeline_k, pipeline_v, pipeline_vt, smem_pipe_write,
-                                shared_storage, scheduler_prefetch, seqlen_info, block_coord, work_idx, skip_writer);
-                                // shared_storage, scheduler_prefetch, seqlen_info, block_coord, work_idx, shared_storage.skip_list_storage.writer);
-                                // shared_storage, scheduler_prefetch, seqlen_info, block_coord, work_idx, skip_reader, skip_writer);
-
+                                                   shared_storage, scheduler_prefetch, seqlen_info, block_coord, work_idx, skip_writer);
+                    // shared_storage, scheduler_prefetch, seqlen_info, block_coord, work_idx, shared_storage.skip_list_storage.writer);
+                    // shared_storage, scheduler_prefetch, seqlen_info, block_coord, work_idx, skip_reader, skip_writer);
                 }
                 mainloop.load_tail(pipeline_k, pipeline_v, pipeline_vt, smem_pipe_write, shared_storage, work_idx, skip_writer, should_load_KV);
                 // mainloop.load_tail(pipeline_k, pipeline_v, pipeline_vt, smem_pipe_write, shared_storage, work_idx, shared_storage.skip_list_storage.writer, should_load_KV);
@@ -552,7 +541,9 @@ namespace flash
                         float const k_descale = params.mainloop.ptr_k_descale == nullptr ? 1.0f : params.mainloop.ptr_k_descale[bidb * get<0>(params.mainloop.stride_k_descale) + bidh_kv * get<1>(params.mainloop.stride_k_descale)];
                         // softmax_scale_log2 *= q_descale * k_descale;
                         softmax_scale_log2 = params.mainloop.softmax_scale_log2 * q_descale * k_descale;
-                    }else if constexpr (Is_INT8){
+                    }
+                    else if constexpr (Is_INT8)
+                    {
                         int const m_block = get<0>(block_coord);
                         // For INT8: Create Q descale tensor with shape (num_batches, num_heads, num_m_blocks)
                         // Use the INT8-specific stride from params
@@ -561,12 +552,16 @@ namespace flash
                         Tensor mQDescale = make_tensor(make_gmem_ptr(params.mainloop.ptr_q_descale), shape_q_descale_3d, params.mainloop.stride_q_descale_int8);
                         // Slice by bidb and bidh to get scalar value for this m_block
                         softmax_scale_log2 = mQDescale(bidb, bidh, m_block);
-                    }else{
+                    }
+                    else
+                    {
                         softmax_scale_log2 = params.mainloop.softmax_scale_log2;
                     }
                     const int thread_idx = threadIdx.x - MmaThreadOffset;
 
-                    // DOR: kNRows = 2 * (2 * 128 / 256) = 2, when StrictlyTwoWG we have 2 * (2 * 256 / 256) = 4
+                    // // DOR: kNRows = 2 * (2 * 128 / 256) = 2
+                    // flash::Softmax<!LargeHeadDimV ? 2 * (2 * kBlockM / NumMmaThreads) : 2, /*Max_offset=*/!Is_8Bit ? 0 : 8> softmax(softmax_scale_log2, row_mask, local_row_idx);
+                    // DOR: kNRows = 2 * (2 * 128 / 256) = 2
                     flash::Softmax<!LargeHeadDimV ? 2 * (2 * kBlockM / NumMmaThreads) : 2, /*Max_offset=*/!Is_FP8 ? 0 : 8, Is_INT8> softmax(softmax_scale_log2, seqlen_info.seqlen_q, thread_idx);
 
                     /*
