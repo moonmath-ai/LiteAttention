@@ -1811,7 +1811,7 @@ namespace flash
                         cute::copy(softmax.template max_get_scale</*Is_first=*/false, Check_inf, inner_idx>(tSrS_ambiguous_type), scores_scale1);
                     }
 
-                    auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
+                    tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
                     softmax.template online_softmax_dequantize</*Is_first=*/false, Check_inf, inner_idx1>(tSrS_ambiguous_type, tSrS);
 
                     warpgroup_wait<0>();
