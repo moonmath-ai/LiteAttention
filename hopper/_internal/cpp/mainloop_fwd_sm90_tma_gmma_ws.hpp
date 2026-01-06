@@ -230,6 +230,7 @@ namespace flash
         //         Shape<Int<kBlockMInner>, Int<kHeadDim>, _2>,
         //         Shape<Int<kBlockM>, Int<kHeadDim>>
         //     >{}));
+        using SmemLayoutQTMA = decltype(tile_to_shape(SmemLayoutAtomQ{}, select<0, 2>(TileShape_MNK{})));
 
         using SmemLayoutAtomK = decltype(cutlass::gemm::collective::detail::ss_smem_selector<GMMA::Major::K, Element,
                                                                                              decltype(cute::get<1>(TileShape_MNK{})), decltype(cute::get<2>(TileShape_MNK{}))>());
@@ -367,7 +368,8 @@ namespace flash
         using TMA_Q = decltype(make_tma_copy_A_sm90(
             GmemTiledCopyQ{},
             make_tensor(make_gmem_ptr(static_cast<Element const *>(nullptr)), ShapeQKV{}, StrideQK{}),
-            SmemLayoutQ{},
+            // SmemLayoutQ{},
+            SmemLayoutQTMA{},
             TileShape_MNK{},
             ClusterShape{}));
 
@@ -596,7 +598,7 @@ namespace flash
             TMA_Q tma_load_Q = make_tma_copy_A_sm90(
                 GmemTiledCopyQ{},
                 mQ,
-                SmemLayoutQ{},
+                SmemLayoutQTMA{},
                 TileShape_MNK{},
                 ClusterShape{}); // no mcast for Q
             Tensor mK = make_tensor(make_gmem_ptr(args.ptr_K), args.shape_K, args.stride_K);
