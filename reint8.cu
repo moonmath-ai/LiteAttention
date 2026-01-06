@@ -127,6 +127,100 @@ using TensorStorage = TensorStorageWithPNoTranspose;
 
 using SmemCopyAtomP = Copy_Atom<cute::SM90_U32x4_STSM_N, ElementV>;
 
+__global__ void kernel_inspect_layouts()
+{
+    // ~~~~~~~~~~~~~~~~~~~~~~~~~ inner kernel code ~~~~~~~~~~~~~~~~~~~~~~~~~
+
+    static constexpr int MmaWarpGroups = size(TiledMmaPV{}) / cutlass::NumThreadsPerWarpGroup;
+    printf("MmaWarpGroups: %d\n", MmaWarpGroups);
+    Layout warp_group_thread_layout = make_layout(make_shape(Int<MmaWarpGroups>{}),
+                                                  make_stride(Int<cutlass::NumThreadsPerWarpGroup>{}));
+
+    printf("warp_group_thread_layout:\n");
+    print(warp_group_thread_layout);
+    printf("\n");
+
+    TiledMmaQK tiled_mma_qk;
+    TiledMmaPV tiled_mma_pv;
+    printf("tiled_mma_qk:\n");
+    print(tiled_mma_qk);
+    printf("\n");
+    printf("tiled_mma_pv:\n");
+    print(tiled_mma_pv);
+    printf("\n");
+
+    // (thread_idx, value ) -> index in some op or memory
+    auto wg_mma_qk = tiled_mma_qk.get_slice(warp_group_thread_layout(1));
+    auto wg_mma_pv = tiled_mma_pv.get_slice(warp_group_thread_layout(1));
+    printf("wg_mma_qk:\n");
+    print(wg_mma_qk);
+    printf("\n");
+    printf("wg_mma_pv:\n");
+    print(wg_mma_pv);
+    printf("\n");
+
+    // sliced sliced wg_mma's
+    auto wg_mma_qk_slice = [&]()
+    {
+        if constexpr (ReInt8)
+        {
+            return wg_mma_qk.get_slice(256);
+        }
+        else
+        {
+            return wg_mma_qk;
+        }
+    }();
+    auto wg_mma_pv_slice = [&]()
+    {
+        if constexpr (ReInt8)
+        {
+            return wg_mma_pv.get_slice(256);
+        }
+        else
+        {
+            return wg_mma_pv;
+        }
+    }();
+    printf("wg_mma_qk_slice:\n");
+    print(wg_mma_qk_slice);
+    printf("\n");
+    printf("wg_mma_pv_slice:\n");
+    print(wg_mma_pv_slice);
+    printf("\n");
+
+    __shared__ TensorStorage shared_storage;
+
+    Tensor sQ = make_tensor(make_smem_ptr(shared_storage.smem_q.data()), SmemLayoutQ{});     // (kBlockM, kHeadSize)
+    Tensor sK = make_tensor(make_smem_ptr(shared_storage.smem_k.data()), SmemLayoutK{});     // (kBlockN, kHeadSize, kStages)
+    Tensor sV = make_tensor(make_smem_ptr(shared_storage.smem_v.data()), SmemLayoutVtMma{}); // (kHeadSize, kBlockN, kStages)
+    Tensor sP = [&]
+    {
+        if constexpr (MmaPV_is_RS)
+        {
+            // We might not have smem_p if !MmaPV_is_RS, just use smem_q as a placeholder since we don't use it
+            // Cast to ElementV* since SmemLayoutP expects ElementV type (this placeholder is never actually used)
+            return make_tensor(make_smem_ptr(reinterpret_cast<ElementV *>(shared_storage.smem_q.data())), SmemLayoutP{});
+        }
+        else
+        {
+            return make_tensor(make_smem_ptr(shared_storage.smem_p.data()), SmemLayoutP{});
+        }
+    }();
+
+    auto smem_tiled_copy_P = make_tiled_copy_C(SmemCopyAtomP{}, tiled_mma_qk);
+    const int thread_idx = 0;
+    auto smem_thr_copy_P = smem_tiled_copy_P.get_thread_slice(thread_idx);
+
+    // Allocate "fragments/descriptors"
+    Tensor tSrQ = wg_mma_qk.partition_fragment_A(sQ);
+    Tensor tSrK = wg_mma_qk.partition_fragment_B(sK);
+    Tensor tOrV = wg_mma_pv.partition_fragment_B(sV);
+    Tensor tOsP = wg_mma_pv.partition_fragment_A(sP);
+    Tensor tPsP = smem_thr_copy_P.partition_D(cute::as_position_independent_swizzle_tensor(sP));
+    // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+}
+
 int main()
 {
 
@@ -182,94 +276,19 @@ int main()
     print(SmemLayoutP{});
     printf("\n");
 
-    // ~~~~~~~~~~~~~~~~~~~~~~~~~ inner kernel code ~~~~~~~~~~~~~~~~~~~~~~~~~
-
-    static constexpr int MmaWarpGroups = size(TiledMmaPV{}) / cutlass::NumThreadsPerWarpGroup;
-    printf("MmaWarpGroups: %d\n", MmaWarpGroups);
-    Layout warp_group_thread_layout = make_layout(make_shape(Int<MmaWarpGroups>{}),
-                                                  make_stride(Int<cutlass::NumThreadsPerWarpGroup>{}));
-
-    printf("warp_group_thread_layout:\n");
-    print(warp_group_thread_layout);
-    printf("\n");
-
-    TiledMmaQK tiled_mma_qk;
-    TiledMmaPV tiled_mma_pv;
-    printf("tiled_mma_qk:\n");
-    print(tiled_mma_qk);
-    printf("\n");
-    printf("tiled_mma_pv:\n");
-    print(tiled_mma_pv);
-    printf("\n");
-
-    // (thread_idx, value ) -> index in some op or memory
-    auto wg_mma_qk = tiled_mma_qk.get_slice(warp_group_thread_layout(1));
-    auto wg_mma_pv = tiled_mma_pv.get_slice(warp_group_thread_layout(1));
-    printf("wg_mma_qk:\n");
-    print(wg_mma_qk);
-    printf("\n");
-    printf("wg_mma_pv:\n");
-    print(wg_mma_pv);
-    printf("\n");
-
-    // sliced sliced wg_mma's
-    auto wg_mma_qk_slice = [&]() {
-        if constexpr (ReInt8) {
-            return wg_mma_qk.get_slice(256);
-        } else {
-            return wg_mma_qk;
-        }
-    }();
-    auto wg_mma_pv_slice = [&]() {
-        if constexpr (ReInt8) {
-            return wg_mma_pv.get_slice(256);
-        } else {
-            return wg_mma_pv;
-        }
-    }();
-    printf("wg_mma_qk_slice:\n"); print(wg_mma_qk_slice); printf("\n");
-    printf("wg_mma_pv_slice:\n"); print(wg_mma_pv_slice); printf("\n");
-
-    TensorStorage shared_storage;
-
-    Tensor sQ = make_tensor(make_smem_ptr(shared_storage.smem_q.data()), SmemLayoutQ{});     // (kBlockM, kHeadSize)
-    Tensor sK = make_tensor(make_smem_ptr(shared_storage.smem_k.data()), SmemLayoutK{});     // (kBlockN, kHeadSize, kStages)
-    Tensor sV = make_tensor(make_smem_ptr(shared_storage.smem_v.data()), SmemLayoutVtMma{}); // (kHeadSize, kBlockN, kStages)
-    Tensor sP = [&]
-    {
-        if constexpr (MmaPV_is_RS)
-        {
-            // We might not have smem_p if !MmaPV_is_RS, just use smem_q as a placeholder since we don't use it
-            // Cast to ElementV* since SmemLayoutP expects ElementV type (this placeholder is never actually used)
-            return make_tensor(make_smem_ptr(reinterpret_cast<ElementV *>(shared_storage.smem_q.data())), SmemLayoutP{});
-        }
-        else
-        {
-            return make_tensor(make_smem_ptr(shared_storage.smem_p.data()), SmemLayoutP{});
-        }
-    }();
-
-    auto smem_tiled_copy_P = make_tiled_copy_C(SmemCopyAtomP{}, tiled_mma_qk);
-    const int thread_idx = 0;
-    auto smem_thr_copy_P = smem_tiled_copy_P.get_thread_slice(thread_idx);
-
-    // Allocate "fragments/descriptors"
-    Tensor tSrQ = wg_mma_qk.partition_fragment_A(sQ);
-    Tensor tSrK = wg_mma_qk.partition_fragment_B(sK);
-    Tensor tOrV = wg_mma_pv.partition_fragment_B(sV);
-    Tensor tOsP = wg_mma_pv.partition_fragment_A(sP);
-    Tensor tPsP = smem_thr_copy_P.partition_D(cute::as_position_independent_swizzle_tensor(sP));
-    // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    // Launch kernel to run device code that uses smem_ptr
+    kernel_inspect_layouts<<<1, 1>>>();
+    cudaDeviceSynchronize();
 
     return 0;
 }
 
 /*
 # Compile with ReInt8 = true
-nvcc -std=c++20 -O3 --use_fast_math -I./csrc/cutlass/include -arch=sm_90 -DREINT8_ENABLED -o reint8 reint8.cu && \
+nvcc -std=c++20 --use_fast_math -I./csrc/cutlass/include -arch=sm_90 -DREINT8_ENABLED -o reint8 reint8.cu && \
 ./reint8 > shapes_and_such.txt 2>&1
 
 # Compile with ReInt8 = false
-nvcc -std=c++20 -O3 --use_fast_math -I./csrc/cutlass/include -arch=sm_90 -o reint8 reint8.cu && \
+nvcc -std=c++20 --use_fast_math -I./csrc/cutlass/include -arch=sm_90 -o reint8 reint8.cu && \
 ./reint8 > shapes_and_such_no_reint8.txt 2>&1
 */
