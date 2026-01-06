@@ -77,15 +77,19 @@ namespace flash
         static constexpr int kBlockN = get<1>(TileShape_MNK{});
         static constexpr int kHeadDim = get<2>(TileShape_MNK{});
 
-        static constexpr bool StrictlyTwoWG = kBlockM == 256;
-        static constexpr int kBlockS = StrictlyTwoWG ? 2 : 1;
-        static constexpr int kBlockMInner = kBlockM / kBlockS;
-        // Tile shape for Q@K multiplication
-        // using TileShape_MNK_QK = Shape<Int<kBlockMInner>, Int<kBlockN>, Int<kHeadDim>>;
-        using TileShape_MNK_QK = Shape<Int<kBlockM>, Int<kBlockN>, Int<kHeadDim>>;
+        static constexpr bool ReInt8 = kBlockM == 256;
+        static constexpr int InnerDimSize = 2;
+
+        using TileShape_MINK = Shape<Int<kBlockMI>, Int<kHeadDim>, Int<kBlockN>>;
+
+        // // Tile shape for Q@K multiplication
+        // // using TileShape_MNK_QK = Shape<Int<kBlockMInner>, Int<kBlockN>, Int<kHeadDim>>;
+        // using TileShape_MNK_QK = Shape<Int<kBlockM>, Int<kBlockN>, Int<kHeadDim>>;
         // Tile shape for P@V multiplication (M=seq_q, N=head_dim_v, K=seq_k)
-        using TileShape_MNK_PV = Shape<decltype(get<0>(TileShape_MNK{})), Int<kHeadDimV>, decltype(get<1>(TileShape_MNK{}))>;
-        // using TileShape_MNK_PV = Shape<Int<kBlockMInner>, Int<kHeadDimV>, Int<kBlockN>>;
+        // using TileShape_MNK_PV = Shape<decltype(get<0>(TileShape_MNK{})), Int<kHeadDimV>, decltype(get<1>(TileShape_MNK{}))>;
+        using TileShape_MNK_PV = std::conditional_t<ReInt8,
+                                                    Shape<decltype(get<0>(TileShape_MINK{})), Int<kHeadDim>, decltype(get<1>(TileShape_MINK{}))>,
+                                                    Shape<decltype(get<0>(TileShape_MNK{})), Int<kHeadDimV>, decltype(get<1>(TileShape_MNK{}))>>;
         // Tile shape for Q@V multiplication when HasQv is true
         using TileShape_MNK_QV = Shape<decltype(get<0>(TileShape_MNK{})), decltype(get<1>(TileShape_MNK{})), Int<kHeadDimV>>;
         // using TileShape_MNK_QV = Shape<Int<kBlockM>, Int<kBlockN>, Int<kHeadDimV>>;
@@ -163,8 +167,12 @@ namespace flash
         static_assert(!StrictlyTwoWG || Is_INT8, "kBlockM=256 is only supported with INT8");
         static_assert(!StrictlyTwoWG || IntraWGOverlap, "kBlockM=256 requires IntraWGOverlap");
         static_assert(!StrictlyTwoWG || !MmaPV_is_RS, "kBlockM=256 requires MmaPV_is_RS == false");
-        using AtomLayoutQK = Layout<Shape<Int<kBlockM / 64>, _1, _1>>;
-        // using AtomLayoutQK = Layout<Shape<Int<kBlockMInner / 64>, Int<kBlockS>, _1>>;
+        // using AtomLayoutQK = Layout<Shape<Int<kBlockM / 64>, _1, _1>>;
+        using AtomLayoutQK = Layout<std::conditional_t<ReInt8,
+                                                    Shape<Int<kBlockMI / 64>, _1, _1>,
+                                                    Shape<Int<kBlockM / 64>, _1, _1>>>; // (num mma wg, inner dim size, 1)
+
+        using TileShape_MNK_QK = std::conditional_t<ReInt8, TileShape_MINK, TileShape_MNK>;
         using TiledMmaQK = decltype(cute::make_tiled_mma(
             std::conditional_t<
                 !MmaQK_is_RS,
@@ -191,8 +199,9 @@ namespace flash
             cute::GMMA::rs_op_selector<ElementV, ElementV, ElementAccum, TileShape_MNK_PV, GMMA::Major::K, MmaMajorV>(),
             AtomLayoutPV{}));
 
-        static constexpr int NumMmaThreads = StrictlyTwoWG ? (2 * cutlass::NumThreadsPerWarpGroup) : CUTE_STATIC_V(size(TiledMmaPV{}));
-        static constexpr int NumMmaThreadsQK = StrictlyTwoWG ? NumMmaThreads : CUTE_STATIC_V(size(TiledMmaQK{}));
+        static constexpr int NumMmaThreads = ReInt8 ? (2 * cutlass::NumThreadsPerWarpGroup) : CUTE_STATIC_V(size(TiledMmaPV{}));
+        // static constexpr int NumMmaThreadsQK = StrictlyTwoWG ? NumMmaThreads : CUTE_STATIC_V(size(TiledMmaQK{}));
+        static constexpr int NumMmaThreadsQK = NumMmaThreads;
 
         // static constexpr int NumMmaThreadsQK = size(TiledMmaQK{});
         // static constexpr int NumMmaThreads = size(TiledMmaPV{});
@@ -202,10 +211,17 @@ namespace flash
         static constexpr int NumMmaWarpGroups = NumMmaThreads / cutlass::NumThreadsPerWarpGroup;
         static_assert(NumMmaWarpGroups == 1 || NumMmaWarpGroups == 2 || NumMmaWarpGroups == 3);
 
-        using SmemLayoutAtomQ = decltype(cutlass::gemm::collective::detail::ss_smem_selector<GMMA::Major::K, Element,
-                                                                                             decltype(cute::get<0>(TileShape_MNK{})), decltype(cute::get<2>(TileShape_MNK{}))>());
-        // using SmemLayoutAtomQ = decltype(cutlass::gemm::collective::detail::ss_smem_selector<GMMA::Major::K, Element, Int<kBlockM>, Int<kHeadDim>>());
-        using SmemLayoutQ = decltype(tile_to_shape(SmemLayoutAtomQ{}, select<0, 2>(TileShape_MNK{})));
+        // using SmemLayoutAtomQ = decltype(cutlass::gemm::collective::detail::ss_smem_selector<GMMA::Major::K, Element,
+        //                                                                                      decltype(cute::get<0>(TileShape_MNK{})), decltype(cute::get<2>(TileShape_MNK{}))>());
+        using SmemLayoutAtomQ = decltype(
+            std::conditional_t<ReInt8,
+                            decltype(cutlass::gemm::collective::detail::ss_smem_selector<GMMA::Major::K, Element, decltype(cute::get<0>(TileShape_MINK{})), decltype(cute::get<2>(TileShape_MINK{}))>()),
+                            decltype(cutlass::gemm::collective::detail::ss_smem_selector<GMMA::Major::K, Element, decltype(cute::get<0>(TileShape_MNK{})), decltype(cute::get<2>(TileShape_MNK{}))>())>{});
+
+        // using SmemLayoutQ = decltype(tile_to_shape(SmemLayoutAtomQ{}, select<0, 2>(TileShape_MNK{})));
+        using SmemLayoutQ = std::conditional_t<ReInt8,
+                                            decltype(tile_to_shape(SmemLayoutAtomQ{}, make_shape(shape<0>(TileShape_MINK{}), shape<2>(TileShape_MINK{}), Int<InnerDimSize>{}))),
+                                            decltype(tile_to_shape(SmemLayoutAtomQ{}, select<0, 2>(TileShape_MNK{})))>;
         // using SmemLayoutQ = decltype(tile_to_shape(SmemLayoutAtomQ{}, Shape<Int<kBlockM>, Int<kHeadDim>>{}));
         // using SmemLayoutQ = decltype(tile_to_shape(
         //     SmemLayoutAtomQ{},
@@ -258,9 +274,15 @@ namespace flash
             SmemLayoutAtomVCpAsync{},
             make_shape(shape<1>(TileShape_MNK{}), Int<kHeadDimV>{}, Int<kStages>{})));
 
-        using SmemLayoutAtomP = decltype(cutlass::gemm::collective::detail::ss_smem_selector<GMMA::Major::K, ElementV,
-                                                                                             decltype(cute::get<0>(TileShape_MNK{})), decltype(cute::get<1>(TileShape_MNK{}))>());
-        using SmemLayoutP = decltype(tile_to_shape(SmemLayoutAtomP{}, select<0, 1>(TileShape_MNK{})));
+        // using SmemLayoutAtomP = decltype(cutlass::gemm::collective::detail::ss_smem_selector<GMMA::Major::K, ElementV,
+        //                                                                                      decltype(cute::get<0>(TileShape_MNK{})), decltype(cute::get<1>(TileShape_MNK{}))>());
+        using SmemLayoutAtomP = std::conditional_t<ReInt8,
+                                                decltype(cutlass::gemm::collective::detail::ss_smem_selector<GMMA::Major::K, ElementV, decltype(cute::get<0>(TileShape_MINK{})), decltype(cute::get<1>(TileShape_MINK{}))>()),
+                                                decltype(cutlass::gemm::collective::detail::ss_smem_selector<GMMA::Major::K, ElementV, decltype(cute::get<0>(TileShape_MNK{})), decltype(cute::get<1>(TileShape_MNK{}))>())>;
+        // using SmemLayoutP = decltype(tile_to_shape(SmemLayoutAtomP{}, select<0, 1>(TileShape_MNK{})));
+        using SmemLayoutP = std::conditional_t<ReInt8,
+                                            decltype(tile_to_shape(SmemLayoutAtomP{}, make_shape(shape<0>(TileShape_MINK{}), shape<1>(TileShape_MINK{}), Int<InnerDimSize>{}))),
+                                            decltype(tile_to_shape(SmemLayoutAtomP{}, select<0, 1>(TileShape_MNK{})))>;
 
         // Only for LargeHeadDimV where WG0 sends WG1 the scales
         using SmemLayoutScale = cute::Layout<cute::Shape<Int<kBlockM>, Int<kStages>>>;
@@ -1395,11 +1417,11 @@ namespace flash
                                   size<0>(typename TiledMmaQK::BLayout{}) == cutlass::NumThreadsPerWarpGroup,
                               "Stride of the first mode must be 0 and the size of the mode must be NumThreadsPerWarpGroup");
             }
-            // static constexpr int MmaWarpGroups = size(TiledMmaPV{}) / cutlass::NumThreadsPerWarpGroup;
-            // Layout warp_group_thread_layout = make_layout(make_shape(Int<MmaWarpGroups>{}),
-            //                                               make_stride(Int<cutlass::NumThreadsPerWarpGroup>{}));
-            Layout warp_group_thread_layout = make_layout(make_shape(Int<NumMmaWarpGroups>{}),
+            static constexpr int MmaWarpGroups = size(TiledMmaPV{}) / cutlass::NumThreadsPerWarpGroup;
+            Layout warp_group_thread_layout = make_layout(make_shape(Int<MmaWarpGroups>{}),
                                                           make_stride(Int<cutlass::NumThreadsPerWarpGroup>{}));
+            // Layout warp_group_thread_layout = make_layout(make_shape(Int<NumMmaWarpGroups>{}),
+            //                                               make_stride(Int<cutlass::NumThreadsPerWarpGroup>{}));
 
             // int warp_group_idx = __shfl_sync(0xFFFFFFFF, thread_idx / cutlass::NumThreadsPerWarpGroup, 0);
             TiledMmaQK tiled_mma_qk;
