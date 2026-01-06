@@ -36,7 +36,8 @@ using TileShape_MNK_PV = std::conditional_t<ReInt8,
                                             Shape<decltype(get<0>(TileShape_MNK{})), Int<kHeadDim>, decltype(get<1>(TileShape_MNK{}))>>;
 
 using AtomLayoutQK = Layout<std::conditional_t<ReInt8,
-                                               Shape<Int<kBlockMI / 64>, Int<InnerDimSize>, _1>,
+                                            //    Shape<Int<kBlockMI / 64>, Int<InnerDimSize>, _1>,
+                                               Shape<Int<kBlockMI / 64>, _1, _1>,
                                                Shape<Int<kBlockM / 64>, _1, _1>>>; // (num mma wg, inner dim size, 1)
 
 using TiledMmaQK = decltype(cute::make_tiled_mma(
@@ -50,8 +51,8 @@ using TiledMmaPV = decltype(cute::make_tiled_mma(
     cute::GMMA::ss_op_selector<ElementV, ElementV, ElementAccum, TileShape_MNK_PV, GMMA::Major::K, MmaMajorV>(),
     AtomLayoutPV{}));
 
-static constexpr int NumMmaThreadsQK = size(TiledMmaQK{});
-static constexpr int NumMmaThreads = size(TiledMmaPV{});
+// static constexpr int NumMmaThreadsQK = size(TiledMmaQK{});
+// static constexpr int NumMmaThreads = size(TiledMmaPV{});
 
 using SmemLayoutAtomQ = decltype(
     std::conditional_t<ReInt8,
@@ -130,9 +131,17 @@ using SmemCopyAtomP = Copy_Atom<cute::SM90_U32x4_STSM_N, ElementV>;
 __global__ void kernel_inspect_layouts()
 {
     static constexpr int MmaWarpGroups = size(TiledMmaPV{}) / cutlass::NumThreadsPerWarpGroup;
+    // static constexpr int MmaWarpGroups = kBlockMI / cutlass::NumThreadsPerWarpGroup;
     printf("MmaWarpGroups: %d\n", MmaWarpGroups);
-    Layout warp_group_thread_layout = make_layout(make_shape(Int<MmaWarpGroups>{}),
-                                                  make_stride(Int<cutlass::NumThreadsPerWarpGroup>{}));
+    Layout warp_group_thread_layout = make_layout(make_shape(Int<MmaWarpGroups>{}), make_stride(Int<cutlass::NumThreadsPerWarpGroup>{}));
+    // Layout warp_group_thread_layout = [&]() {
+    //     if constexpr (ReInt8) {
+    //         // return make_layout(make_shape(Int<MmaWarpGroups>{}, Int<InnerDimSize>{}), make_stride(Int<cutlass::NumThreadsPerWarpGroup>{}, Int<InnerDimSize*cutlass::NumThreadsPerWarpGroup>{}));
+    //         return make_layout(select<0, 1>(shape(AtomLayoutQK{})), make_stride(Int<cutlass::NumThreadsPerWarpGroup>{}, Int<InnerDimSize*cutlass::NumThreadsPerWarpGroup>{}));
+    //     } else {
+    //         return make_layout(make_shape(Int<MmaWarpGroups>{}), make_stride(Int<cutlass::NumThreadsPerWarpGroup>{}));
+    //     }
+    // }();
 
     printf("warp_group_thread_layout:\n");
     print(warp_group_thread_layout);
@@ -157,41 +166,48 @@ __global__ void kernel_inspect_layouts()
     print(wg_mma_pv);
     printf("\n");
 
-    // sliced sliced wg_mma's
-    auto wg_mma_qk_slice = [&]()
-    {
-        if constexpr (ReInt8)
-        {
-            return wg_mma_qk.get_slice(256);
-        }
-        else
-        {
-            return wg_mma_qk;
-        }
-    }();
-    auto wg_mma_pv_slice = [&]()
-    {
-        if constexpr (ReInt8)
-        {
-            return wg_mma_pv.get_slice(256);
-        }
-        else
-        {
-            return wg_mma_pv;
-        }
-    }();
-    printf("wg_mma_qk_slice:\n");
-    print(wg_mma_qk_slice);
-    printf("\n");
-    printf("wg_mma_pv_slice:\n");
-    print(wg_mma_pv_slice);
-    printf("\n");
+    // // sliced sliced wg_mma's
+    // auto wg_mma_qk_slice = [&]()
+    // {
+    //     if constexpr (ReInt8)
+    //     {
+    //         // In ReInt8, tiled_mma_qk has ThrLayoutVMNK: (_128,_2,_2,_1) (third dim is 2)
+    //         // To match no ReInt8 case which has (_128,_2,_1,_1), slice on the third dimension (N)
+    //         // First get wg_mma_qk, then slice it further to get one N warp group
+    //         // return wg_mma_qk.get_slice((_, _, 0, _));
+    //         return tiled_mma_qk.get_slice(warp_group_thread_layout((1, 0)));
+    //         // return wg_mma_qk.get_slice(0);
+    //     }
+    //     else
+    //     {
+    //         return wg_mma_qk;
+    //     }
+    // }();
+    // auto wg_mma_pv_slice = [&]()
+    // {
+    //     if constexpr (ReInt8)
+    //     {
+    //         // Same for pv - slice to get one N warp group
+    //         // return wg_mma_pv.get_slice((_, _, 0, _));
+    //         return tiled_mma_pv.get_slice(warp_group_thread_layout((1, 0)));
+    //     }
+    //     else
+    //     {
+    //         return wg_mma_pv;
+    //     }
+    // }();
+    // printf("wg_mma_qk_slice:\n");
+    // print(wg_mma_qk_slice);
+    // printf("\n");
+    // printf("wg_mma_pv_slice:\n");
+    // print(wg_mma_pv_slice);
+    // printf("\n");
 
     // Use extern shared memory pattern: declare as char array and cast to our type
     extern __shared__ char shared_memory[];
-    TensorStorage& shared_storage = *reinterpret_cast<TensorStorage*>(shared_memory);
+    TensorStorage &shared_storage = *reinterpret_cast<TensorStorage *>(shared_memory);
 
-    Tensor sQ = make_tensor(make_smem_ptr(shared_storage.smem_q.data()), SmemLayoutQ{});     // (kBlockM, kHeadSize)
+    Tensor sQ = make_tensor(make_smem_ptr(shared_storage.smem_q.data()), SmemLayoutQ{});     // (kBlockM, kHeadSize, InnerDimSize[optional])
     Tensor sK = make_tensor(make_smem_ptr(shared_storage.smem_k.data()), SmemLayoutK{});     // (kBlockN, kHeadSize, kStages)
     Tensor sV = make_tensor(make_smem_ptr(shared_storage.smem_v.data()), SmemLayoutVtMma{}); // (kHeadSize, kBlockN, kStages)
     Tensor sP = [&]
@@ -304,34 +320,38 @@ int main()
     // Launch kernel to run device code that uses smem_ptr
     // Calculate exact shared memory size needed
     constexpr size_t smem_size = sizeof(TensorStorage);
-    
+
     // Set maximum dynamic shared memory for this function
     // Use the exact size needed (not the maximum), as per CUTLASS examples
     // Only set if size >= 48KB (default limit)
-    if (smem_size >= (48 << 10)) {
+    if (smem_size >= (48 << 10))
+    {
         cudaError_t err = cudaFuncSetAttribute(
             kernel_inspect_layouts,
             cudaFuncAttributeMaxDynamicSharedMemorySize,
             smem_size); // Use exact size needed
-        if (err != cudaSuccess) {
+        if (err != cudaSuccess)
+        {
             printf("ERROR: cudaFuncSetAttribute failed: %s\n", cudaGetErrorString(err));
             return 1;
         }
     }
-    
+
     // Launch kernel with exact shared memory size needed
     kernel_inspect_layouts<<<1, 1, smem_size>>>();
-    
+
     // Check for launch errors
     cudaError_t err = cudaGetLastError();
-    if (err != cudaSuccess) {
+    if (err != cudaSuccess)
+    {
         printf("ERROR: Kernel launch failed: %s\n", cudaGetErrorString(err));
         return 1;
     }
-    
+
     // Synchronize and check for runtime errors
     err = cudaDeviceSynchronize();
-    if (err != cudaSuccess) {
+    if (err != cudaSuccess)
+    {
         printf("ERROR: cudaDeviceSynchronize failed: %s\n", cudaGetErrorString(err));
         return 1;
     }
