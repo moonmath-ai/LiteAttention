@@ -81,6 +81,9 @@ namespace flash
         using MainloopParams = typename CollectiveMainloop::Params;
         using BarrierQ = std::conditional_t<Use_TMA_Q, cutlass::arch::ClusterTransactionBarrier, cutlass::arch::ClusterBarrier>;
 
+        static constexpr bool ReInt8 = CollectiveMainloop::ReInt8;
+        // using RmemShapeO = typename CollectiveMainloop::RmemShapeO;
+
         // Epilogue derived types
         using EpilogueArguments = typename CollectiveEpilogue::Arguments;
         using EpilogueParams = typename CollectiveEpilogue::Params;
@@ -572,7 +575,28 @@ namespace flash
                     t - signifay this is the thread wise view
                     */
                     // Attention output (GEMM-II) accumulator.
-                    Tensor tOrO = partition_fragment_C(tiled_mma_pv, select<0, 1>(TileShape_MNK_PV{}));
+                    // Get 2D shape (M, N) - when ReInt8 is false, RmemShapeO is already 2D; when true, take first 2 dims
+                    auto shape_MN = [&]() {
+                        if constexpr (ReInt8) {
+                            using TileShape_MINK = typename CollectiveMainloop::TileShape_MINK;
+                            return make_shape(shape<0>(TileShape_MINK{}), shape<1>(TileShape_MNK_PV{}));
+                        } else {
+                            return select<0, 1>(TileShape_MNK_PV{});
+                        }
+                    }();
+                    
+                    // When ReInt8 is true, extend fragment to include InnerDimSize dimension with separate data per slice
+                    Tensor tOrO = [&]() {
+                        if constexpr (ReInt8) {
+                            static constexpr int InnerDimSize = CollectiveMainloop::InnerDimSize;
+                            auto fragment_shape = partition_shape_C(tiled_mma_pv, shape_MN);
+                            auto extended_shape = make_shape(fragment_shape, Int<InnerDimSize>{});
+                            auto extended_stride = make_stride(compact_col_major(fragment_shape), size(fragment_shape));
+                            return make_tensor<typename TiledMmaPV::FrgTypeC>(make_layout(extended_shape, extended_stride));
+                        } else {
+                            return partition_fragment_C(tiled_mma_pv, shape_MN);
+                        }
+                    }();
                     bool tile_valid;
                     // const int thread_idx = threadIdx.x - MmaThreadOffset;
                     if constexpr (!LargeHeadDimV)
