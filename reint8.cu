@@ -36,7 +36,7 @@ using TileShape_MNK_PV = std::conditional_t<ReInt8,
                                             Shape<decltype(get<0>(TileShape_MNK{})), Int<kHeadDim>, decltype(get<1>(TileShape_MNK{}))>>;
 
 using AtomLayoutQK = Layout<std::conditional_t<ReInt8,
-                                            //    Shape<Int<kBlockMI / 64>, Int<InnerDimSize>, _1>,
+                                               //    Shape<Int<kBlockMI / 64>, Int<InnerDimSize>, _1>,
                                                Shape<Int<kBlockMI / 64>, _1, _1>,
                                                Shape<Int<kBlockM / 64>, _1, _1>>>; // (num mma wg, inner dim size, 1)
 
@@ -97,6 +97,10 @@ using SmemLayoutAtomP = std::conditional_t<ReInt8,
 using SmemLayoutP = std::conditional_t<ReInt8,
                                        decltype(tile_to_shape(SmemLayoutAtomP{}, make_shape(shape<0>(TileShape_MINK{}), shape<1>(TileShape_MINK{}), Int<InnerDimSize>{}))),
                                        decltype(tile_to_shape(SmemLayoutAtomP{}, select<0, 1>(TileShape_MNK{})))>;
+
+using RmemShapeO = std::conditional<ReInt8,
+                                    decltype(make_shape(shape<0>(TileShape_MINK{}), shape<1>(TileShape_MNK_PV{}), Int<InnerDimSize>{})),
+                                    decltype(select<0, 1>(TileShape_MNK_PV{}))>;
 
 static constexpr bool Use_TMA_Q = true;
 static constexpr bool MmaQK_is_RS = false;
@@ -178,7 +182,6 @@ __global__ void kernel_inspect_layouts()
     print(wg_mma_pv);
     printf("\n");
 
-
     printf("smem_tiled_copy_P:\n");
     auto smem_tiled_copy_P = make_tiled_copy_C(SmemCopyAtomP{}, tiled_mma_qk);
     print(smem_tiled_copy_P);
@@ -216,8 +219,27 @@ __global__ void kernel_inspect_layouts()
     print(tPsP);
     printf("\n");
 
-    printf("tOrO (partition_fragment_C(tiled_mma_pv, select<0, 1>(TileShape_MNK_PV{}))):\n");
-    Tensor tOrO = partition_fragment_C(tiled_mma_pv, select<0, 1>(TileShape_MNK_PV{}));
+    printf("tOrO (partition_fragment_C(tiled_mma_pv, shape_MN)):\n");
+    // Get 2D shape (M, N) - when ReInt8 is false, RmemShapeO is already 2D; when true, take first 2 dims
+    auto shape_MN = [&]() {
+        if constexpr (ReInt8) {
+            return make_shape(shape<0>(TileShape_MINK{}), shape<1>(TileShape_MNK_PV{}));
+        } else {
+            return select<0, 1>(TileShape_MNK_PV{});
+        }
+    }();
+    
+    // When ReInt8 is true, extend fragment to include InnerDimSize dimension with separate data per slice
+    auto tOrO = [&]() {
+        if constexpr (ReInt8) {
+            auto fragment_shape = partition_shape_C(tiled_mma_pv, shape_MN);
+            auto extended_shape = make_shape(fragment_shape, Int<InnerDimSize>{});
+            auto extended_stride = make_stride(compact_col_major(fragment_shape), size(fragment_shape));
+            return make_tensor<typename TiledMmaPV::FrgTypeC>(make_layout(extended_shape, extended_stride));
+        } else {
+            return partition_fragment_C(tiled_mma_pv, shape_MN);
+        }
+    }();
     print(tOrO);
     printf("\n");
 }

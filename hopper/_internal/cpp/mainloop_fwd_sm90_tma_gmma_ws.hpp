@@ -89,7 +89,7 @@ namespace flash
         // Tile shape for P@V multiplication (M=seq_q, N=head_dim_v, K=seq_k)
         // using TileShape_MNK_PV = Shape<decltype(get<0>(TileShape_MNK{})), Int<kHeadDimV>, decltype(get<1>(TileShape_MNK{}))>;
         using TileShape_MNK_PV = std::conditional_t<ReInt8,
-                                                    Shape<decltype(get<0>(TileShape_MINK{})), Int<kHeadDim>, decltype(get<1>(TileShape_MINK{}))>,
+                                                    Shape<decltype(get<0>(TileShape_MINK{})), Int<kHeadDimV>, decltype(get<1>(TileShape_MINK{}))>,
                                                     Shape<decltype(get<0>(TileShape_MNK{})), Int<kHeadDimV>, decltype(get<1>(TileShape_MNK{}))>>;
         // Tile shape for Q@V multiplication when HasQv is true
         using TileShape_MNK_QV = Shape<decltype(get<0>(TileShape_MNK{})), decltype(get<1>(TileShape_MNK{})), Int<kHeadDimV>>;
@@ -288,6 +288,10 @@ namespace flash
         using SmemLayoutScale = cute::Layout<cute::Shape<Int<kBlockM>, Int<kStages>>>;
 
         using SmemCopyAtomP = Copy_Atom<cute::SM90_U32x4_STSM_N, ElementV>;
+
+        // using RmemShapeO = std::conditional<ReInt8,
+        //                                     decltype(make_shape(shape<0>(TileShape_MINK{}), shape<1>(TileShape_MNK_PV{}), Int<InnerDimSize>{})),
+        //                                     decltype(select<0, 1>(TileShape_MNK_PV{}))>;
 
         // Use LDSM.T and STSM to transpose V in the case of FP8 and V being row-major.
         // For FP16/BF16 we don't do any transposing.
@@ -1378,7 +1382,7 @@ namespace flash
                 }
             }
 
-            Tensor sQ = make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_q.data()), SmemLayoutQ{});     // (kBlockM, kHeadSize)
+            Tensor sQ = make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_q.data()), SmemLayoutQ{});     // (kBlockM, kHeadSize, InnerDimSize[only for ReInt8])
             Tensor sK = make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_k.data()), SmemLayoutK{});     // (kBlockN, kHeadSize, kStages)
             Tensor sV = make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_v.data()), SmemLayoutVtMma{}); // (kHeadSize, kBlockN, kStages)
             Tensor sP = [&]
