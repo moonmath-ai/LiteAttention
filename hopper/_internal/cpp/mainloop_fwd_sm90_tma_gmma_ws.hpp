@@ -1634,7 +1634,7 @@ namespace flash
             if constexpr (ReInt8)
             {
                 static constexpr int inner_idx = 0;
-                Tensor tSrS_ambiguous_type = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
+                Tensor tSrS_ambiguous_type = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK_QK{}));
                 consumer_wait(pipeline_k, smem_pipe_read);
                 if constexpr (Is_skipable)
                 {
@@ -1720,7 +1720,7 @@ namespace flash
                     static constexpr bool Check_inf = decltype(check_inf_type)::value;
                     PipelineState smem_pipe_read_v(smem_pipe_read.index(), smem_pipe_read.phase(), smem_pipe_read.count());
                     ++smem_pipe_read;
-                    Tensor tSrS_ambiguous_type = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
+                    Tensor tSrS_ambiguous_type = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK_QK{}));
                     // if constexpr (!UseSchedulerBarrier || warp_group_idx == 0)
                     if (!UseSchedulerBarrier || warp_group_idx == 0)
                     {
@@ -1912,7 +1912,7 @@ namespace flash
             }
             else if constexpr (IntraWGOverlap)
             {
-                Tensor tSrS_ambiguous_type = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
+                Tensor tSrS_ambiguous_type = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK_QK{}));
                 consumer_wait(pipeline_k, smem_pipe_read);
                 if constexpr (Is_skipable)
                 {
@@ -2001,7 +2001,7 @@ namespace flash
                     static constexpr bool Check_inf = decltype(check_inf_type)::value;
                     PipelineState smem_pipe_read_v(smem_pipe_read.index(), smem_pipe_read.phase(), smem_pipe_read.count());
                     ++smem_pipe_read;
-                    Tensor tSrS_ambiguous_type = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
+                    Tensor tSrS_ambiguous_type = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK_QK{}));
                     // if constexpr (!UseSchedulerBarrier || warp_group_idx == 0)
                     if (!UseSchedulerBarrier || warp_group_idx == 0)
                     {
@@ -2222,7 +2222,7 @@ namespace flash
                         ++smem_pipe_read;
                     }
 
-                    Tensor tSrS_ambiguous_type = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
+                    Tensor tSrS_ambiguous_type = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK_QK{}));
                     consumer_wait(pipeline_k, smem_pipe_read);
 
                     // int new_n_block = n_block;
