@@ -633,9 +633,16 @@ namespace flash
                     }
                     if (tile_valid)
                     {
-                        // if (threadIdx.x == 128) { printf("Before epilogue, bid.x = %d, bid.y = %d, bid.z = %d, m_block = %d, bidb = %d, split_idx = %d\n", blockIdx.x, blockIdx.y, blockIdx.z, m_block, bidb, split_idx); }
-                        epilogue.store(params.epilogue, tOrO, softmax.row_sum, shared_storage, tiled_mma_pv,
-                                       threadIdx.x - MmaThreadOffset, block_coord);
+                        if constexpr (ReInt8) {
+                            epilogue.store(params.epilogue, tOrO(_, _, 0), softmax.row_sum(_, 0), shared_storage, tiled_mma_pv,
+                                        threadIdx.x - MmaThreadOffset, block_coord);
+                            epilogue.store(params.epilogue, tOrO(_, _, 1), softmax.row_sum(_, 1), shared_storage, tiled_mma_pv,
+                                        threadIdx.x - MmaThreadOffset, block_coord);
+                        }else{
+                            // if (threadIdx.x == 128) { printf("Before epilogue, bid.x = %d, bid.y = %d, bid.z = %d, m_block = %d, bidb = %d, split_idx = %d\n", blockIdx.x, blockIdx.y, blockIdx.z, m_block, bidb, split_idx); }
+                            epilogue.store(params.epilogue, tOrO, softmax.row_sum, shared_storage, tiled_mma_pv,
+                                        threadIdx.x - MmaThreadOffset, block_coord);
+                        }
                     }
                     else
                     {
