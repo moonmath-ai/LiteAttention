@@ -348,7 +348,7 @@ namespace flash
                     const bool row_not_out_of_bounds = !(int(get<0>(t0ScS_rowcol(mi, _0{}))) >= seqlenq_row_limit);
                     
                     // update row max
-                    row_max(mi, inner_idx) = max(row_max(mi, inner_idx), scores_max_local(mi, inner_idx));
+                    row_max(mi, inner_idx) = max(row_max(mi, inner_idx), scores_max_local(mi));
                     // float cur = !Check_inf
                     //                 ? row_max(mi)
                     //                 : (row_max(mi) == -INFINITY ? 0.0f : row_max(mi));
