@@ -40,11 +40,8 @@ using AtomLayoutQK = Layout<std::conditional_t<ReInt8,
                                                Shape<Int<kBlockMI / 64>, _1, _1>,
                                                Shape<Int<kBlockM / 64>, _1, _1>>>; // (num mma wg, inner dim size, 1)
 
-using TiledMmaQK = decltype(cute::make_tiled_mma(
-    std::conditional_t<ReInt8,
-                       decltype(cute::GMMA::ss_op_selector<Element, Element, ElementAccumQK, TileShape_MINK>()),
-                       decltype(cute::GMMA::ss_op_selector<Element, Element, ElementAccumQK, TileShape_MNK>())>{},
-    AtomLayoutQK{}));
+using TileShape_MNK_QK = std::conditional_t<ReInt8, TileShape_MINK, TileShape_MNK>;
+using TiledMmaQK = decltype(cute::make_tiled_mma(cute::GMMA::ss_op_selector<Element, Element, ElementAccumQK, TileShape_MNK_QK>(), AtomLayoutQK{}));
 
 using AtomLayoutPV = AtomLayoutQK;
 using TiledMmaPV = decltype(cute::make_tiled_mma(
@@ -241,6 +238,12 @@ __global__ void kernel_inspect_layouts()
         }
     }();
     print(tOrO);
+    printf("\n");
+
+
+    printf("tSrS_ambiguous_type:\n");
+    Tensor tSrS_ambiguous_type = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK_QK{}));
+    print(tSrS_ambiguous_type);
     printf("\n");
 }
 
