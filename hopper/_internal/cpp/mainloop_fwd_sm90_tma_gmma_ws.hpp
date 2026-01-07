@@ -1533,7 +1533,7 @@ namespace flash
                 }
                 if constexpr (ReInt8)
                 {
-                    cute::copy(smem_tiled_copy_P, smem_thr_copy_P.retile_S(tOrP), tPsP(_, _, inner_idx));
+                    cute::copy(smem_tiled_copy_P, smem_thr_copy_P.retile_S(tOrP), tPsP(_, _, _, inner_idx));
                 }
                 else
                 {
