@@ -272,6 +272,22 @@ __global__ void kernel_inspect_layouts()
     printf("row_sum(_, 0):\n");
     print(row_sum(_, 0));
     printf("\n");
+
+    // printf("tOsP(_, _, _, inner_idx):\n");
+    // if constexpr (ReInt8) {
+    //     print(tOsP(_, _, _, 0));
+    // }else{
+    //     print(tOsP);
+    // }
+    // printf("\n");
+
+    // printf("tOrO(_, inner_idx):\n");
+    // if constexpr (ReInt8) {
+    //     print(tOrO(_, 0));
+    // }else{
+    //     print(tOrO);
+    // }
+    // printf("\n");
 }
 
 int main()
