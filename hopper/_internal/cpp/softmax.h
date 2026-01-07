@@ -288,10 +288,11 @@ namespace flash
             {
                 // consider: seperate into  max scores (over int's) and after it dequantize (multiply by dequan_s) and take the max with row_max
                 // flash::template reduce_max</*zero_init=*/true>(scores, row_max);
+                Tensor row_max_slice = row_max(_, inner_idx);
                 if constexpr (!Is_INT8) {
-                    flash::template reduce_max</*zero_init=*/true>(scores, row_max(_, inner_idx));
+                    flash::template reduce_max</*zero_init=*/true>(scores, row_max_slice);
                 } else {
-                    flash::template reduce_max_dequantize</*zero_init=*/true>(scores, row_max(_, inner_idx), dequan_s);
+                    flash::template reduce_max_dequantize</*zero_init=*/true>(scores, row_max_slice, dequan_s);
                 }
                 cute::fill(scores_scale, 1.f);
                 if (is_warp_leader)
@@ -393,39 +394,40 @@ namespace flash
             return scores_scale;
         };
 
-        // TONY: acc_s is Q times K for one tile
         template <bool const Is_first, bool const Check_inf = false, int const inner_idx = 0, typename Tensor0>
         __forceinline__ __device__ TensorT max_get_scale(Tensor0 &acc_s)
-        { // pass in a bool ref
+        { 
+            // pass in a bool ref
             // For INT8: acc_s contains int32 values from INT8 MMA
             // For non-INT8: acc_s contains float values
             // Reshape acc_s from ((2, 2, V), MMA_M, MMA_N) to (nrow=(2, MMA_M), ncol=(2, V, MMA_N))
             Tensor scores = make_tensor(acc_s.data(), flash::convert_layout_acc_rowcol(acc_s.layout()));
             static_assert(CUTE_STATIC_V(size<0>(scores)) == kNRows);
             TensorT scores_scale;
+            Tensor row_max_slice = row_max(_, inner_idx);
             if constexpr (Is_first)
             {
                 // flash::template reduce_max</*zero_init=*/true>(scores, row_max);
                 if constexpr (!Is_INT8) {
-                    flash::template reduce_max</*zero_init=*/true>(scores, row_max(_, inner_idx));
+                    flash::template reduce_max</*zero_init=*/true>(scores, row_max_slice);
                 } else {
-                    flash::template reduce_max_dequantize</*zero_init=*/true>(scores, row_max(_, inner_idx), dequan_s);
+                    flash::template reduce_max_dequantize</*zero_init=*/true>(scores, row_max_slice, dequan_s);
                 }
                 cute::fill(scores_scale, 1.f);
             }
             else
             {
-                Tensor scores_max_prev = make_fragment_like(row_max(_, inner_idx));
-                cute::copy(row_max(_, inner_idx), scores_max_prev);
+                Tensor scores_max_prev = make_fragment_like(row_max_slice);
+                cute::copy(row_max_slice, scores_max_prev);
                 
                 // For INT8, we need to create a local max tensor and dequantize
                 // flash::template reduce_max</*zero_init=*/false>(scores, row_max);
                 if constexpr (!Is_INT8) {
-                    flash::template reduce_max</*zero_init=*/false>(scores, row_max(_, inner_idx));
+                    flash::template reduce_max</*zero_init=*/false>(scores, row_max_slice);
                 } else {
                     // For INT8: reduce to local max first, then manually update row_max
                     // Tensor scores_max_local = make_fragment_like(row_max);
-                    flash::template reduce_max_dequantize</*zero_init=*/false>(scores, row_max(_, inner_idx), dequan_s);
+                    flash::template reduce_max_dequantize</*zero_init=*/false>(scores, row_max_slice, dequan_s);
                 }
                 
 #pragma unroll
@@ -458,47 +460,39 @@ namespace flash
         template <bool const Is_first, bool const Check_inf = false, int const inner_idx = 0, typename Tensor0>
         __forceinline__ __device__ void online_softmax(Tensor0 &acc_s)
         {
-            // consider: assume acc_s is int's tensor when Is_INT8 is enabled
             // Reshape acc_s from ((2, 2, V), MMA_M, MMA_N) to (nrow=(2, MMA_M), ncol=(2, V, MMA_N))
             Tensor scores = make_tensor(acc_s.data(), flash::convert_layout_acc_rowcol(acc_s.layout()));
             static_assert(CUTE_STATIC_V(size<0>(scores)) == kNRows);
-            // consider: scores are Int's when Is_INT8 is enabled, so we need to pass the dequan_s instead of scale_apply_exp2
-            //           and also we need to define a new scores tensor for float type (we dequantize and take the exp2 inside this function)
-            flash::template scale_apply_exp2</*Scale_max=*/true, Check_inf, Max_offset>(scores, row_max(_, inner_idx), softmax_scale_log2);
+            Tensor row_max_slice = row_max(_, inner_idx);
+            Tensor row_sum_slice = row_sum(_, inner_idx);
+            flash::template scale_apply_exp2</*Scale_max=*/true, Check_inf, Max_offset>(scores, row_max_slice, softmax_scale_log2);
 
-            // consider: here we should reduce_sum with the values of the float exp2 scores (which we need to create a float tensor for when Is_INT8 is enabled)
-            // We don't do the reduce across threads here since we don't need to use the row_sum.
-            // We do that reduce at the end when we need to normalize the softmax.
-            flash::reduce_sum</*zero_init=*/Is_first, /*warp_reduce=*/false>(scores, row_sum(_, inner_idx));
+            flash::reduce_sum</*zero_init=*/Is_first, /*warp_reduce=*/false>(scores, row_sum_slice);
         };
 
         template <bool const Is_first, bool const Check_inf = false, int const inner_idx = 0, typename Tensor0, typename Tensor1>
         __forceinline__ __device__ void online_softmax_dequantize(Tensor0 &acc_s, Tensor1 &acc_s_float)
         {
-            // consider: assume acc_s is int's tensor when Is_INT8 is enabled
             // Reshape acc_s from ((2, 2, V), MMA_M, MMA_N) to (nrow=(2, MMA_M), ncol=(2, V, MMA_N))
             Tensor scores = make_tensor(acc_s.data(), flash::convert_layout_acc_rowcol(acc_s.layout()));
             Tensor scores_float = make_tensor(acc_s_float.data(), flash::convert_layout_acc_rowcol(acc_s_float.layout()));
             static_assert(CUTE_STATIC_V(size<0>(scores)) == kNRows);
-            // consider: scores are Int's when Is_INT8 is enabled, so we need to pass the dequan_s instead of scale_apply_exp2
-            //           and also we need to define a new scores tensor for float type (we dequantize and take the exp2 inside this function)
-            // flash::template scale_apply_exp2</*Scale_max=*/true, Check_inf, Max_offset>(scores, row_max, softmax_scale_log2);
-            flash::template scale_apply_exp2_dequantize</*Scale_max=*/true, Check_inf, Max_offset>(scores, row_max(_, inner_idx), scores_float, dequan_s);
+            Tensor row_max_slice = row_max(_, inner_idx);
+            Tensor row_sum_slice = row_sum(_, inner_idx);
+            flash::template scale_apply_exp2_dequantize</*Scale_max=*/true, Check_inf, Max_offset>(scores, row_max_slice, scores_float, dequan_s);
 
-            // consider: here we should reduce_sum with the values of the float exp2 scores (which we need to create a float tensor for when Is_INT8 is enabled)
-            // We don't do the reduce across threads here since we don't need to use the row_sum.
-            // We do that reduce at the end when we need to normalize the softmax.
-            flash::reduce_sum</*zero_init=*/Is_first, /*warp_reduce=*/false>(scores_float, row_sum(_, inner_idx));
+            flash::reduce_sum</*zero_init=*/Is_first, /*warp_reduce=*/false>(scores_float, row_sum_slice);
         };
 
         template <int const inner_idx = 0>
         __forceinline__ __device__ TensorT finalize(float const final_scale = 1.f)
         {
             SumOp<float> sum_op;
-            quad_allreduce_(row_sum(_, inner_idx), row_sum(_, inner_idx), sum_op);
+            auto row_sum_slice = row_sum(_, inner_idx);
+            quad_allreduce_(row_sum_slice, row_sum_slice, sum_op);
             TensorT scores_scale;
 #pragma unroll
-            for (int mi = 0; mi < size(row_sum(_, inner_idx)); ++mi)
+            for (int mi = 0; mi < size(row_sum_slice); ++mi)
             {
                 float sum = row_sum(mi, inner_idx);
                 // float inv_sum = (sum == 0.f || sum != sum) ? 0.f : 1.f / sum;
