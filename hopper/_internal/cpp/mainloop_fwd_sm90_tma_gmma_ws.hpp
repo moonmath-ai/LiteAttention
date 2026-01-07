@@ -802,7 +802,8 @@ namespace flash
                 }
             }
 
-            Tensor sQ = make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_q.data()), SmemLayoutQ{});
+            // Tensor sQ = make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_q.data()), SmemLayoutQ{});
+            Tensor sQ = make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_q.data()), SmemLayoutQTMA{});
             Tensor sK = make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_k.data()), SmemLayoutK{});
             Tensor sK_pi = as_position_independent_swizzle_tensor(sK);
             // as_position_independent_swizzle_tensor makes address calculation easier when we do LDSM & STSM to transpose.
