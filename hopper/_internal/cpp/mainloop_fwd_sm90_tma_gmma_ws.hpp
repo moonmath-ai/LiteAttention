@@ -1634,6 +1634,11 @@ namespace flash
             if constexpr (ReInt8)
             {
                 static constexpr int inner_idx = 0;
+                static constexpr int inner_idx1 = 1;
+
+                auto tOrO_slice0 = tOrO(_, inner_idx);
+                auto tOrO_slice1 = tOrO(_, inner_idx1);
+
                 Tensor tSrS_ambiguous_type = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK_QK{}));
                 consumer_wait(pipeline_k, smem_pipe_read);
                 if constexpr (Is_skipable)
@@ -1673,7 +1678,6 @@ namespace flash
                 // Need to initialize tOrO in the case of RescaleOBeforeGemm where we will scale tOrO even in the 1st iter
                 clear(tOrO);
 
-                static constexpr int inner_idx1 = 1;
                 flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ(_, _, _, inner_idx1), tSrK(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
                 warpgroup_wait<0>();
 
@@ -1753,7 +1757,7 @@ namespace flash
                         consumer_wait(pipeline_v, smem_pipe_read_v);
                     }
 
-                    flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP(_, _, _, inner_idx)), tOrV(_, _, _, smem_pipe_read_v.index()), tOrO(_, inner_idx));
+                    flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP(_, _, _, inner_idx)), tOrV(_, _, _, smem_pipe_read_v.index()), tOrO_slice0);
                     warp_scheduler_barrier_arrive();
 
                     if constexpr (Is_INT8)
@@ -1765,7 +1769,7 @@ namespace flash
 
                     // pipeline_k.consumer_release(smem_pipe_read); // release K
 
-                    softmax.rescale_o(tOrO(_, inner_idx1), scores_scale1);
+                    softmax.rescale_o(tOrO_slice1, scores_scale1);
 
                     //TODO: somehow make this function inner_idx aware
                     mask_fn(tSrS_ambiguous_type, new_n_block);
@@ -1793,13 +1797,13 @@ namespace flash
                     }
 
                     flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ(_, _, _, inner_idx1), tSrK(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
-                    flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP(_, _, _, inner_idx1)), tOrV(_, _, _, smem_pipe_read_v.index()), tOrO(_, inner_idx1));
+                    flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP(_, _, _, inner_idx1)), tOrV(_, _, _, smem_pipe_read_v.index()), tOrO_slice1);
 
                     warpgroup_wait<1>();
 
                     pipeline_k.consumer_release(smem_pipe_read); // release K
 
-                    softmax.rescale_o(tOrO(_, inner_idx), scores_scale);
+                    softmax.rescale_o(tOrO_slice0, scores_scale);
 
                     //TODO: somehow make this function inner_idx aware
                     mask_fn(tSrS_ambiguous_type, new_n_block);
@@ -1895,13 +1899,13 @@ namespace flash
                 {
                     consumer_wait(pipeline_v, smem_pipe_read);
                 }
-                flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP(_, _, inner_idx)), tOrV(_, _, _, smem_pipe_read.index()), tOrO(_, inner_idx));
-                softmax.rescale_o(tOrO(_, inner_idx1), scores_scale1);
+                flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP(_, _, _, inner_idx)), tOrV(_, _, _, smem_pipe_read.index()), tOrO_slice0);
+                softmax.rescale_o(tOrO_slice1, scores_scale1);
                 // For INT8, V is bf16, so no v_descale needed (use Is_FP8)
                 float const v_descale = !Is_FP8 || params.ptr_v_descale == nullptr ? 1.0f : params.ptr_v_descale[bidb * get<0>(params.stride_v_descale) + bidh_kv * get<1>(params.stride_v_descale)];
                 cute::copy(softmax.finalize<inner_idx>(v_descale), scores_scale);
                 warpgroup_wait<0>();
-                flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP(_, _, inner_idx1)), tOrV(_, _, _, smem_pipe_read.index()), tOrO(_, inner_idx1));
+                flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP(_, _, _, inner_idx1)), tOrV(_, _, _, smem_pipe_read.index()), tOrO_slice1);
                 cute::copy(softmax.finalize<inner_idx1>(v_descale), scores_scale1);
                 warpgroup_wait<0>();
                 pipeline_v.consumer_release(smem_pipe_read); // release V, otherwise producers will hang
