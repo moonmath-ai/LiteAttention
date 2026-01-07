@@ -82,6 +82,7 @@ namespace flash
         using BarrierQ = std::conditional_t<Use_TMA_Q, cutlass::arch::ClusterTransactionBarrier, cutlass::arch::ClusterBarrier>;
 
         static constexpr bool ReInt8 = CollectiveMainloop::ReInt8;
+        static constexpr int InnerDimSize = CollectiveMainloop::InnerDimSize;
         // using RmemShapeO = typename CollectiveMainloop::RmemShapeO;
 
         // Epilogue derived types
@@ -550,7 +551,8 @@ namespace flash
                         int const m_block = get<0>(block_coord);
                         // For INT8: Create Q descale tensor with shape (num_batches, num_heads, num_m_blocks)
                         // Use the INT8-specific stride from params
-                        int const num_m_blocks = cute::ceil_div(seqlen_info.seqlen_q, kBlockM);
+                        // int const num_m_blocks = cute::ceil_div(seqlen_info.seqlen_q, kBlockM);
+                        int const num_m_blocks = cute::ceil_div(seqlen_info.seqlen_q, CollectiveMainloop::kBlockM);
                         auto shape_q_descale_3d = make_shape(get<3>(params.mainloop.shape_Q), get<2>(params.mainloop.shape_Q), num_m_blocks);
                         Tensor mQDescale = make_tensor(make_gmem_ptr(params.mainloop.ptr_q_descale), shape_q_descale_3d, params.mainloop.stride_q_descale_int8);
                         // Slice by bidb and bidh to get scalar value for this m_block
@@ -565,7 +567,7 @@ namespace flash
                     // // DOR: kNRows = 2 * (2 * 128 / 256) = 2
                     // flash::Softmax<!LargeHeadDimV ? 2 * (2 * kBlockM / NumMmaThreads) : 2, /*Max_offset=*/!Is_8Bit ? 0 : 8> softmax(softmax_scale_log2, row_mask, local_row_idx);
                     // DOR: kNRows = 2 * (2 * 128 / 256) = 2
-                    flash::Softmax<!LargeHeadDimV ? 2 * (2 * kBlockM / NumMmaThreads) : 2, /*Max_offset=*/!Is_FP8 ? 0 : 8, Is_INT8> softmax(softmax_scale_log2, seqlen_info.seqlen_q, thread_idx);
+                    flash::Softmax<!LargeHeadDimV ? 2 * (2 * kBlockM / NumMmaThreads) : 2, /*Max_offset=*/!Is_FP8 ? 0 : 8, Is_INT8, InnerDimSize> softmax(softmax_scale_log2, seqlen_info.seqlen_q, thread_idx);
 
                     /*
                     taken from the answer here: https://youtu.be/JwUcZwPOCpA?t=3152

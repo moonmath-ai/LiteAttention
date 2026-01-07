@@ -237,12 +237,18 @@ namespace flash
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-    template <int kNRows, int Max_offset = 0, const bool Is_INT8 = false>
+    template <int kNRows, int Max_offset = 0, const bool Is_INT8 = false, int const InnerDimSize = 1>
     struct Softmax
     {
 
         using TensorT = decltype(make_tensor<float>(Shape<Int<kNRows>>{}));
-        TensorT row_max, row_sum;
+        // using TensorT_ReInt8 = decltype(make_tensor<typename TensorT::value_type>(
+        //     decltype(cat_shape(TensorT::shape_type{}, Shape<Int<InnerDimSize>>{}))
+        // ));
+        using TensorT_ReInt8 = decltype(make_tensor<typename TensorT::value_type>(Shape<Int<kNRows>, Int<InnerDimSize>>{}));
+        // TensorT row_max, row_sum;
+        // TensorT row_max, row_sum;
+        TensorT_ReInt8 row_max, row_sum;
         float const softmax_scale_log2; // (log2(e) * 1/sqrt(128)) * q_dequant * k_dequant
         // int const warp_idx_in_warpgroup = (threadIdx.x / 32) % 4;
         int const warp_idx_in_warpgroup = __shfl_sync(0xffffffff, (threadIdx.x / 32) % 4, 0);
@@ -283,9 +289,9 @@ namespace flash
                 // consider: seperate into  max scores (over int's) and after it dequantize (multiply by dequan_s) and take the max with row_max
                 // flash::template reduce_max</*zero_init=*/true>(scores, row_max);
                 if constexpr (!Is_INT8) {
-                    flash::template reduce_max</*zero_init=*/true>(scores, row_max);
+                    flash::template reduce_max</*zero_init=*/true>(scores, row_max(_, inner_idx));
                 } else {
-                    flash::template reduce_max_dequantize</*zero_init=*/true>(scores, row_max, dequan_s);
+                    flash::template reduce_max_dequantize</*zero_init=*/true>(scores, row_max(_, inner_idx), dequan_s);
                 }
                 cute::fill(scores_scale, 1.f);
                 if (is_warp_leader)
@@ -295,11 +301,11 @@ namespace flash
             }
             else
             {
-                Tensor scores_max_prev = make_fragment_like(row_max);
-                cute::copy(row_max, scores_max_prev);
+                Tensor scores_max_prev = make_fragment_like(row_max(_, inner_idx));
+                cute::copy(row_max(_, inner_idx), scores_max_prev);
 
                 // find the local max for each row
-                Tensor scores_max_local = make_fragment_like(row_max);
+                Tensor scores_max_local = make_fragment_like(row_max(_, inner_idx));
                 /*
                 inside reduce_max, each thread reduces over the columns he holds.
                 each thread holds a querter of the columns, for example:
@@ -341,13 +347,13 @@ namespace flash
                     const bool row_not_out_of_bounds = !(int(get<0>(t0ScS_rowcol(mi, _0{}))) >= seqlenq_row_limit);
                     
                     // update row max
-                    row_max(mi) = max(row_max(mi), scores_max_local(mi));
+                    row_max(mi, inner_idx) = max(row_max(mi, inner_idx), scores_max_local(mi, inner_idx));
                     // float cur = !Check_inf
                     //                 ? row_max(mi)
                     //                 : (row_max(mi) == -INFINITY ? 0.0f : row_max(mi));
                     float cur;
                     if constexpr (Check_inf){
-                        cur = row_max(mi) == -INFINITY ? 0.0f : row_max(mi);
+                        cur = row_max(mi, inner_idx) == -INFINITY ? 0.0f : row_max(mi, inner_idx);
                     }else{
                         cur = row_max(mi);
                     }
@@ -358,7 +364,7 @@ namespace flash
                     } else {
                         scores_scale(mi) = exp2f((prev - cur));
                     }
-                    row_sum(mi) *= scores_scale(mi);
+                    row_sum(mi, inner_idx) *= scores_scale(mi);
 
                     // do_qk |= (((scores_max_local(mi) - prev) * softmax_scale_log2) > thr) & row_not_out_of_bounds;
 
@@ -401,29 +407,29 @@ namespace flash
             {
                 // flash::template reduce_max</*zero_init=*/true>(scores, row_max);
                 if constexpr (!Is_INT8) {
-                    flash::template reduce_max</*zero_init=*/true>(scores, row_max);
+                    flash::template reduce_max</*zero_init=*/true>(scores, row_max(_, inner_idx));
                 } else {
-                    flash::template reduce_max_dequantize</*zero_init=*/true>(scores, row_max, dequan_s);
+                    flash::template reduce_max_dequantize</*zero_init=*/true>(scores, row_max(_, inner_idx), dequan_s);
                 }
                 cute::fill(scores_scale, 1.f);
             }
             else
             {
-                Tensor scores_max_prev = make_fragment_like(row_max);
-                cute::copy(row_max, scores_max_prev);
+                Tensor scores_max_prev = make_fragment_like(row_max(_, inner_idx));
+                cute::copy(row_max(_, inner_idx), scores_max_prev);
                 
                 // For INT8, we need to create a local max tensor and dequantize
                 // flash::template reduce_max</*zero_init=*/false>(scores, row_max);
                 if constexpr (!Is_INT8) {
-                    flash::template reduce_max</*zero_init=*/false>(scores, row_max);
+                    flash::template reduce_max</*zero_init=*/false>(scores, row_max(_, inner_idx));
                 } else {
                     // For INT8: reduce to local max first, then manually update row_max
                     // Tensor scores_max_local = make_fragment_like(row_max);
-                    flash::template reduce_max_dequantize</*zero_init=*/false>(scores, row_max, dequan_s);
+                    flash::template reduce_max_dequantize</*zero_init=*/false>(scores, row_max(_, inner_idx), dequan_s);
                 }
                 
 #pragma unroll
-                for (int mi = 0; mi < size(row_max); ++mi)
+                for (int mi = 0; mi < size(row_max(_, inner_idx)); ++mi)
                 {
                     // float scores_max_cur = !Check_inf
                     //                            ? row_max(mi)
@@ -431,9 +437,9 @@ namespace flash
 
                     float scores_max_cur;
                     if constexpr (Check_inf){
-                        scores_max_cur = row_max(mi) == -INFINITY ? 0.0f : row_max(mi);
+                        scores_max_cur = row_max(mi, inner_idx) == -INFINITY ? 0.0f : row_max(mi, inner_idx);
                     }else{
-                        scores_max_cur = row_max(mi);
+                        scores_max_cur = row_max(mi, inner_idx);
                     }
 
                     // For INT8: don't multiply by softmax_scale_log2 (dequantization already handles scaling)
@@ -443,7 +449,7 @@ namespace flash
                     } else {
                         scores_scale(mi) = exp2f((scores_max_prev(mi) - scores_max_cur));
                     }
-                    row_sum(mi) *= scores_scale(mi);
+                    row_sum(mi, inner_idx) *= scores_scale(mi);
                 }
             }
             return scores_scale;
@@ -458,12 +464,12 @@ namespace flash
             static_assert(CUTE_STATIC_V(size<0>(scores)) == kNRows);
             // consider: scores are Int's when Is_INT8 is enabled, so we need to pass the dequan_s instead of scale_apply_exp2
             //           and also we need to define a new scores tensor for float type (we dequantize and take the exp2 inside this function)
-            flash::template scale_apply_exp2</*Scale_max=*/true, Check_inf, Max_offset>(scores, row_max, softmax_scale_log2);
+            flash::template scale_apply_exp2</*Scale_max=*/true, Check_inf, Max_offset>(scores, row_max(_, inner_idx), softmax_scale_log2);
 
             // consider: here we should reduce_sum with the values of the float exp2 scores (which we need to create a float tensor for when Is_INT8 is enabled)
             // We don't do the reduce across threads here since we don't need to use the row_sum.
             // We do that reduce at the end when we need to normalize the softmax.
-            flash::reduce_sum</*zero_init=*/Is_first, /*warp_reduce=*/false>(scores, row_sum);
+            flash::reduce_sum</*zero_init=*/Is_first, /*warp_reduce=*/false>(scores, row_sum(_, inner_idx));
         };
 
         template <bool const Is_first, bool const Check_inf = false, int const inner_idx = 0, typename Tensor0, typename Tensor1>
@@ -477,24 +483,24 @@ namespace flash
             // consider: scores are Int's when Is_INT8 is enabled, so we need to pass the dequan_s instead of scale_apply_exp2
             //           and also we need to define a new scores tensor for float type (we dequantize and take the exp2 inside this function)
             // flash::template scale_apply_exp2</*Scale_max=*/true, Check_inf, Max_offset>(scores, row_max, softmax_scale_log2);
-            flash::template scale_apply_exp2_dequantize</*Scale_max=*/true, Check_inf, Max_offset>(scores, row_max, scores_float, dequan_s);
+            flash::template scale_apply_exp2_dequantize</*Scale_max=*/true, Check_inf, Max_offset>(scores, row_max(_, inner_idx), scores_float, dequan_s);
 
             // consider: here we should reduce_sum with the values of the float exp2 scores (which we need to create a float tensor for when Is_INT8 is enabled)
             // We don't do the reduce across threads here since we don't need to use the row_sum.
             // We do that reduce at the end when we need to normalize the softmax.
-            flash::reduce_sum</*zero_init=*/Is_first, /*warp_reduce=*/false>(scores_float, row_sum);
+            flash::reduce_sum</*zero_init=*/Is_first, /*warp_reduce=*/false>(scores_float, row_sum(_, inner_idx));
         };
 
         template <int const inner_idx = 0>
         __forceinline__ __device__ TensorT finalize(float const final_scale = 1.f)
         {
             SumOp<float> sum_op;
-            quad_allreduce_(row_sum, row_sum, sum_op);
+            quad_allreduce_(row_sum(_, inner_idx), row_sum(_, inner_idx), sum_op);
             TensorT scores_scale;
 #pragma unroll
-            for (int mi = 0; mi < size(row_sum); ++mi)
+            for (int mi = 0; mi < size(row_sum(_, inner_idx)); ++mi)
             {
-                float sum = row_sum(mi);
+                float sum = row_sum(mi, inner_idx);
                 // float inv_sum = (sum == 0.f || sum != sum) ? 0.f : 1.f / sum;
                 float inv_sum = (sum == 0.f | sum != sum) ? 0.f : 1.f / sum;
                 scores_scale(mi) = inv_sum * final_scale;
@@ -507,9 +513,9 @@ namespace flash
                 // consider: when Is_INT8 is enabled we don't need to multiply by softmax_scale_log2
                 // row_sum(mi) = ((sum == 0.f) | (sum != sum)) ? -INFINITY : row_max(mi) * (softmax_scale_log2 * float(M_LN2)) + __logf(sum);
                 if constexpr (!Is_INT8) {
-                    row_sum(mi) = row_max(mi) * (softmax_scale_log2 * float(M_LN2)) + __logf(sum);
+                    row_sum(mi, inner_idx) = row_max(mi, inner_idx) * (softmax_scale_log2 * float(M_LN2)) + __logf(sum);
                 } else {
-                    row_sum(mi) = row_max(mi) * float(M_LN2) + __logf(sum);
+                    row_sum(mi, inner_idx) = row_max(mi, inner_idx) * float(M_LN2) + __logf(sum);
                 }
             }
             return scores_scale;

@@ -78,8 +78,9 @@ namespace flash
         static constexpr int kHeadDim = get<2>(TileShape_MNK{});
 
         static constexpr bool ReInt8 = kBlockM == 256;
+        // static constexpr bool ReInt8 = false;
         static constexpr int kBlockMI = 128;
-        static constexpr int InnerDimSize = 2;
+        static constexpr int InnerDimSize = ReInt8 ? 2 : 1;
 
         using TileShape_MINK = Shape<Int<kBlockMI>, Int<kHeadDim>, Int<kBlockN>>;
 
