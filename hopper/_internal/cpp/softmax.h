@@ -485,6 +485,7 @@ namespace flash
             flash::reduce_sum</*zero_init=*/Is_first, /*warp_reduce=*/false>(scores_float, row_sum);
         };
 
+        template <int const inner_idx = 0>
         __forceinline__ __device__ TensorT finalize(float const final_scale = 1.f)
         {
             SumOp<float> sum_op;

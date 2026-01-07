@@ -219,9 +219,10 @@ namespace flash
                                decltype(cutlass::gemm::collective::detail::ss_smem_selector<GMMA::Major::K, Element, decltype(cute::get<0>(TileShape_MNK{})), decltype(cute::get<2>(TileShape_MNK{}))>())>{});
 
         // using SmemLayoutQ = decltype(tile_to_shape(SmemLayoutAtomQ{}, select<0, 2>(TileShape_MNK{})));
-        using SmemLayoutQ = std::conditional_t<ReInt8,
-                                               decltype(tile_to_shape(SmemLayoutAtomQ{}, make_shape(shape<0>(TileShape_MINK{}), shape<2>(TileShape_MINK{}), Int<InnerDimSize>{}))),
-                                               decltype(tile_to_shape(SmemLayoutAtomQ{}, select<0, 2>(TileShape_MNK{})))>;
+        using SmemShapeQ = std::conditional_t<ReInt8,
+                                               Shape<Int<kBlockMI>, Int<kHeadDim>, Int<InnerDimSize>>,
+                                               Shape<Int<kBlockM>, Int<kHeadDim>>>;
+        using SmemLayoutQ = decltype(tile_to_shape(SmemLayoutAtomQ{}, SmemShapeQ{}));
         // using SmemLayoutQ = decltype(tile_to_shape(SmemLayoutAtomQ{}, Shape<Int<kBlockM>, Int<kHeadDim>>{}));
         // using SmemLayoutQ = decltype(tile_to_shape(
         //     SmemLayoutAtomQ{},
@@ -1765,6 +1766,7 @@ namespace flash
 
                     softmax.rescale_o(tOrO(_, _, inner_idx1), scores_scale1);
 
+                    //TODO: somehow make this function inner_idx aware
                     mask_fn(tSrS_ambiguous_type, new_n_block);
                     if constexpr (Is_skipable)
                     {
@@ -1800,6 +1802,7 @@ namespace flash
 
                     softmax.rescale_o(tOrO(_, _, inner_idx), scores_scale);
 
+                    //TODO: somehow make this function inner_idx aware
                     mask_fn(tSrS_ambiguous_type, new_n_block);
                     if constexpr (Is_skipable)
                     {
@@ -2185,7 +2188,7 @@ namespace flash
                 flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP), tOrV(_, _, _, smem_pipe_read.index()), tOrO);
                 // For INT8, V is bf16, so no v_descale needed (use Is_FP8)
                 float const v_descale = !Is_FP8 || params.ptr_v_descale == nullptr ? 1.0f : params.ptr_v_descale[bidb * get<0>(params.stride_v_descale) + bidh_kv * get<1>(params.stride_v_descale)];
-                cute::copy(softmax.finalize(v_descale), scores_scale);
+                cute::copy(softmax.finalize<0>(v_descale), scores_scale);
                 if constexpr (LargeHeadDimV)
                 {
                     cutlass::arch::NamedBarrier::sync(NumMmaThreads, static_cast<uint32_t>(FwdNamedBarriers::PEmpty) /*id*/);
@@ -2419,7 +2422,7 @@ namespace flash
                 cutlass::arch::NamedBarrier::arrive(NumMmaThreadsQK + (Use_TMA_Q ? cutlass::NumThreadsPerWarp : NumProducerThreads), static_cast<uint32_t>(FwdNamedBarriers::QueryEmpty) /*id*/);
                 // For INT8, V is bf16, so no v_descale needed (use Is_FP8)
                 float const v_descale = !Is_FP8 || params.ptr_v_descale == nullptr ? 1.0f : params.ptr_v_descale[bidb * get<0>(params.stride_v_descale) + bidh_kv * get<1>(params.stride_v_descale)];
-                Tensor scores_scale = softmax.finalize(v_descale);
+                Tensor scores_scale = softmax.finalize<0>(v_descale);
 
                 if constexpr (LargeHeadDimV)
                 {

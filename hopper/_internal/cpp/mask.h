@@ -41,7 +41,7 @@ struct Mask {
     {
     };
 
-    template <bool Seqlenk_mask=false, bool Causal_mask=false, bool Local_mask=false,
+    template <bool Seqlenk_mask=false, bool Causal_mask=false, bool Local_mask=false, int const inner_idx = 0,
         typename Engine, typename Layout>
     CUTLASS_DEVICE
     void apply(Tensor<Engine, Layout> &tSrS, const int m_block, const int n_block) const {
