@@ -1640,7 +1640,7 @@ namespace flash
                 {
                     n_block = skip_reader.next_n_block();
                 }
-                flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ(_, _, inner_idx), tSrK(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
+                flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ(_, _, _, inner_idx), tSrK(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
                 warpgroup_wait<0>();
 
                 softmax.set_dequan_s(KDescaleSliced(n_block));
@@ -1674,7 +1674,7 @@ namespace flash
                 clear(tOrO);
 
                 static constexpr int inner_idx1 = 1;
-                flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ(_, _, inner_idx1), tSrK(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
+                flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ(_, _, _, inner_idx1), tSrK(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
                 warpgroup_wait<0>();
 
                 pipeline_k.consumer_release(smem_pipe_read);
@@ -1746,14 +1746,14 @@ namespace flash
                         has_more = skip_reader.has_more(new_n_block);
                     }
 
-                    flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ(_, _, inner_idx), tSrK(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
+                    flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ(_, _, _, inner_idx), tSrK(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
 
                     if (!UseSchedulerBarrier || warp_group_idx == 0)
                     {
                         consumer_wait(pipeline_v, smem_pipe_read_v);
                     }
 
-                    flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP(_, _, inner_idx)), tOrV(_, _, _, smem_pipe_read_v.index()), tOrO(_, _, inner_idx));
+                    flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP(_, _, _, inner_idx)), tOrV(_, _, _, smem_pipe_read_v.index()), tOrO(_, _, inner_idx));
                     warp_scheduler_barrier_arrive();
 
                     if constexpr (Is_INT8)
@@ -1794,8 +1794,8 @@ namespace flash
                         write_P_to_smem(tOrP, inner_idx);
                     }
 
-                    flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ(_, _, inner_idx1), tSrK(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
-                    flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP(_, _, inner_idx1)), tOrV(_, _, _, smem_pipe_read_v.index()), tOrO(_, _, inner_idx1));
+                    flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ(_, _, _, inner_idx1), tSrK(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
+                    flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP(_, _, _, inner_idx1)), tOrV(_, _, _, smem_pipe_read_v.index()), tOrO(_, _, inner_idx1));
 
                     warpgroup_wait<1>();
 
