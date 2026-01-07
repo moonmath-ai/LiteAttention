@@ -245,6 +245,33 @@ __global__ void kernel_inspect_layouts()
     Tensor tSrS_ambiguous_type = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK_QK{}));
     print(tSrS_ambiguous_type);
     printf("\n");
+
+
+    static constexpr int kNRows = 2;
+    using TensorT = decltype(make_tensor<float>(Shape<Int<kNRows>>{}));
+    // using TensorT_ReInt8 = decltype(make_tensor<typename TensorT::value_type>(
+    //     decltype(cat_shape(TensorT::shape_type{}, Shape<Int<InnerDimSize>>{}))
+    // ));
+    using TensorT_ReInt8 = decltype(make_tensor<typename TensorT::value_type>(Shape<Int<kNRows>, Int<InnerDimSize>>{}));
+    // TensorT row_max, row_sum;
+    // TensorT row_max, row_sum;
+    TensorT_ReInt8 row_max, row_sum;
+
+    printf("row_max:\n");
+    print(row_max);
+    printf("\n");
+
+    printf("row_sum:\n");
+    print(row_sum);
+    printf("\n");
+
+    printf("row_max(_, 0):\n");
+    print(row_max(_, 0));
+    printf("\n");
+
+    printf("row_sum(_, 0):\n");
+    print(row_sum(_, 0));
+    printf("\n");
 }
 
 int main()
