@@ -341,7 +341,7 @@ namespace flash
                 
                 bool do_qk = false;
 #pragma unroll
-                for (int mi = 0; mi < size(row_max); ++mi)
+                for (int mi = 0; mi < size(row_max(_, inner_idx)); ++mi)
                 {
                     // Check if this row is out of bounds, following mask.h pattern
                     // Use t0ScS_rowcol to get compile-time known row indices
