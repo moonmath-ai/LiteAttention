@@ -2545,8 +2545,10 @@ namespace flash
             // Allocate "fragments/descriptors"
             Tensor tSrQ0 = wg_mma_qk0.partition_fragment_A(sQ);
             Tensor tSrQ1 = wg_mma_qk1.partition_fragment_A(sQ);
-            Tensor tSrK = wg_mma_qk0.partition_fragment_B(sK);
-            Tensor tOrV = wg_mma_pv0.partition_fragment_B(sV);
+            Tensor tSrK0 = wg_mma_qk0.partition_fragment_B(sK);
+            Tensor tSrK1 = wg_mma_qk1.partition_fragment_B(sK);
+            Tensor tOrV0 = wg_mma_pv0.partition_fragment_B(sV);
+            Tensor tOrV1 = wg_mma_pv1.partition_fragment_B(sV);
             Tensor tOsP0 = wg_mma_pv0.partition_fragment_A(sP);
             Tensor tOsP1 = wg_mma_pv1.partition_fragment_A(sP);
             Tensor tPsP0 = smem_thr_copy_P0.partition_D(cute::as_position_independent_swizzle_tensor(sP));
@@ -2700,7 +2702,7 @@ namespace flash
             if constexpr (Is_skipable){
                 n_block = skip_reader.next_n_block();
             }
-            flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ0, tSrK(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
+            flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ0, tSrK0(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
             warpgroup_wait<0>();
 
             softmax0.set_dequan_s(KDescaleSliced(n_block));
@@ -2734,7 +2736,7 @@ namespace flash
             // Need to initialize tOrO in the case of RescaleOBeforeGemm where we will scale tOrO even in the 1st iter
             clear(tOrO0);
 
-            flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ1, tSrK(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
+            flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ1, tSrK1(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
             warpgroup_wait<0>();
 
             pipeline_k.consumer_release(smem_pipe_read);
@@ -2790,6 +2792,26 @@ namespace flash
                 }
 
                 warp_scheduler_barrier_sync();
+                // int new_n_block;
+                // if constexpr (Is_skipable)
+                // {
+                //     // we put this after the warp_scheduler_barrier_sync so wg1 woudn't
+                //     // read the next n_block too early since it's not waiting for pipeline_k
+                //     new_n_block = skip_reader.next_n_block();
+                // }
+                // else
+                // {
+                //     new_n_block = n_block;
+                // }
+
+                // bool has_more = true;
+                // if constexpr (Is_skipable)
+                // {
+                //     has_more = skip_reader.has_more(new_n_block);
+                // }
+
+                flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ0, tSrK0(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
+
                 int new_n_block;
                 if constexpr (Is_skipable)
                 {
@@ -2808,15 +2830,24 @@ namespace flash
                     has_more = skip_reader.has_more(new_n_block);
                 }
 
-                flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ0, tSrK(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
-
                 if (!UseSchedulerBarrier || warp_group_idx == 0)
                 {
                     consumer_wait(pipeline_v, smem_pipe_read_v);
                 }
 
-                flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP0), tOrV(_, _, _, smem_pipe_read_v.index()), tOrO0);
+                softmax1.rescale_o(tOrO1, scores_scale1);
+
+                flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP0), tOrV0(_, _, _, smem_pipe_read_v.index()), tOrO0);
                 warp_scheduler_barrier_arrive();
+
+                // if constexpr (Is_INT8)
+                // {
+                //     softmax0.set_dequan_s(KDescaleSliced(new_n_block));
+                //     softmax1.dequan_s = softmax0.dequan_s;
+                // }
+
+                warpgroup_wait<1>();
+
 
                 if constexpr (Is_INT8)
                 {
@@ -2824,11 +2855,9 @@ namespace flash
                     softmax1.dequan_s = softmax0.dequan_s;
                 }
 
-                warpgroup_wait<1>();
-
                 // pipeline_k.consumer_release(smem_pipe_read); // release K
 
-                softmax1.rescale_o(tOrO1, scores_scale1);
+                // softmax1.rescale_o(tOrO1, scores_scale1);
 
                 //TODO: somehow make this function inner_idx aware
                 mask_fn0(tSrS_ambiguous_type, new_n_block);
@@ -2856,8 +2885,9 @@ namespace flash
 
                 warp_scheduler_barrier_sync();
 
-                flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ1, tSrK(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
-                flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP1), tOrV(_, _, _, smem_pipe_read_v.index()), tOrO1);
+                flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ1, tSrK1(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
+                softmax0.rescale_o(tOrO0, scores_scale0);
+                flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP1), tOrV1(_, _, _, smem_pipe_read_v.index()), tOrO1);
 
                 warp_scheduler_barrier_arrive();
 
@@ -2865,7 +2895,7 @@ namespace flash
 
                 pipeline_k.consumer_release(smem_pipe_read); // release K
 
-                softmax0.rescale_o(tOrO0, scores_scale0);
+                // softmax0.rescale_o(tOrO0, scores_scale0);
 
                 //TODO: somehow make this function inner_idx aware
                 mask_fn1(tSrS_ambiguous_type, new_n_block);
@@ -2888,15 +2918,16 @@ namespace flash
                 pipeline_v.consumer_release(smem_pipe_read_v); // release V
 
                 convert_type_out(make_tensor(tSrS.data(), tOrP.layout()), tOrP);
+
                 if constexpr (!MmaPV_is_RS)
                 {
                     write_P1_to_smem(tOrP);
                 }
 
-                if constexpr (!MmaPV_is_RS)
-                {
-                    arrive_on_P_write_barrier();
-                }
+                // if constexpr (!MmaPV_is_RS)
+                // {
+                //     arrive_on_P_write_barrier();
+                // }
 
                 return has_more;
             };
@@ -2968,13 +2999,13 @@ namespace flash
             {
                 consumer_wait(pipeline_v, smem_pipe_read);
             }
-            flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP0), tOrV(_, _, _, smem_pipe_read.index()), tOrO0);
+            flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP0), tOrV0(_, _, _, smem_pipe_read.index()), tOrO0);
             softmax0.rescale_o(tOrO1, scores_scale1);
             // For INT8, V is bf16, so no v_descale needed (use Is_FP8)
             float const v_descale = !Is_FP8 || params.ptr_v_descale == nullptr ? 1.0f : params.ptr_v_descale[bidb * get<0>(params.stride_v_descale) + bidh_kv * get<1>(params.stride_v_descale)];
             cute::copy(softmax0.finalize(v_descale), scores_scale0);
             warpgroup_wait<0>();
-            flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP1), tOrV(_, _, _, smem_pipe_read.index()), tOrO1);
+            flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP1), tOrV1(_, _, _, smem_pipe_read.index()), tOrO1);
             cute::copy(softmax1.finalize(v_descale), scores_scale1);
             warpgroup_wait<0>();
             pipeline_v.consumer_release(smem_pipe_read); // release V, otherwise producers will hang
