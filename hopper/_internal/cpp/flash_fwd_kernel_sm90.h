@@ -272,7 +272,9 @@ namespace flash
                     shared_storage.pipelines.barrier_Qv.init(Use_TMA_Q ? 1 : NumProducerThreads /*numThreads*/);
                 }
                 // DOR: why do we need barrier_O? do we calculate multiple O tiles in the same cuda block? is it done with the TMA?
-                shared_storage.pipelines.barrier_O.init(size(ClusterShape{}) * (Use_TMA_O ? 1 : NumMmaThreads) /*numThreads*/);
+                // Use NumEpilogueThreads instead of NumMmaThreads since the epilogue uses NumEpilogueThreads threads
+                // (in ReInt8 mode, NumMmaThreads is halved but NumEpilogueThreads remains the same)
+                shared_storage.pipelines.barrier_O.init(size(ClusterShape{}) * (Use_TMA_O ? 1 : CollectiveEpilogue::NumEpilogueThreads) /*numThreads*/);
             }
 
             // We're counting on pipeline_k to call cutlass::arch::fence_barrier_init();
@@ -630,7 +632,11 @@ namespace flash
                     else
                     {
                         // Write 0 to gO and -inf to gLSE.
-                        epilogue.store_zero(params.epilogue, threadIdx.x - MmaThreadOffset, block_coord);
+                        if constexpr (ReInt8){
+                            epilogue.store_zero_reint8(params.epilogue, threadIdx.x - MmaThreadOffset, block_coord);
+                        }else{
+                            epilogue.store_zero(params.epilogue, threadIdx.x - MmaThreadOffset, block_coord);
+                        }
                     }
                 }
                 epilogue.store_tail();

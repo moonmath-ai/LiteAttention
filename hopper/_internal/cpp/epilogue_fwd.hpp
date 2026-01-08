@@ -731,6 +731,101 @@ struct CollectiveEpilogueFwd {
 
     }
 
+    // Write 0 to output and -inf to LSE (ReInt8 version: zeros both WG0 and WG2 positions)
+    CUTLASS_DEVICE void
+    store_zero_reint8(
+         Params const& params,
+         int thread_idx,
+         cute::tuple<int32_t, int32_t, int32_t, int32_t> const& block_coord
+         ) {
+        static constexpr int kBlockM = get<0>(TileShape_MNK_PV{});
+        auto [m_block, bidh, bidb, split_idx] = block_coord;
+        int num_splits = get<4>(params.shape_O_packed);
+        if constexpr (Split && Varlen) {
+            uint32_t num_splits_dynamic_u = reinterpret_cast<uint32_t const&>(split_idx) >> 16; // first 16 bits are for num_splits
+            int num_splits_dynamic = reinterpret_cast<int&>(num_splits_dynamic_u);
+            num_splits = num_splits_dynamic > 0 ? num_splits_dynamic : num_splits;
+            split_idx &= 0x0000FFFF;  // Only use the lower 16 bits of split_idx
+        }
+        bool const is_split = !Split ? false : (!Varlen ? true : num_splits > 1);
+
+        flash::SeqlenInfo<Varlen, kBlockM> seqlen_info{bidb, size<0>(params.shape_O), params.cu_seqlens, params.seqused};
+        bool const is_varlen = Varlen && params.cu_seqlens;
+        int offset_o = seqlen_info.offset;
+        int seqlen_o = seqlen_info.seqlen;
+        int qhead_per_khead = !PackGQA ? 1 : params.qhead_per_khead_divmod.divisor;
+        Tensor mLSE = make_tensor(make_gmem_ptr((!is_split ? params.ptr_LSE : params.ptr_LSE_partial) + offset_o * get<0>(!is_split ? params.stride_LSE : params.stride_LSE_partial)),
+                                  params.shape_LSE_packed,
+                                  !is_split ? params.stride_LSE_packed : params.stride_LSE_partial_packed)(_, bidh, !is_varlen ? bidb : 0, !is_split ? 0 : split_idx);
+        Tensor gLSE = local_tile(mLSE, Shape<Int<kBlockM>>{}, make_coord(m_block));
+
+        static_assert(kBlockM <= NumEpilogueThreads);
+        // LSE is per-row, not per-warp-group, so we only need to write once per row
+        if (thread_idx < kBlockM) {
+            const int row = m_block * kBlockM + thread_idx;
+            if constexpr (!PackGQA) {
+                if (row < seqlen_o) { mLSE(row) = -INFINITY; }
+            } else {
+                if (row < seqlen_o * qhead_per_khead) {
+                    int m_idx, h_idx;
+                    m_idx = params.qhead_per_khead_divmod.divmod(h_idx, row);
+                    mLSE(make_coord(make_coord(h_idx, m_idx))) = -INFINITY;
+                }
+            }
+        }
+
+        // If split, we don't have to write 0 to mOpartial if the mha_combine kernel is used,
+        // since it will not use the value of O if LSE is -inf.
+        if (!is_split) {
+            Tensor mO = make_tensor(make_gmem_ptr(params.ptr_O + offset_o * get<0>(params.stride_O)), params.shape_O_packed, params.stride_O_packed)(_, _, bidh, !is_varlen ? bidb : 0, _0{});
+            GmemTiledCopyO gmem_tiled_copy_O;
+            int const thread_idx_wg2 = thread_idx + 2 * cutlass::NumThreadsPerWarpGroup;
+            
+            // Zero WG0 position
+            auto gmem_thr_copy_O = gmem_tiled_copy_O.get_thread_slice(thread_idx);
+            Tensor tOcO = gmem_thr_copy_O.partition_D(cute::make_identity_tensor(select<0, 1>(TileShape_MNK_PV{})));
+            if constexpr (!PackGQA) {
+                Tensor tOpO = make_tensor<bool>(make_shape(size<2>(tOcO)));
+                #pragma unroll
+                for (int k = 0; k < size(tOpO); ++k) { tOpO(k) = get<1>(tOcO(_0{}, _0{}, k)) < get<1>(params.shape_O); }
+                Tensor gO = local_tile(mO, select<0, 1>(TileShape_MNK_PV{}), make_coord(m_block, _0{}));  // (M, K)
+                Tensor tOgO = gmem_thr_copy_O.partition_D(gO);
+                Tensor tOrO = make_fragment_like(tOgO);
+                cute::clear(tOrO);
+                flash::copy</*Is_even_MN=*/false, /*Is_even_K=*/false, /*Clear_OOB_MN=*/false, /*Clear_OOB_K=*/false>(
+                    gmem_tiled_copy_O, tOrO, tOgO, tOcO, tOpO, seqlen_o - m_block * kBlockM
+                );
+            } else {
+                using PackGQA_t = flash::PackGQAManager<get<0>(TileShape_MNK_PV{}), get<1>(TileShape_MNK_PV{}), NumEpilogueThreads, Element>;
+                Tensor tOrO = make_tensor<Element>(make_shape(Shape<_1, Int<kGmemElemsPerStore>>{}, size<1>(tOcO), size<2>(tOcO)));
+                cute::clear(tOrO);
+                PackGQA_t::store_O(mO, tOrO, params.qhead_per_khead_divmod, thread_idx, seqlen_o, m_block);
+            }
+            
+            // Zero WG2 position
+            auto gmem_thr_copy_O_wg2 = gmem_tiled_copy_O.get_thread_slice(thread_idx_wg2);
+            Tensor tOcO_wg2 = gmem_thr_copy_O_wg2.partition_D(cute::make_identity_tensor(select<0, 1>(TileShape_MNK_PV{})));
+            if constexpr (!PackGQA) {
+                Tensor tOpO_wg2 = make_tensor<bool>(make_shape(size<2>(tOcO_wg2)));
+                #pragma unroll
+                for (int k = 0; k < size(tOpO_wg2); ++k) { tOpO_wg2(k) = get<1>(tOcO_wg2(_0{}, _0{}, k)) < get<1>(params.shape_O); }
+                Tensor gO = local_tile(mO, select<0, 1>(TileShape_MNK_PV{}), make_coord(m_block, _0{}));  // (M, K)
+                Tensor tOgO_wg2 = gmem_thr_copy_O_wg2.partition_D(gO);
+                Tensor tOrO_wg2 = make_fragment_like(tOgO_wg2);
+                cute::clear(tOrO_wg2);
+                flash::copy</*Is_even_MN=*/false, /*Is_even_K=*/false, /*Clear_OOB_MN=*/false, /*Clear_OOB_K=*/false>(
+                    gmem_tiled_copy_O, tOrO_wg2, tOgO_wg2, tOcO_wg2, tOpO_wg2, seqlen_o - m_block * kBlockM
+                );
+            } else {
+                using PackGQA_t = flash::PackGQAManager<get<0>(TileShape_MNK_PV{}), get<1>(TileShape_MNK_PV{}), NumEpilogueThreads, Element>;
+                Tensor tOrO_wg2 = make_tensor<Element>(make_shape(Shape<_1, Int<kGmemElemsPerStore>>{}, size<1>(tOcO_wg2), size<2>(tOcO_wg2)));
+                cute::clear(tOrO_wg2);
+                PackGQA_t::store_O(mO, tOrO_wg2, params.qhead_per_khead_divmod, thread_idx_wg2, seqlen_o, m_block);
+            }
+        }
+
+    }
+
 };
 
 } // namespace flash
