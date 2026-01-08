@@ -2458,7 +2458,8 @@ namespace flash
             PipelineState &smem_pipe_read,
             FrgTensorO &tOrO0,
             FrgTensorO &tOrO1,
-            Softmax &softmax,
+            Softmax &softmax0,
+            Softmax &softmax1,
             int const thread_idx,
             int &work_idx,
             SeqlenInfo_t const &seqlen_info,
@@ -2700,7 +2701,8 @@ namespace flash
             flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ0, tSrK(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
             warpgroup_wait<0>();
 
-            softmax.set_dequan_s(KDescaleSliced(n_block));
+            softmax0.set_dequan_s(KDescaleSliced(n_block));
+            softmax1.dequan_s = softmax0.dequan_s;
 
             mask0.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS_ambiguous_type, m_block, n_block);
 
@@ -2708,19 +2710,19 @@ namespace flash
             {
                 if constexpr (Is_skipable)
                 {
-                    return softmax.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, /*Is_first=*/true, true, 0 /*inner_idx*/>(
+                    return softmax0.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, /*Is_first=*/true, true>(
                         tSrS_ambiguous_type, params.qk_skip_mask_args.thr, skip_reader, m_block);
                 }
                 else
                 {
-                    return softmax.template max_get_scale</*Is_first=*/true, /*Check_inf=*/true, 0 /*inner_idx*/>(tSrS_ambiguous_type);
+                    return softmax0.template max_get_scale</*Is_first=*/true, /*Check_inf=*/true>(tSrS_ambiguous_type);
                 }
             }();
             // Don't need to store scales to send to WG1 (in the case of LargeHeadDimV) since it's 1.f
 
             auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
 
-            softmax.template online_softmax_dequantize</*Is_first=*/true, /*Check_inf=*/true, 0 /*inner_idx*/>(tSrS_ambiguous_type, tSrS);
+            softmax0.template online_softmax_dequantize</*Is_first=*/true, /*Check_inf=*/true>(tSrS_ambiguous_type, tSrS);
 
             Tensor tOrP_acc = make_tensor(tSrS.data(), flash::convert_layout_acc_Aregs<TiledMmaPV>(tSrS.layout()));
             Tensor tOrP = make_tensor_like<ElementV>(tOrP_acc);
@@ -2741,19 +2743,19 @@ namespace flash
             {
                 if constexpr (Is_skipable)
                 {
-                    return softmax.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, /*Is_first=*/true, true, 1 /*inner_idx*/>(
+                    return softmax1.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, /*Is_first=*/true, true>(
                         tSrS_ambiguous_type, params.qk_skip_mask_args.thr, skip_reader, m_block);
                 }
                 else
                 {
-                    return softmax.template max_get_scale</*Is_first=*/true, /*Check_inf=*/true, 1 /*inner_idx*/>(tSrS_ambiguous_type);
+                    return softmax1.template max_get_scale</*Is_first=*/true, /*Check_inf=*/true>(tSrS_ambiguous_type);
                 }
             }();
 
             // Don't need to store scales to send to WG1 (in the case of LargeHeadDimV) since it's 1.f
             tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
 
-            softmax.template online_softmax_dequantize</*Is_first=*/true, /*Check_inf=*/true, 1 /*inner_idx*/>(tSrS_ambiguous_type, tSrS);
+            softmax1.template online_softmax_dequantize</*Is_first=*/true, /*Check_inf=*/true>(tSrS_ambiguous_type, tSrS);
 
             tOrP_acc = make_tensor(tSrS.data(), flash::convert_layout_acc_Aregs<TiledMmaPV>(tSrS.layout()));
             tOrP = make_tensor_like<ElementV>(tOrP_acc);
@@ -2773,7 +2775,7 @@ namespace flash
 
             clear(tOrO1);
             // Each step does gemm0 for iter n_block, gemm1 for iter n_block + 1, and softmax for iter n_block.
-            auto fwd_step = [&](const int n_block, auto mask_fn, auto check_inf_type, auto &skip_reader) -> bool
+            auto fwd_step = [&](const int n_block, auto mask_fn0, auto mask_fn1, auto check_inf_type, auto &skip_reader) -> bool
             {
                 static constexpr bool Check_inf = decltype(check_inf_type)::value;
                 PipelineState smem_pipe_read_v(smem_pipe_read.index(), smem_pipe_read.phase(), smem_pipe_read.count());
@@ -2816,29 +2818,30 @@ namespace flash
 
                 if constexpr (Is_INT8)
                 {
-                    softmax.set_dequan_s(KDescaleSliced(new_n_block));
+                    softmax0.set_dequan_s(KDescaleSliced(new_n_block));
+                    softmax1.dequan_s = softmax0.dequan_s;
                 }
 
                 warpgroup_wait<1>();
 
                 // pipeline_k.consumer_release(smem_pipe_read); // release K
 
-                softmax.rescale_o(tOrO1, scores_scale1);
+                softmax1.rescale_o(tOrO1, scores_scale1);
 
                 //TODO: somehow make this function inner_idx aware
-                mask_fn(tSrS_ambiguous_type, new_n_block);
+                mask_fn0(tSrS_ambiguous_type, new_n_block);
                 if constexpr (Is_skipable)
                 {
-                    auto scales_res = softmax.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, /*Is_first=*/false, Check_inf, 0>(tSrS_ambiguous_type, params.qk_skip_mask_args.thr, skip_reader, m_block);
+                    auto scales_res = softmax0.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, /*Is_first=*/false, Check_inf>(tSrS_ambiguous_type, params.qk_skip_mask_args.thr, skip_reader, m_block);
                     cute::copy(scales_res, scores_scale0);
                 }
                 else
                 {
-                    cute::copy(softmax.template max_get_scale</*Is_first=*/false, Check_inf, 0>(tSrS_ambiguous_type), scores_scale0);
+                    cute::copy(softmax0.template max_get_scale</*Is_first=*/false, Check_inf>(tSrS_ambiguous_type), scores_scale0);
                 }
 
                 auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
-                softmax.template online_softmax_dequantize</*Is_first=*/false, Check_inf, 0>(tSrS_ambiguous_type, tSrS);
+                softmax0.template online_softmax_dequantize</*Is_first=*/false, Check_inf>(tSrS_ambiguous_type, tSrS);
 
                 warpgroup_wait<0>();
 
@@ -2856,24 +2859,24 @@ namespace flash
 
                 pipeline_k.consumer_release(smem_pipe_read); // release K
 
-                softmax.rescale_o(tOrO0, scores_scale0);
+                softmax0.rescale_o(tOrO0, scores_scale0);
 
                 //TODO: somehow make this function inner_idx aware
-                mask_fn(tSrS_ambiguous_type, new_n_block);
+                mask_fn1(tSrS_ambiguous_type, new_n_block);
                 if constexpr (Is_skipable)
                 {
                     cute::copy(
-                        softmax.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, /*Is_first=*/false, Check_inf, 1>(
+                        softmax1.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, /*Is_first=*/false, Check_inf>(
                             tSrS_ambiguous_type, params.qk_skip_mask_args.thr, skip_reader, m_block),
                         scores_scale1);
                 }
                 else
                 {
-                    cute::copy(softmax.template max_get_scale</*Is_first=*/false, Check_inf, 1>(tSrS_ambiguous_type), scores_scale1);
+                    cute::copy(softmax1.template max_get_scale</*Is_first=*/false, Check_inf>(tSrS_ambiguous_type), scores_scale1);
                 }
 
                 tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
-                softmax.template online_softmax_dequantize</*Is_first=*/false, Check_inf, 1>(tSrS_ambiguous_type, tSrS);
+                softmax1.template online_softmax_dequantize</*Is_first=*/false, Check_inf>(tSrS_ambiguous_type, tSrS);
 
                 warpgroup_wait<0>();
                 pipeline_v.consumer_release(smem_pipe_read_v); // release V
@@ -2894,15 +2897,17 @@ namespace flash
 
             if constexpr ((Is_causal || Is_local) && !Is_skipable)
             { // Separate iterations with causal or local masking
-                auto mask_fn = [&](auto &tSrS, int n_block)
-                { mask.template apply<false /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS, m_block, n_block); };
+                auto mask_fn0 = [&](auto &tSrS, int n_block)
+                { mask0.template apply<false /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS, m_block, n_block); };
+                auto mask_fn1 = [&](auto &tSrS, int n_block)
+                { mask1.template apply<false /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS, m_block, n_block); };
                 int const n_block_min_causal_local_mask = BlockMN_t::get_n_block_min_causal_local_mask(
                     seqlen_info, m_block, n_block_min, params.window_size_right,
                     params.attention_chunk_divmod, params.qhead_per_khead_divmod);
 #pragma unroll 1
                 for (; n_block >= n_block_min_causal_local_mask; --n_block)
                 {
-                    fwd_step(n_block, mask_fn, cute::true_type{} /*check_inf*/, skip_reader);
+                    fwd_step(n_block, mask_fn0, mask_fn1, cute::true_type{} /*check_inf*/, skip_reader);
                 }
             }
 
@@ -2916,32 +2921,38 @@ namespace flash
 #pragma unroll 1
                 for (; n_block >= n_block_min_before_local_mask; --n_block)
                 {
-                    fwd_step(n_block, no_mask_fn, cute::false_type{} /*check_inf*/, skip_reader);
+                    fwd_step(n_block, no_mask_fn, no_mask_fn, cute::false_type{} /*check_inf*/, skip_reader);
                 }
             }
             else
             {
-                auto mask_fn = [&](auto &tSrS, int n_block)
+                auto mask_fn0 = [&](auto &tSrS, int n_block)
                 {
-                    mask.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS, m_block, n_block);
+                    mask0.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS, m_block, n_block);
+                };
+                auto mask_fn1 = [&](auto &tSrS, int n_block)
+                {
+                    mask1.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS, m_block, n_block);
                 };
                 bool has_more_outer = skip_reader.has_more(n_block);
                 // while(skip_reader.has_more(n_block)){
                 while (has_more_outer)
                 {
-                    has_more_outer = fwd_step(0, mask_fn, cute::true_type{} /*check_inf*/, skip_reader);
+                    has_more_outer = fwd_step(0, mask_fn0, mask_fn1, cute::true_type{} /*check_inf*/, skip_reader);
                 }
             }
 
             // Separate masking iterations on the left for local attention
             if constexpr ((Is_local) && !Is_skipable)
             {
-                auto local_mask_fn = [&](auto &tSrS, int n_block)
-                { mask.template apply<false /*Seqlenk_mask*/, false /*Causal_mask*/, Is_local>(tSrS, m_block, n_block); };
+                auto local_mask_fn0 = [&](auto &tSrS, int n_block)
+                { mask0.template apply<false /*Seqlenk_mask*/, false /*Causal_mask*/, Is_local>(tSrS, m_block, n_block); };
+                auto local_mask_fn1 = [&](auto &tSrS, int n_block)
+                { mask1.template apply<false /*Seqlenk_mask*/, false /*Causal_mask*/, Is_local>(tSrS, m_block, n_block); };
 #pragma unroll 1
                 for (; n_block >= n_block_min; --n_block)
                 {
-                    fwd_step(n_block, local_mask_fn, cute::bool_constant<Is_local>{} /*check_inf*/, skip_reader);
+                    fwd_step(n_block, local_mask_fn0, local_mask_fn1, cute::bool_constant<Is_local>{} /*check_inf*/, skip_reader);
                 }
             }
 
@@ -2952,13 +2963,13 @@ namespace flash
                 consumer_wait(pipeline_v, smem_pipe_read);
             }
             flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP0), tOrV(_, _, _, smem_pipe_read.index()), tOrO0);
-            softmax.rescale_o(tOrO1, scores_scale1);
+            softmax0.rescale_o(tOrO1, scores_scale1);
             // For INT8, V is bf16, so no v_descale needed (use Is_FP8)
             float const v_descale = !Is_FP8 || params.ptr_v_descale == nullptr ? 1.0f : params.ptr_v_descale[bidb * get<0>(params.stride_v_descale) + bidh_kv * get<1>(params.stride_v_descale)];
-            cute::copy(softmax.finalize<0>(v_descale), scores_scale0);
+            cute::copy(softmax0.finalize<0>(v_descale), scores_scale0);
             warpgroup_wait<0>();
             flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP1), tOrV(_, _, _, smem_pipe_read.index()), tOrO1);
-            cute::copy(softmax.finalize<1>(v_descale), scores_scale1);
+            cute::copy(softmax1.finalize<1>(v_descale), scores_scale1);
             warpgroup_wait<0>();
             pipeline_v.consumer_release(smem_pipe_read); // release V, otherwise producers will hang
             // softmax.rescale_o(tOrO, scores_scale);

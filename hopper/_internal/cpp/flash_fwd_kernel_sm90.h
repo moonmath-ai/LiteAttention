@@ -93,8 +93,11 @@ namespace flash
         using TileSchedulerParams = typename TileScheduler::Params;
 
         static constexpr uint32_t NumLoadWarpGroups = 1;
-        static constexpr uint32_t NumMmaWarpGroups = CUTE_STATIC_V(size(TiledMmaPV{})) / cutlass::NumThreadsPerWarpGroup;
-        static constexpr uint32_t MaxThreadsPerBlock = CUTE_STATIC_V(size(TiledMmaPV{})) + (NumLoadWarpGroups * cutlass::NumThreadsPerWarpGroup);
+        static constexpr uint32_t TiledMmaPVSize = ReInt8 ? (CUTE_STATIC_V(size(TiledMmaPV{})) / 2) : CUTE_STATIC_V(size(TiledMmaPV{}));
+        // static constexpr uint32_t NumMmaWarpGroups = CUTE_STATIC_V(size(TiledMmaPV{})) / cutlass::NumThreadsPerWarpGroup;
+        static constexpr uint32_t NumMmaWarpGroups = TiledMmaPVSize / cutlass::NumThreadsPerWarpGroup;
+        // static constexpr uint32_t MaxThreadsPerBlock = CUTE_STATIC_V(size(TiledMmaPV{})) + (NumLoadWarpGroups * cutlass::NumThreadsPerWarpGroup);
+        static constexpr uint32_t MaxThreadsPerBlock = TiledMmaPVSize + (NumLoadWarpGroups * cutlass::NumThreadsPerWarpGroup);
         static constexpr uint32_t MinBlocksPerMultiprocessor = 1;
         static_assert(NumMmaWarpGroups == 1 || NumMmaWarpGroups == 2 || NumMmaWarpGroups == 3);
 
@@ -561,7 +564,9 @@ namespace flash
                     // // DOR: kNRows = 2 * (2 * 128 / 256) = 2
                     // flash::Softmax<!LargeHeadDimV ? 2 * (2 * kBlockM / NumMmaThreads) : 2, /*Max_offset=*/!Is_8Bit ? 0 : 8> softmax(softmax_scale_log2, row_mask, local_row_idx);
                     // DOR: kNRows = 2 * (2 * 128 / 256) = 2
-                    flash::Softmax<!LargeHeadDimV ? 2 * (2 * kBlockM / NumMmaThreads) : 2, /*Max_offset=*/!Is_FP8 ? 0 : 8, Is_INT8> softmax(softmax_scale_log2, seqlen_info.seqlen_q, thread_idx);
+                    static constexpr int kNRows = !LargeHeadDimV ? 2 * (2 * kBlockM / (ReInt8 ? (2 * NumMmaThreads) : NumMmaThreads)) : 2;
+                    flash::Softmax<kNRows, /*Max_offset=*/!Is_FP8 ? 0 : 8, Is_INT8> softmax(softmax_scale_log2, seqlen_info.seqlen_q, thread_idx);
+                    flash::Softmax<kNRows, /*Max_offset=*/!Is_FP8 ? 0 : 8, Is_INT8> softmax1(softmax_scale_log2, seqlen_info.seqlen_q, thread_idx + 2 * cutlass::NumThreadsPerWarp);
 
                     /*
                     taken from the answer here: https://youtu.be/JwUcZwPOCpA?t=3152
@@ -580,7 +585,7 @@ namespace flash
                         if constexpr (ReInt8){
                             tile_valid = mainloop.mma_reint8(
                                 params.mainloop, pipeline_k, pipeline_v, smem_pipe_read,
-                                tOrO, tOrO1, softmax, thread_idx, work_idx, seqlen_info, block_coord, shared_storage);
+                                tOrO, tOrO1, softmax, softmax1, thread_idx, work_idx, seqlen_info, block_coord, shared_storage);
                         }else{
                             tile_valid = mainloop.mma(
                                 params.mainloop, pipeline_k, pipeline_v, smem_pipe_read,
@@ -617,7 +622,7 @@ namespace flash
                             epilogue.store(params.epilogue, tOrO, softmax.row_sum, shared_storage, tiled_mma_pv,
                                        threadIdx.x - MmaThreadOffset + 2 * cutlass::NumThreadsPerWarp, block_coord);
 
-                            epilogue.store(params.epilogue, tOrO1, softmax.row_sum, shared_storage, tiled_mma_pv,
+                            epilogue.store(params.epilogue, tOrO1, softmax1.row_sum, shared_storage, tiled_mma_pv,
                                        threadIdx.x - MmaThreadOffset + 2 * cutlass::NumThreadsPerWarp, block_coord);
                         }else{
                         // if (threadIdx.x == 128) { printf("Before epilogue, bid.x = %d, bid.y = %d, bid.z = %d, m_block = %d, bidb = %d, split_idx = %d\n", blockIdx.x, blockIdx.y, blockIdx.z, m_block, bidb, split_idx); }
