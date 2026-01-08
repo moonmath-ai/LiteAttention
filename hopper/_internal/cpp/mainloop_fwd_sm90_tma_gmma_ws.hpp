@@ -84,6 +84,8 @@ namespace flash
         static constexpr bool Is_INT8 = cute::is_same_v<Element, int8_t>;
         // Combined check for any 8-bit type
         static constexpr bool Is_8Bit = Is_FP8 || Is_INT8;
+
+        static constexpr bool ReInt8 = Is_INT8 && (get<0>(TileShape_MNK{}) == 256);
         
         // For INT8, V uses bfloat16 (not int8) to maintain precision
         using ElementV = std::conditional_t<Is_INT8, cute::bfloat16_t, Element>;

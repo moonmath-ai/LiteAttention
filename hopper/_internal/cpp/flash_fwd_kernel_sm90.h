@@ -71,6 +71,7 @@ namespace flash
         static constexpr bool ReverseSkipList = CollectiveMainloop::ReverseSkipList;
         static constexpr bool Phase = CollectiveMainloop::Phase;
         static constexpr bool HasMustDoList = CollectiveMainloop::HasMustDoList;
+        static constexpr bool ReInt8 = CollectiveMainloop::ReInt8;
 
         // Mainloop derived types
         using TileShape_MNK_PV = typename CollectiveMainloop::TileShape_MNK_PV;
@@ -571,13 +572,20 @@ namespace flash
                     */
                     // Attention output (GEMM-II) accumulator.
                     Tensor tOrO = partition_fragment_C(tiled_mma_pv, select<0, 1>(TileShape_MNK_PV{}));
+                    Tensor tOrO1 = partition_fragment_C(tiled_mma_pv, select<0, 1>(TileShape_MNK_PV{}));
                     bool tile_valid;
                     // const int thread_idx = threadIdx.x - MmaThreadOffset;
                     if constexpr (!LargeHeadDimV)
                     {
-                        tile_valid = mainloop.mma(
-                            params.mainloop, pipeline_k, pipeline_v, smem_pipe_read,
-                            tOrO, softmax, thread_idx, work_idx, seqlen_info, block_coord, shared_storage);
+                        if constexpr (ReInt8){
+                            tile_valid = mainloop.mma_reint8(
+                                params.mainloop, pipeline_k, pipeline_v, smem_pipe_read,
+                                tOrO, tOrO1, softmax, thread_idx, work_idx, seqlen_info, block_coord, shared_storage);
+                        }else{
+                            tile_valid = mainloop.mma(
+                                params.mainloop, pipeline_k, pipeline_v, smem_pipe_read,
+                                tOrO, softmax, thread_idx, work_idx, seqlen_info, block_coord, shared_storage);
+                        }
                     }
                     else
                     { // mma_pv might not compile if !LargeHeadDimV
@@ -605,9 +613,17 @@ namespace flash
                     }
                     if (tile_valid)
                     {
+                        if constexpr (ReInt8){
+                            epilogue.store(params.epilogue, tOrO, softmax.row_sum, shared_storage, tiled_mma_pv,
+                                       threadIdx.x - MmaThreadOffset + 2 * cutlass::NumThreadsPerWarp, block_coord);
+
+                            epilogue.store(params.epilogue, tOrO1, softmax.row_sum, shared_storage, tiled_mma_pv,
+                                       threadIdx.x - MmaThreadOffset + 2 * cutlass::NumThreadsPerWarp, block_coord);
+                        }else{
                         // if (threadIdx.x == 128) { printf("Before epilogue, bid.x = %d, bid.y = %d, bid.z = %d, m_block = %d, bidb = %d, split_idx = %d\n", blockIdx.x, blockIdx.y, blockIdx.z, m_block, bidb, split_idx); }
-                        epilogue.store(params.epilogue, tOrO, softmax.row_sum, shared_storage, tiled_mma_pv,
+                            epilogue.store(params.epilogue, tOrO, softmax.row_sum, shared_storage, tiled_mma_pv,
                                        threadIdx.x - MmaThreadOffset, block_coord);
+                        }
                     }
                     else
                     {
