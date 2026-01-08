@@ -2854,8 +2854,12 @@ namespace flash
                     write_P1_to_smem(tOrP);
                 }
 
+                warp_scheduler_barrier_sync();
+
                 flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ1, tSrK(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
                 flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP1), tOrV(_, _, _, smem_pipe_read_v.index()), tOrO1);
+
+                warp_scheduler_barrier_arrive();
 
                 warpgroup_wait<1>();
 
