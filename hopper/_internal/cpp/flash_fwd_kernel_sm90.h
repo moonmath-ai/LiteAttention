@@ -619,13 +619,10 @@ namespace flash
                     if (tile_valid)
                     {
                         if constexpr (ReInt8){
-                            epilogue.store(params.epilogue, tOrO, softmax.row_sum, shared_storage, tiled_mma_pv,
-                                       threadIdx.x - MmaThreadOffset + 2 * cutlass::NumThreadsPerWarp, block_coord);
-
-                            epilogue.store(params.epilogue, tOrO1, softmax1.row_sum, shared_storage, tiled_mma_pv,
-                                       threadIdx.x - MmaThreadOffset + 2 * cutlass::NumThreadsPerWarp, block_coord);
+                            epilogue.store_reint8(params.epilogue, tOrO, tOrO1, softmax.row_sum, softmax1.row_sum, shared_storage, tiled_mma_pv,
+                                       threadIdx.x - MmaThreadOffset, block_coord);
                         }else{
-                        // if (threadIdx.x == 128) { printf("Before epilogue, bid.x = %d, bid.y = %d, bid.z = %d, m_block = %d, bidb = %d, split_idx = %d\n", blockIdx.x, blockIdx.y, blockIdx.z, m_block, bidb, split_idx); }
+                            // if (threadIdx.x == 128) { printf("Before epilogue, bid.x = %d, bid.y = %d, bid.z = %d, m_block = %d, bidb = %d, split_idx = %d\n", blockIdx.x, blockIdx.y, blockIdx.z, m_block, bidb, split_idx); }
                             epilogue.store(params.epilogue, tOrO, softmax.row_sum, shared_storage, tiled_mma_pv,
                                        threadIdx.x - MmaThreadOffset, block_coord);
                         }
