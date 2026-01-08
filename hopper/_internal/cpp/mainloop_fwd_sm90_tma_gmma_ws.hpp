@@ -2977,6 +2977,7 @@ namespace flash
             // softmax.rescale_o(tOrO, scores_scale);
             ++smem_pipe_read;
 
+            ++work_idx;
             return true;
         }
     };
