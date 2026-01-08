@@ -2659,15 +2659,15 @@ namespace flash
                 }
             }
 
-            if constexpr (MmaQK_is_RS)
-            {
-                using SmemCopyAtomQ = Copy_Atom<cute::SM75_U32x4_LDSM_N, Element>;
-                auto smem_tiled_copy_Q = make_tiled_copy_A(SmemCopyAtomQ{}, tiled_mma_qk);
-                auto smem_thr_copy_Q = smem_tiled_copy_Q.get_thread_slice(thread_idx);
-                Tensor tSrQ_copy_view = smem_thr_copy_Q.retile_D(tSrQ);
-                Tensor tSsQ_copy_view = smem_thr_copy_Q.partition_S(cute::as_position_independent_swizzle_tensor(sQ));
-                cute::copy(smem_tiled_copy_Q, tSsQ_copy_view, tSrQ_copy_view);
-            }
+            // if constexpr (MmaQK_is_RS)
+            // {
+            //     using SmemCopyAtomQ = Copy_Atom<cute::SM75_U32x4_LDSM_N, Element>;
+            //     auto smem_tiled_copy_Q = make_tiled_copy_A(SmemCopyAtomQ{}, tiled_mma_qk);
+            //     auto smem_thr_copy_Q = smem_tiled_copy_Q.get_thread_slice(thread_idx);
+            //     Tensor tSrQ_copy_view = smem_thr_copy_Q.retile_D(tSrQ);
+            //     Tensor tSsQ_copy_view = smem_thr_copy_Q.partition_S(cute::as_position_independent_swizzle_tensor(sQ));
+            //     cute::copy(smem_tiled_copy_Q, tSsQ_copy_view, tSrQ_copy_view);
+            // }
 
             // Initialize skip_reader with shared memory buffers
             DelayedSkipListReader<kStagesForSkips, NumMmaWarpGroups> skip_reader(
