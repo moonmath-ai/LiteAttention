@@ -566,9 +566,10 @@ namespace flash
                     // // DOR: kNRows = 2 * (2 * 128 / 256) = 2
                     // flash::Softmax<!LargeHeadDimV ? 2 * (2 * kBlockM / NumMmaThreads) : 2, /*Max_offset=*/!Is_8Bit ? 0 : 8> softmax(softmax_scale_log2, row_mask, local_row_idx);
                     // DOR: kNRows = 2 * (2 * 128 / 256) = 2
-                    static constexpr int kNRows = !LargeHeadDimV ? 2 * (2 * kBlockM / (ReInt8 ? (2 * NumMmaThreads) : NumMmaThreads)) : 2;
+                    // static constexpr int kNRows = !LargeHeadDimV ? 2 * (2 * kBlockM / (ReInt8 ? (2 * NumMmaThreads) : NumMmaThreads)) : 2;
+                    static constexpr int kNRows = !LargeHeadDimV ? 2 * ((2 * kBlockM) / (ReInt8 ? (2 * NumMmaThreads) : NumMmaThreads)) : 2;
                     flash::Softmax<kNRows, /*Max_offset=*/!Is_FP8 ? 0 : 8, Is_INT8> softmax(softmax_scale_log2, seqlen_info.seqlen_q, thread_idx);
-                    flash::Softmax<kNRows, /*Max_offset=*/!Is_FP8 ? 0 : 8, Is_INT8> softmax1(softmax_scale_log2, seqlen_info.seqlen_q, thread_idx + 2 * cutlass::NumThreadsPerWarp);
+                    flash::Softmax<kNRows, /*Max_offset=*/!Is_FP8 ? 0 : 8, Is_INT8> softmax1(softmax_scale_log2, seqlen_info.seqlen_q, thread_idx + 2 * cutlass::NumThreadsPerWarpGroup);
 
                     /*
                     taken from the answer here: https://youtu.be/JwUcZwPOCpA?t=3152
