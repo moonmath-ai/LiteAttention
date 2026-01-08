@@ -2968,10 +2968,10 @@ namespace flash
             softmax0.rescale_o(tOrO1, scores_scale1);
             // For INT8, V is bf16, so no v_descale needed (use Is_FP8)
             float const v_descale = !Is_FP8 || params.ptr_v_descale == nullptr ? 1.0f : params.ptr_v_descale[bidb * get<0>(params.stride_v_descale) + bidh_kv * get<1>(params.stride_v_descale)];
-            cute::copy(softmax0.finalize<0>(v_descale), scores_scale0);
+            cute::copy(softmax0.finalize(v_descale), scores_scale0);
             warpgroup_wait<0>();
             flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP1), tOrV(_, _, _, smem_pipe_read.index()), tOrO1);
-            cute::copy(softmax1.finalize<1>(v_descale), scores_scale1);
+            cute::copy(softmax1.finalize(v_descale), scores_scale1);
             warpgroup_wait<0>();
             pipeline_v.consumer_release(smem_pipe_read); // release V, otherwise producers will hang
             // softmax.rescale_o(tOrO, scores_scale);
