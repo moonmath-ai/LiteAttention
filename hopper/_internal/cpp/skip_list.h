@@ -431,6 +431,9 @@ namespace flash
         SkipListReader<ReverseSkipList, Phase> reader;
         // DelayedSkipListWriter<BufferSize / 2, ReverseSkipList, Phase, HasMustDoList> writer;  // BufferSize = DelayAmount * 2, so DelayAmount = BufferSize / 2
         MustDoListReader<!Phase> must_do_reader;  // Lives in shared memory similar to reader
+        // For INT8: simple array for storing dequantization scalars (one per pipeline stage, no alignment requirement)
+        // Only allocated when Is_INT8, but we can't use conditional here, so always allocate (small overhead for non-INT8)
+        float descale_array[BufferSize / 2]; // kStages = BufferSize / 2
     };
 
 } // namespace flash

@@ -836,6 +836,28 @@ namespace flash
             // This is used to index into the batch dimension of mK and mV
             int const bidb_kv_idx = !is_varlen_k && !params.ptr_pagetable ? bidb_kv : 0;
 
+            // For INT8: calculate softmax_scale_log2 once (depends on m_block) and define k_descale tensor
+            float softmax_scale_log2 = 0.0f;
+            // Define local constexpr to avoid device code access issues with class static member
+            static constexpr int kBlockM_local = get<0>(TileShape_MNK{});
+            Tensor mKDescale = [&]() {
+                if constexpr (Is_INT8) {
+                    // Calculate softmax_scale_log2 from Q descale (depends on m_block)
+                    int const num_m_blocks = cute::ceil_div(seqlen_info.seqlen_q, kBlockM_local);
+                    auto shape_q_descale_3d = make_shape(get<3>(params.shape_Q), get<2>(params.shape_Q), num_m_blocks);
+                    Tensor mQDescale = make_tensor(make_gmem_ptr(params.ptr_q_descale), shape_q_descale_3d, params.stride_q_descale_int8);
+                    softmax_scale_log2 = mQDescale(bidb, bidh, m_block);
+                    
+                    // Define k_descale tensor (depends on n_block, will be indexed per n_block in load_K)
+                    auto shape_k_descale_3d = make_shape(get<3>(params.shape_K), get<2>(params.shape_K), n_block_max);
+                    return make_tensor(make_gmem_ptr(params.ptr_k_descale), shape_k_descale_3d, params.stride_k_descale_int8);
+                } else {
+                    return make_tensor(make_gmem_ptr(static_cast<float const*>(nullptr)), make_shape(_1{}));
+                }
+            }();
+            
+            // For INT8: use skip_list_storage to store dequantization scalars (one per pipeline stage, no alignment requirement)
+
             // Use ElementV for V operations (bfloat16 for INT8 mode)
             using PagedKVManager_t = PagedKVManager<get<1>(TileShape_MNK{}), get<2>(TileShape_MNK{}), get<1>(TileShape_MNK_PV{}), NumProducerThreads, Element, ElementV, Transpose_V || !IntraWGOverlap /*KV_Same_Iter*/>;
             PagedKVManager_t paged_kv_manager(
@@ -908,6 +930,17 @@ namespace flash
                     }
                     skip_writer.record_n_block(n_block, is_must_do); 
                     __threadfence_block();
+                }
+                // For INT8: calculate and store dequantization scalar (k_descale * softmax_scale_log2) in shared memory
+                if constexpr (Is_INT8) {
+                    // Calculate k_descale from K descale (depends on n_block)
+                    float const k_descale = mKDescale(bidb, bidh_kv, n_block);
+                    
+                    // Store the combined scalar (already multiplied) in shared memory array
+                    // Only thread 0 needs to write this (it's a scalar per pipeline stage)
+                    if (thread_idx == 0) {
+                        shared_storage.skip_list_storage.descale_array[smem_pipe_write.index()] = k_descale * softmax_scale_log2;
+                    }
                 }
                 if constexpr (!PagedKVNonTMA)
                 {
@@ -1417,24 +1450,9 @@ namespace flash
                 softcap_val *= q_descale * k_descale;
             }
             
-            // For INT8: Create K descale tensor sliced by (bidb, bidh) for efficient n_block indexing
-            // Shape is (batch, head, n_blocks) with stride from params
-            // We slice once to get a 1D view indexed only by n_block
-            auto KDescaleSliced = [&]() {
-                if constexpr (Is_INT8) {
-                    // Use the INT8-specific stride from params
-                    // Shape: (batch, head_kv, n_block_max) - n_block_max can be any value >= actual n_blocks
-                    // TODO: pass the shape as a param?
-                    auto shape_k_descale_3d = make_shape(get<3>(params.shape_K), get<2>(params.shape_K), n_block_max);
-                    // TODO: in the future make assume mKDescale contiguous and don't specify the stride
-                    Tensor mKDescale = make_tensor(make_gmem_ptr(params.ptr_k_descale), shape_k_descale_3d, params.stride_k_descale_int8);
-                    // Slice by bidb and bidh_kv to get 1D tensor indexed by n_block
-                    return mKDescale(bidb, bidh_kv, _);
-                } else {
-                    // Placeholder for non-INT8 - won't be used
-                    return make_tensor(make_gmem_ptr(static_cast<float const*>(nullptr)), make_shape(_1{}));
-                }
-            }();
+            // For INT8: K descale tensor creation removed - now loaded from shared memory in producer
+            // The dequantization scalar (k_descale * softmax_scale_log2) is stored in skip_list_storage.descale_array
+            // and accessed via shared_storage.skip_list_storage.descale_array[smem_pipe_read.index()] in the consumer
 
             // Softcapping needs to happen before masking since if we apply after masking, softcapping
             // can turn -inf to e.g. -50.0, which can affect the attention softmax.
@@ -1551,7 +1569,8 @@ namespace flash
                 flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
                 warpgroup_wait<0>();
                 if constexpr (Is_INT8){
-                    softmax.set_dequan_s(KDescaleSliced(n_block));
+                    // Load dequantization scalar from shared memory (already multiplied by softmax_scale_log2)
+                    softmax.set_dequan_s(shared_storage.skip_list_storage.descale_array[smem_pipe_read.index()]);
                 }
                 pipeline_k.consumer_release(smem_pipe_read);
 
@@ -1663,7 +1682,8 @@ namespace flash
                     warp_scheduler_barrier_arrive();
 
                     if constexpr (Is_INT8){
-                        softmax.set_dequan_s(KDescaleSliced(new_n_block));
+                        // Load dequantization scalar from shared memory (already multiplied by softmax_scale_log2)
+                        softmax.set_dequan_s(shared_storage.skip_list_storage.descale_array[smem_pipe_read.index()]);
                     }
 
                     warpgroup_wait<1>();
@@ -1868,7 +1888,8 @@ namespace flash
                     mask_fn(tSrS_ambiguous_type, new_n_block);
 
                     if constexpr (Is_INT8){
-                        softmax.set_dequan_s(KDescaleSliced(new_n_block));
+                        // Load dequantization scalar from shared memory (already multiplied by softmax_scale_log2)
+                        softmax.set_dequan_s(shared_storage.skip_list_storage.descale_array[smem_pipe_read.index()]);
                     }
                     // Tensor scores_scale = softmax.template max_get_scale</*Is_first=*/Is_first_iter, Check_inf>(tSrS);
                     Tensor scores_scale = [&]
@@ -2580,24 +2601,10 @@ namespace flash
                 flash::get_reint8_thread_idx_second(thread_idx, warp_group_idx), seqlen_q, seqlen_k, params.window_size_left, params.window_size_right, 0 /*sink_token_length*/,
                 params.attention_chunk_divmod, params.qhead_per_khead_divmod);
 
-            // For INT8: Create K descale tensor sliced by (bidb, bidh) for efficient n_block indexing
-            // Shape is (batch, head, n_blocks) with stride from params
-            // We slice once to get a 1D view indexed only by n_block
-            auto KDescaleSliced = [&]() {
-                if constexpr (Is_INT8) {
-                    // Use the INT8-specific stride from params
-                    // Shape: (batch, head_kv, n_block_max) - n_block_max can be any value >= actual n_blocks
-                    // TODO: pass the shape as a param?
-                    auto shape_k_descale_3d = make_shape(get<3>(params.shape_K), get<2>(params.shape_K), n_block_max);
-                    // TODO: in the future make assume mKDescale contiguous and don't specify the stride
-                    Tensor mKDescale = make_tensor(make_gmem_ptr(params.ptr_k_descale), shape_k_descale_3d, params.stride_k_descale_int8);
-                    // Slice by bidb and bidh_kv to get 1D tensor indexed by n_block
-                    return mKDescale(bidb, bidh_kv, _);
-                } else {
-                    // Placeholder for non-INT8 - won't be used
-                    return make_tensor(make_gmem_ptr(static_cast<float const*>(nullptr)), make_shape(_1{}));
-                }
-            }();
+            // For INT8: K descale tensor creation removed - now loaded from shared memory in producer
+            // The dequantization scalar (k_descale * softmax_scale_log2) is stored in skip_list_storage.descale_array
+            // and accessed via shared_storage.skip_list_storage.descale_array[smem_pipe_read.index()] in the consumer
+            // Note: sDescale tensor view is created earlier in this function (around line 1378)
 
             auto write_P0_to_smem = [&](auto &tOrP0)
             {
@@ -2713,8 +2720,12 @@ namespace flash
             flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ0, tSrK0(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
             warpgroup_wait<0>();
 
-            softmax0.set_dequan_s(KDescaleSliced(n_block));
-            softmax1.set_dequan_s(KDescaleSliced(n_block));
+            if constexpr (Is_INT8) {
+                // Load dequantization scalar from shared memory (already multiplied by softmax_scale_log2)
+                float const dequan_s_val = shared_storage.skip_list_storage.descale_array[smem_pipe_read.index()];
+                softmax0.set_dequan_s(dequan_s_val);
+                softmax1.set_dequan_s(dequan_s_val);
+            }
 
             mask0.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS_ambiguous_type, m_block, n_block);
 
@@ -2826,29 +2837,19 @@ namespace flash
                     consumer_wait(pipeline_v, smem_pipe_read_v);
                 }
 
-                // softmax1.rescale_o(tOrO1, scores_scale1);
-
                 flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP0), tOrV0(_, _, _, smem_pipe_read_v.index()), tOrO0);
                 warp_scheduler_barrier_arrive();
-
-                // if constexpr (Is_INT8)
-                // {
-                //     softmax0.set_dequan_s(KDescaleSliced(new_n_block));
-                //     softmax1.dequan_s = softmax0.dequan_s;
-                // }
 
                 warpgroup_wait<1>();
 
 
                 if constexpr (Is_INT8)
                 {
-                    softmax0.set_dequan_s(KDescaleSliced(new_n_block));
-                    softmax1.set_dequan_s(KDescaleSliced(new_n_block));
+                    // Load dequantization scalar from shared memory (already multiplied by softmax_scale_log2)
+                    float const dequan_s_val = shared_storage.skip_list_storage.descale_array[smem_pipe_read.index()];
+                    softmax0.set_dequan_s(dequan_s_val);
+                    softmax1.set_dequan_s(dequan_s_val);
                 }
-
-                // pipeline_k.consumer_release(smem_pipe_read); // release K
-
-                // softmax1.rescale_o(tOrO1, scores_scale1);
 
                 //TODO: somehow make this function inner_idx aware
                 mask_fn0(tSrS_ambiguous_type, new_n_block);
