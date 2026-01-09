@@ -2706,7 +2706,7 @@ namespace flash
             warpgroup_wait<0>();
 
             softmax0.set_dequan_s(KDescaleSliced(n_block));
-            softmax1.dequan_s = softmax0.dequan_s;
+            softmax1.set_dequan_s(KDescaleSliced(n_block));
 
             mask0.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS_ambiguous_type, m_block, n_block);
 
@@ -2852,7 +2852,7 @@ namespace flash
                 if constexpr (Is_INT8)
                 {
                     softmax0.set_dequan_s(KDescaleSliced(new_n_block));
-                    softmax1.dequan_s = softmax0.dequan_s;
+                    softmax1.set_dequan_s(KDescaleSliced(new_n_block));
                 }
 
                 // pipeline_k.consumer_release(smem_pipe_read); // release K
@@ -2883,10 +2883,11 @@ namespace flash
                     write_P1_to_smem(tOrP);
                 }
 
+                softmax0.rescale_o(tOrO0, scores_scale0);
+
                 warp_scheduler_barrier_sync();
 
                 flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ1, tSrK1(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
-                softmax0.rescale_o(tOrO0, scores_scale0);
                 flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP1), tOrV1(_, _, _, smem_pipe_read_v.index()), tOrO1);
 
                 warp_scheduler_barrier_arrive();
@@ -2923,6 +2924,8 @@ namespace flash
                 {
                     write_P1_to_smem(tOrP);
                 }
+
+                softmax1.rescale_o(tOrO1, scores_scale1);
 
                 // if constexpr (!MmaPV_is_RS)
                 // {
@@ -3000,16 +3003,18 @@ namespace flash
                 consumer_wait(pipeline_v, smem_pipe_read);
             }
             flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP0), tOrV0(_, _, _, smem_pipe_read.index()), tOrO0);
-            softmax0.rescale_o(tOrO1, scores_scale1);
             // For INT8, V is bf16, so no v_descale needed (use Is_FP8)
             float const v_descale = !Is_FP8 || params.ptr_v_descale == nullptr ? 1.0f : params.ptr_v_descale[bidb * get<0>(params.stride_v_descale) + bidh_kv * get<1>(params.stride_v_descale)];
             cute::copy(softmax0.finalize(v_descale), scores_scale0);
+            // softmax0.rescale_o(tOrO0, scores_scale0);
             warpgroup_wait<0>();
             flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP1), tOrV1(_, _, _, smem_pipe_read.index()), tOrO1);
             cute::copy(softmax1.finalize(v_descale), scores_scale1);
+            softmax0.rescale_o(tOrO0, scores_scale0);
             warpgroup_wait<0>();
             pipeline_v.consumer_release(smem_pipe_read); // release V, otherwise producers will hang
             // softmax.rescale_o(tOrO, scores_scale);
+            softmax1.rescale_o(tOrO1, scores_scale1);
             ++smem_pipe_read;
 
             ++work_idx;
