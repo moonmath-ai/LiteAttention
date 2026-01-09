@@ -2792,23 +2792,6 @@ namespace flash
                 }
 
                 warp_scheduler_barrier_sync();
-                // int new_n_block;
-                // if constexpr (Is_skipable)
-                // {
-                //     // we put this after the warp_scheduler_barrier_sync so wg1 woudn't
-                //     // read the next n_block too early since it's not waiting for pipeline_k
-                //     new_n_block = skip_reader.next_n_block();
-                // }
-                // else
-                // {
-                //     new_n_block = n_block;
-                // }
-
-                // bool has_more = true;
-                // if constexpr (Is_skipable)
-                // {
-                //     has_more = skip_reader.has_more(new_n_block);
-                // }
 
                 flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ0, tSrK0(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
 
@@ -2835,7 +2818,7 @@ namespace flash
                     consumer_wait(pipeline_v, smem_pipe_read_v);
                 }
 
-                softmax1.rescale_o(tOrO1, scores_scale1);
+                // softmax1.rescale_o(tOrO1, scores_scale1);
 
                 flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP0), tOrV0(_, _, _, smem_pipe_read_v.index()), tOrO0);
                 warp_scheduler_barrier_arrive();
