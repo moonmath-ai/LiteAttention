@@ -568,8 +568,11 @@ namespace flash
                     // DOR: kNRows = 2 * (2 * 128 / 256) = 2
                     // static constexpr int kNRows = !LargeHeadDimV ? 2 * (2 * kBlockM / (ReInt8 ? (2 * NumMmaThreads) : NumMmaThreads)) : 2;
                     static constexpr int kNRows = !LargeHeadDimV ? 2 * ((2 * kBlockM) / (ReInt8 ? (2 * NumMmaThreads) : NumMmaThreads)) : 2;
-                    flash::Softmax<kNRows, /*Max_offset=*/!Is_FP8 ? 0 : 8, Is_INT8> softmax(softmax_scale_log2, seqlen_info.seqlen_q, thread_idx);
-                    flash::Softmax<kNRows, /*Max_offset=*/!Is_FP8 ? 0 : 8, Is_INT8> softmax1(softmax_scale_log2, seqlen_info.seqlen_q, thread_idx + 2 * cutlass::NumThreadsPerWarpGroup);
+                    // flash::Softmax<kNRows, /*Max_offset=*/!Is_FP8 ? 0 : 8, Is_INT8> softmax(softmax_scale_log2, seqlen_info.seqlen_q, thread_idx);
+                    flash::Softmax<kNRows, /*Max_offset=*/!Is_FP8 ? 0 : 8, Is_INT8> softmax(softmax_scale_log2, seqlen_info.seqlen_q, flash::ReInt8UseNewThreadMapping ? thread_idx + (warp_group_idx - 1) * cutlass::NumThreadsPerWarpGroup : thread_idx);
+                    // flash::Softmax<kNRows, /*Max_offset=*/!Is_FP8 ? 0 : 8, Is_INT8> softmax1(softmax_scale_log2, seqlen_info.seqlen_q, thread_idx + 2 * cutlass::NumThreadsPerWarpGroup);
+
+                    flash::Softmax<kNRows, /*Max_offset=*/!Is_FP8 ? 0 : 8, Is_INT8> softmax1(softmax_scale_log2, seqlen_info.seqlen_q, flash::ReInt8UseNewThreadMapping ? thread_idx + (warp_group_idx - 1) * cutlass::NumThreadsPerWarpGroup + cutlass::NumThreadsPerWarpGroup : thread_idx + 2 * cutlass::NumThreadsPerWarpGroup);
 
                     /*
                     taken from the answer here: https://youtu.be/JwUcZwPOCpA?t=3152

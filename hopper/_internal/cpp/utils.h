@@ -28,6 +28,11 @@ namespace flash {
 
 using namespace cute;
 
+// Control constexpr for ReInt8 thread index mapping
+// When true: wg0 handles threads 0-255, wg1 handles threads 256-511
+// When false: wg0 handles threads 0-127 and 256-383, wg1 handles threads 128-255 and 384-511
+static constexpr bool ReInt8UseNewThreadMapping = true;
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 // Helper to get the mask value for a given element type
