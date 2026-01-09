@@ -34,6 +34,52 @@ using namespace cute;
 static constexpr bool ReInt8UseNewThreadMapping = true;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
+// ReInt8 Thread Mapping Helpers using CuTe Layout concepts
+// These helpers map thread indices for ReInt8 mode to support different warp group layouts
+// The mapping follows CuTe Layout semantics: (warp_group_idx, thread_in_wg) -> global_thread_idx
+
+// Get the base thread index for ReInt8 mode
+// Uses CuTe Layout concept: maps (warp_group_idx, thread_idx_in_wg) -> global_thread_idx
+// Layout stride: NumThreadsPerWarpGroup (128)
+CUTLASS_DEVICE constexpr int get_reint8_thread_idx_base(int thread_idx, int warp_group_idx) {
+    if constexpr (flash::ReInt8UseNewThreadMapping) {
+        // New mapping: wg0 -> threads 0-255, wg1 -> threads 256-511
+        // Layout formula: warp_group_idx * stride + thread_in_wg
+        // where stride = NumThreadsPerWarpGroup
+        int thread_in_wg = thread_idx % cutlass::NumThreadsPerWarpGroup;
+        return warp_group_idx * cutlass::NumThreadsPerWarpGroup + thread_in_wg;
+    } else {
+        // Original mapping: no remapping
+        return thread_idx;
+    }
+}
+
+// Get the second thread index (for WG2) for ReInt8 mode
+// Uses CuTe Layout concept with offset for second warp group
+CUTLASS_DEVICE constexpr int get_reint8_thread_idx_second(int thread_idx, int warp_group_idx) {
+    if constexpr (flash::ReInt8UseNewThreadMapping) {
+        // New mapping: wg2 -> threads 256-511 (for wg0) or 512-767 (for wg1)
+        // Layout formula: (warp_group_idx + 1) * stride + thread_in_wg
+        int thread_in_wg = thread_idx % cutlass::NumThreadsPerWarpGroup;
+        return (warp_group_idx + 1) * cutlass::NumThreadsPerWarpGroup + thread_in_wg;
+    } else {
+        // Original mapping: wg2 is always at offset 2 * NumThreadsPerWarpGroup
+        return thread_idx + 2 * cutlass::NumThreadsPerWarpGroup;
+    }
+}
+
+// Helper to get warp group thread layout for ReInt8 mode
+// Returns a CuTe Layout that maps warp group indices to thread indices
+// This uses CuTe's Layout type system for compile-time layout specification
+template <int NumWarpGroups>
+CUTLASS_DEVICE constexpr auto make_reint8_warp_group_thread_layout() {
+    // Both modes use the same layout structure (stride-based mapping)
+    // The difference is in how warp_group_idx is computed at call sites
+    return make_layout(make_shape(Int<NumWarpGroups>{}),
+                      make_stride(Int<cutlass::NumThreadsPerWarpGroup>{}));
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
 
 // Helper to get the mask value for a given element type
 // For floating point types: -INFINITY

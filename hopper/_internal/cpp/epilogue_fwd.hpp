@@ -48,24 +48,6 @@ struct CollectiveEpilogueFwd {
     // Check if using INT8 data type
     // static constexpr bool Is_INT8 = cute::is_same_v<Element, int8_t>;
     static constexpr bool ReInt8 = (kBlockM == 256);
-    
-    // Helper function for ReInt8 thread index computation
-    // Maps thread indices so that wg0 handles threads 0-255 and wg1 handles threads 256-511
-    static CUTLASS_DEVICE constexpr int get_reint8_thread_idx_base(int thread_idx, int warp_group_idx) {
-        if constexpr (flash::ReInt8UseNewThreadMapping) {
-            return thread_idx + warp_group_idx * cutlass::NumThreadsPerWarpGroup;
-        } else {
-            return thread_idx;
-        }
-    }
-    
-    static CUTLASS_DEVICE constexpr int get_reint8_thread_idx_second(int thread_idx, int warp_group_idx) {
-        if constexpr (ReInt8 && flash::ReInt8UseNewThreadMapping) {
-            return thread_idx + warp_group_idx * cutlass::NumThreadsPerWarpGroup + cutlass::NumThreadsPerWarpGroup;
-        } else {
-            return thread_idx + 2 * cutlass::NumThreadsPerWarpGroup;
-        }
-    }
 
     using GmemTiledCopyOTMA = cute::SM90_TMA_STORE;
 
@@ -476,11 +458,11 @@ struct CollectiveEpilogueFwd {
 
         // Step 1: Write O from rmem -> smem
         int warp_group_idx = __shfl_sync(0xFFFFFFFF, thread_idx / cutlass::NumThreadsPerWarpGroup, 0);
-        int const thread_idx_wg2 = get_reint8_thread_idx_second(thread_idx, warp_group_idx);
+        int const thread_idx_wg2 = flash::get_reint8_thread_idx_second(thread_idx, warp_group_idx);
         if constexpr (Use_smem) {
             auto smem_tiled_copy_O = make_tiled_copy_C(SmemCopyAtomO{}, tiled_mma);
             // Write tOrO as if from WG0
-            auto smem_thr_copy_O = smem_tiled_copy_O.get_thread_slice(get_reint8_thread_idx_base(thread_idx, warp_group_idx));
+            auto smem_thr_copy_O = smem_tiled_copy_O.get_thread_slice(flash::get_reint8_thread_idx_base(thread_idx, warp_group_idx));
             Tensor taccOrO = smem_thr_copy_O.retile_S(tOrO_out);
             Tensor taccOsO = smem_thr_copy_O.partition_D(sO);
             cute::copy(smem_tiled_copy_O, taccOrO, taccOsO);
@@ -512,7 +494,7 @@ struct CollectiveEpilogueFwd {
         // warp_group_idx already computed above
 
         // Step 2: Write LSE from rmem -> gmem
-        auto thread_mma = tiled_mma.get_thread_slice(get_reint8_thread_idx_base(thread_idx, warp_group_idx));
+        auto thread_mma = tiled_mma.get_thread_slice(flash::get_reint8_thread_idx_base(thread_idx, warp_group_idx));
         auto thread_mma_wg2 = tiled_mma.get_thread_slice(thread_idx_wg2);
         // (MMA,MMA_M,MMA_K)
         Tensor taccOcO = thread_mma.partition_C(cute::make_identity_tensor(select<0, 1>(TileShape_MNK_PV{})));
@@ -803,10 +785,10 @@ struct CollectiveEpilogueFwd {
             Tensor mO = make_tensor(make_gmem_ptr(params.ptr_O + offset_o * get<0>(params.stride_O)), params.shape_O_packed, params.stride_O_packed)(_, _, bidh, !is_varlen ? bidb : 0, _0{});
             GmemTiledCopyO gmem_tiled_copy_O;
             int warp_group_idx = __shfl_sync(0xFFFFFFFF, thread_idx / cutlass::NumThreadsPerWarpGroup, 0);
-            int const thread_idx_wg2 = get_reint8_thread_idx_second(thread_idx, warp_group_idx);
+            int const thread_idx_wg2 = flash::get_reint8_thread_idx_second(thread_idx, warp_group_idx);
             
             // Zero WG0 position
-            auto gmem_thr_copy_O = gmem_tiled_copy_O.get_thread_slice(get_reint8_thread_idx_base(thread_idx, warp_group_idx));
+            auto gmem_thr_copy_O = gmem_tiled_copy_O.get_thread_slice(flash::get_reint8_thread_idx_base(thread_idx, warp_group_idx));
             Tensor tOcO = gmem_thr_copy_O.partition_D(cute::make_identity_tensor(select<0, 1>(TileShape_MNK_PV{})));
             if constexpr (!PackGQA) {
                 Tensor tOpO = make_tensor<bool>(make_shape(size<2>(tOcO)));

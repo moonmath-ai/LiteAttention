@@ -87,24 +87,6 @@ namespace flash
 
         static constexpr bool ReInt8 = Is_INT8 && (get<0>(TileShape_MNK{}) == 256);
         
-        // Helper function for ReInt8 thread index computation
-        // Maps thread indices so that wg0 handles threads 0-255 and wg1 handles threads 256-511
-        static CUTLASS_DEVICE constexpr int get_reint8_thread_idx_base(int thread_idx, int warp_group_idx) {
-            if constexpr (flash::ReInt8UseNewThreadMapping) {
-                return thread_idx + warp_group_idx * cutlass::NumThreadsPerWarpGroup;
-            } else {
-                return thread_idx;
-            }
-        }
-        
-        static CUTLASS_DEVICE constexpr int get_reint8_thread_idx_second(int thread_idx, int warp_group_idx) {
-            if constexpr (flash::ReInt8UseNewThreadMapping) {
-                return thread_idx + warp_group_idx * cutlass::NumThreadsPerWarpGroup + cutlass::NumThreadsPerWarpGroup;
-            } else {
-                return thread_idx + 2 * cutlass::NumThreadsPerWarpGroup;
-            }
-        }
-        
         // For INT8, V uses bfloat16 (not int8) to maintain precision
         using ElementV = std::conditional_t<Is_INT8, cute::bfloat16_t, Element>;
         using ElementAccum = ElementAccum_;
@@ -2544,21 +2526,24 @@ namespace flash
                               "Stride of the first mode must be 0 and the size of the mode must be NumThreadsPerWarpGroup");
             }
             static constexpr int MmaWarpGroups = size(TiledMmaPV{}) / cutlass::NumThreadsPerWarpGroup;
-            Layout warp_group_thread_layout = make_layout(make_shape(Int<MmaWarpGroups>{}),
-                                                          make_stride(Int<cutlass::NumThreadsPerWarpGroup>{}));
-
-            // int warp_group_idx = __shfl_sync(0xFFFFFFFF, thread_idx / cutlass::NumThreadsPerWarpGroup, 0);
+            // Use CuTe Layout for warp group thread mapping
+            Layout warp_group_thread_layout = flash::make_reint8_warp_group_thread_layout<MmaWarpGroups>();
+            
+            // Compute warp group indices for wg0 and wg1 based on mapping mode
+            int const wg_idx0 = flash::ReInt8UseNewThreadMapping ? warp_group_idx * 2 : warp_group_idx;
+            int const wg_idx1 = flash::ReInt8UseNewThreadMapping ? (warp_group_idx * 2 + 1) : (warp_group_idx + 2);
+            
             TiledMmaQK tiled_mma_qk;
             TiledMmaPV tiled_mma_pv;
             // (thread_idx, value ) -> index in some op or memory
-            auto wg_mma_qk0 = tiled_mma_qk.get_slice(warp_group_thread_layout(flash::ReInt8UseNewThreadMapping ? warp_group_idx * 2 : warp_group_idx));
-            auto wg_mma_qk1 = tiled_mma_qk.get_slice(warp_group_thread_layout(flash::ReInt8UseNewThreadMapping ? (warp_group_idx * 2 + 1) : (warp_group_idx + 2)));
-            auto wg_mma_pv0 = tiled_mma_pv.get_slice(warp_group_thread_layout(flash::ReInt8UseNewThreadMapping ? warp_group_idx * 2 : warp_group_idx));
-            auto wg_mma_pv1 = tiled_mma_pv.get_slice(warp_group_thread_layout(flash::ReInt8UseNewThreadMapping ? (warp_group_idx * 2 + 1) : (warp_group_idx + 2)));
+            auto wg_mma_qk0 = tiled_mma_qk.get_slice(warp_group_thread_layout(wg_idx0));
+            auto wg_mma_qk1 = tiled_mma_qk.get_slice(warp_group_thread_layout(wg_idx1));
+            auto wg_mma_pv0 = tiled_mma_pv.get_slice(warp_group_thread_layout(wg_idx0));
+            auto wg_mma_pv1 = tiled_mma_pv.get_slice(warp_group_thread_layout(wg_idx1));
 
             auto smem_tiled_copy_P = make_tiled_copy_C(SmemCopyAtomP{}, tiled_mma_qk);
-            auto smem_thr_copy_P0 = smem_tiled_copy_P.get_thread_slice(get_reint8_thread_idx_base(thread_idx, warp_group_idx));
-            auto smem_thr_copy_P1 = smem_tiled_copy_P.get_thread_slice(get_reint8_thread_idx_second(thread_idx, warp_group_idx));
+            auto smem_thr_copy_P0 = smem_tiled_copy_P.get_thread_slice(flash::get_reint8_thread_idx_base(thread_idx, warp_group_idx));
+            auto smem_thr_copy_P1 = smem_tiled_copy_P.get_thread_slice(flash::get_reint8_thread_idx_second(thread_idx, warp_group_idx));
 
             // Allocate "fragments/descriptors"
             Tensor tSrQ0 = wg_mma_qk0.partition_fragment_A(sQ);
@@ -2588,11 +2573,11 @@ namespace flash
             int n_block = n_block_max - 1;
 
             flash::Mask<kBlockM, kBlockN, PackGQA, TiledMmaQK> mask0(
-                get_reint8_thread_idx_base(thread_idx, warp_group_idx), seqlen_q, seqlen_k, params.window_size_left, params.window_size_right, 0 /*sink_token_length*/,
+                flash::get_reint8_thread_idx_base(thread_idx, warp_group_idx), seqlen_q, seqlen_k, params.window_size_left, params.window_size_right, 0 /*sink_token_length*/,
                 params.attention_chunk_divmod, params.qhead_per_khead_divmod);
 
             flash::Mask<kBlockM, kBlockN, PackGQA, TiledMmaQK> mask1(
-                get_reint8_thread_idx_second(thread_idx, warp_group_idx), seqlen_q, seqlen_k, params.window_size_left, params.window_size_right, 0 /*sink_token_length*/,
+                flash::get_reint8_thread_idx_second(thread_idx, warp_group_idx), seqlen_q, seqlen_k, params.window_size_left, params.window_size_right, 0 /*sink_token_length*/,
                 params.attention_chunk_divmod, params.qhead_per_khead_divmod);
 
             // For INT8: Create K descale tensor sliced by (bidb, bidh) for efficient n_block indexing
