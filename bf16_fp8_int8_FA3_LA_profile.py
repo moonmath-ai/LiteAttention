@@ -92,13 +92,21 @@ def quantize_to_fp8(tensor, fp8_dtype=torch.float8_e4m3fn):
 from lite_attention import LiteAttention
 from flash_attn_interface import flash_attn_func
 
+def randn_or_ones(is_randn, batch_size, seqlen, num_heads, headdim, device, dtype):
+    if is_randn:
+        return torch.randn(batch_size, seqlen, num_heads, headdim, device=device, dtype=dtype, requires_grad=False)
+    else:
+        return torch.ones(batch_size, seqlen, num_heads, headdim, device=device, dtype=dtype, requires_grad=False)
+
 def main():
     # Configuration
     device = 'cuda'
-    batch_size = 2
+    batch_size = 1
     # seqlen = 16384  # ~16k as requested
     seqlen = 19 + 2**14  # ~16k as requested
-    num_heads = 32  # Adjust based on your model
+    # seqlen = 2**14  # ~16k as requested
+    # num_heads = 32  # Adjust based on your model
+    num_heads = 1  # Adjust based on your model
     headdim = 128   # As requested
     causal = False  # Set to True for autoregressive (causal) attention, False for bidirectional
     
@@ -122,6 +130,10 @@ def main():
                     device=device, dtype=torch.bfloat16, requires_grad=False)
     v = torch.randn(batch_size, seqlen, num_heads, headdim, 
                     device=device, dtype=torch.bfloat16, requires_grad=False)
+    # bl = seqlen
+    # q = randn_or_ones(True, batch_size, seqlen, num_heads, headdim, device, torch.bfloat16)
+    # k = randn_or_ones(True, batch_size, bl, num_heads, headdim, device, torch.bfloat16)
+    # v = randn_or_ones(True, batch_size, bl, num_heads, headdim, device, torch.bfloat16)
     
     # Compute softmax scale
     softmax_scale = 1.0 / math.sqrt(headdim)

@@ -2546,8 +2546,8 @@ namespace flash
             Tensor tSrQ0 = wg_mma_qk0.partition_fragment_A(sQ);
             Tensor tSrQ1 = wg_mma_qk1.partition_fragment_A(sQ);
             Tensor tSrK0 = wg_mma_qk0.partition_fragment_B(sK);
-            // Tensor tSrK1 = wg_mma_qk1.partition_fragment_B(sK);
-            Tensor tSrK1 = wg_mma_qk0.partition_fragment_B(sK);
+            Tensor tSrK1 = wg_mma_qk1.partition_fragment_B(sK);
+            // Tensor tSrK1 = wg_mma_qk0.partition_fragment_B(sK);
             Tensor tOrV0 = wg_mma_pv0.partition_fragment_B(sV);
             Tensor tOrV1 = wg_mma_pv1.partition_fragment_B(sV);
             Tensor tOsP0 = wg_mma_pv0.partition_fragment_A(sP);
