@@ -44,10 +44,9 @@ static constexpr bool ReInt8UseNewThreadMapping = true;
 CUTLASS_DEVICE constexpr int get_reint8_thread_idx_base(int thread_idx, int warp_group_idx) {
     if constexpr (flash::ReInt8UseNewThreadMapping) {
         // New mapping: wg0 -> threads 0-255, wg1 -> threads 256-511
-        // Layout formula: warp_group_idx * stride + thread_in_wg
-        // where stride = NumThreadsPerWarpGroup
-        int thread_in_wg = thread_idx % cutlass::NumThreadsPerWarpGroup;
-        return warp_group_idx * cutlass::NumThreadsPerWarpGroup + thread_in_wg;
+        // Original formula: thread_idx + (warp_group_idx - 1) * NumThreadsPerWarpGroup
+        // int thread_in_wg = thread_idx % cutlass::NumThreadsPerWarpGroup;
+        return thread_idx + warp_group_idx * cutlass::NumThreadsPerWarpGroup;
     } else {
         // Original mapping: no remapping
         return thread_idx;
@@ -59,9 +58,9 @@ CUTLASS_DEVICE constexpr int get_reint8_thread_idx_base(int thread_idx, int warp
 CUTLASS_DEVICE constexpr int get_reint8_thread_idx_second(int thread_idx, int warp_group_idx) {
     if constexpr (flash::ReInt8UseNewThreadMapping) {
         // New mapping: wg2 -> threads 256-511 (for wg0) or 512-767 (for wg1)
-        // Layout formula: (warp_group_idx + 1) * stride + thread_in_wg
-        int thread_in_wg = thread_idx % cutlass::NumThreadsPerWarpGroup;
-        return (warp_group_idx + 1) * cutlass::NumThreadsPerWarpGroup + thread_in_wg;
+        // Original formula: thread_idx + (warp_group_idx - 1) * NumThreadsPerWarpGroup + NumThreadsPerWarpGroup
+        // int thread_in_wg = thread_idx % cutlass::NumThreadsPerWarpGroup;
+        return thread_idx + (warp_group_idx + 1) * cutlass::NumThreadsPerWarpGroup;
     } else {
         // Original mapping: wg2 is always at offset 2 * NumThreadsPerWarpGroup
         return thread_idx + 2 * cutlass::NumThreadsPerWarpGroup;
