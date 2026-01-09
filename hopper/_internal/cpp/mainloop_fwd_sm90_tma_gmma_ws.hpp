@@ -2546,7 +2546,8 @@ namespace flash
             Tensor tSrQ0 = wg_mma_qk0.partition_fragment_A(sQ);
             Tensor tSrQ1 = wg_mma_qk1.partition_fragment_A(sQ);
             Tensor tSrK0 = wg_mma_qk0.partition_fragment_B(sK);
-            Tensor tSrK1 = wg_mma_qk1.partition_fragment_B(sK);
+            // Tensor tSrK1 = wg_mma_qk1.partition_fragment_B(sK);
+            Tensor tSrK1 = wg_mma_qk0.partition_fragment_B(sK);
             Tensor tOrV0 = wg_mma_pv0.partition_fragment_B(sV);
             Tensor tOrV1 = wg_mma_pv1.partition_fragment_B(sV);
             Tensor tOsP0 = wg_mma_pv0.partition_fragment_A(sP);
@@ -2863,10 +2864,15 @@ namespace flash
                 if constexpr (!MmaPV_is_RS)
                 {
                     // TODO: maybe allocate a bit more space for P3 and remove the warpgroup_wait<0>(); and push pipeline_v.consumer_release(smem_pipe_read_v); // release V
-                    write_P1_to_smem(tOrP);
+                    write_P0_to_smem(tOrP);
                 }
 
                 softmax0.rescale_o(tOrO0, scores_scale0);
+
+                if constexpr (!MmaPV_is_RS)
+                {
+                    arrive_on_P_write_barrier();
+                }
 
                 warp_scheduler_barrier_sync();
 
@@ -2910,10 +2916,10 @@ namespace flash
 
                 softmax1.rescale_o(tOrO1, scores_scale1);
 
-                // if constexpr (!MmaPV_is_RS)
-                // {
-                //     arrive_on_P_write_barrier();
-                // }
+                if constexpr (!MmaPV_is_RS)
+                {
+                    arrive_on_P_write_barrier();
+                }
 
                 return has_more;
             };
