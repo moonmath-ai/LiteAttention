@@ -44,10 +44,6 @@ struct CollectiveEpilogueFwd {
     static constexpr int kHeadDimV = get<1>(TileShape_MNK_PV{});
 
     static constexpr bool LargeHeadDimV = kHeadDimV > 256;
-    
-    // Check if using INT8 data type
-    // static constexpr bool Is_INT8 = cute::is_same_v<Element, int8_t>;
-    static constexpr bool ReInt8 = (kBlockM == 256);
 
     using GmemTiledCopyOTMA = cute::SM90_TMA_STORE;
 
