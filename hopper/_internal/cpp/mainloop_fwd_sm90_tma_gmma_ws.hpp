@@ -2475,7 +2475,8 @@ namespace flash
 
         template <typename SharedStorage, typename FrgTensorO, typename Softmax>
         CUTLASS_DEVICE bool
-        mma_reint8_IntraWGOverlap(Params const &params,
+        // mma_reint8_IntraWGOverlap(Params const &params,
+        mma_reint8(Params const &params,
             MainloopPipelineK pipeline_k,
             MainloopPipelineV pipeline_v,
             PipelineState &smem_pipe_read,
@@ -3019,433 +3020,433 @@ namespace flash
             return true;
         }
 
-        template <typename SharedStorage, typename FrgTensorO, typename Softmax>
-        CUTLASS_DEVICE bool
-        mma_reint8(Params const &params,
-            MainloopPipelineK pipeline_k,
-            MainloopPipelineV pipeline_v,
-            PipelineState &smem_pipe_read,
-            FrgTensorO &tOrO0,
-            FrgTensorO &tOrO1,
-            Softmax &softmax0,
-            Softmax &softmax1,
-            int const thread_idx,
-            int &work_idx,
-            SeqlenInfo_t const &seqlen_info,
-            cute::tuple<int32_t, int32_t, int32_t, int32_t> block_coord,
-            SharedStorage &shared_storage)
-        {
-            int const warp_group_idx = __shfl_sync(0xFFFFFFFF, thread_idx / cutlass::NumThreadsPerWarpGroup, 0);
-            static_assert(is_rmem<FrgTensorO>::value, "O tensor must be rmem resident.");
-            // can't use auto [m_block, ...] = block_coord since structured binding cannot be captured in lambda
-            int const m_block = get<0>(block_coord); // the index of the Q block we are currently processing
-            int const bidh = get<1>(block_coord);    // the index of the head we are currently processing
-            int const bidb = get<2>(block_coord);    // batch index
-            int const split_idx = get<3>(block_coord);
-            int const bidh_kv = !PackGQA ? params.qhead_per_khead_divmod.divide(bidh) : bidh;
-            auto [n_block_min, n_block_max] = BlockMN_t::get_n_block_min_max(
-                seqlen_info, m_block, bidb, split_idx, params.num_splits,
-                params.window_size_left, params.window_size_right, params.attention_chunk_divmod,
-                params.qhead_per_khead_divmod);
-            // It's possible to have n_block_max <= n_block_min. We don't want to load Q or change any barrier
-            if constexpr (Is_causal || Is_local || Varlen || Split)
-            {
-                if (n_block_max <= n_block_min)
-                {
-                    return false;
-                }
-            }
+        // template <typename SharedStorage, typename FrgTensorO, typename Softmax>
+        // CUTLASS_DEVICE bool
+        // mma_reint8(Params const &params,
+        //     MainloopPipelineK pipeline_k,
+        //     MainloopPipelineV pipeline_v,
+        //     PipelineState &smem_pipe_read,
+        //     FrgTensorO &tOrO0,
+        //     FrgTensorO &tOrO1,
+        //     Softmax &softmax0,
+        //     Softmax &softmax1,
+        //     int const thread_idx,
+        //     int &work_idx,
+        //     SeqlenInfo_t const &seqlen_info,
+        //     cute::tuple<int32_t, int32_t, int32_t, int32_t> block_coord,
+        //     SharedStorage &shared_storage)
+        // {
+        //     int const warp_group_idx = __shfl_sync(0xFFFFFFFF, thread_idx / cutlass::NumThreadsPerWarpGroup, 0);
+        //     static_assert(is_rmem<FrgTensorO>::value, "O tensor must be rmem resident.");
+        //     // can't use auto [m_block, ...] = block_coord since structured binding cannot be captured in lambda
+        //     int const m_block = get<0>(block_coord); // the index of the Q block we are currently processing
+        //     int const bidh = get<1>(block_coord);    // the index of the head we are currently processing
+        //     int const bidb = get<2>(block_coord);    // batch index
+        //     int const split_idx = get<3>(block_coord);
+        //     int const bidh_kv = !PackGQA ? params.qhead_per_khead_divmod.divide(bidh) : bidh;
+        //     auto [n_block_min, n_block_max] = BlockMN_t::get_n_block_min_max(
+        //         seqlen_info, m_block, bidb, split_idx, params.num_splits,
+        //         params.window_size_left, params.window_size_right, params.attention_chunk_divmod,
+        //         params.qhead_per_khead_divmod);
+        //     // It's possible to have n_block_max <= n_block_min. We don't want to load Q or change any barrier
+        //     if constexpr (Is_causal || Is_local || Varlen || Split)
+        //     {
+        //         if (n_block_max <= n_block_min)
+        //         {
+        //             return false;
+        //         }
+        //     }
 
-            Tensor sQ = make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_q.data()), SmemLayoutQ{});     // (kBlockM, kHeadSize)
-            Tensor sK = make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_k.data()), SmemLayoutK{});     // (kBlockN, kHeadSize, kStages)
-            Tensor sV = make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_v.data()), SmemLayoutVtMma{}); // (kHeadSize, kBlockN, kStages)
-            Tensor sP = [&]
-            {
-                if constexpr (MmaPV_is_RS)
-                {
-                    // We might not have smem_p if !MmaPV_is_RS, just use smem_q as a placeholder since we don't use it
-                    // Cast to ElementV* since SmemLayoutP expects ElementV type (this placeholder is never actually used)
-                    return make_tensor(make_smem_ptr(reinterpret_cast<ElementV*>(shared_storage.tensors.mainloop.smem_q.data())), SmemLayoutP{});
-                }
-                else
-                {
-                    return make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_p.data()), SmemLayoutP{});
-                }
-            }();
-            Tensor sScale = [&]
-            {
-                if constexpr (LargeHeadDimV)
-                {
-                    return make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_scale.data()), SmemLayoutScale{});
-                }
-                else
-                { // won't be used, just a placeholder
-                    return make_tensor(make_smem_ptr(static_cast<float *>(nullptr)), SmemLayoutScale{});
-                }
-            }();
+        //     Tensor sQ = make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_q.data()), SmemLayoutQ{});     // (kBlockM, kHeadSize)
+        //     Tensor sK = make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_k.data()), SmemLayoutK{});     // (kBlockN, kHeadSize, kStages)
+        //     Tensor sV = make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_v.data()), SmemLayoutVtMma{}); // (kHeadSize, kBlockN, kStages)
+        //     Tensor sP = [&]
+        //     {
+        //         if constexpr (MmaPV_is_RS)
+        //         {
+        //             // We might not have smem_p if !MmaPV_is_RS, just use smem_q as a placeholder since we don't use it
+        //             // Cast to ElementV* since SmemLayoutP expects ElementV type (this placeholder is never actually used)
+        //             return make_tensor(make_smem_ptr(reinterpret_cast<ElementV*>(shared_storage.tensors.mainloop.smem_q.data())), SmemLayoutP{});
+        //         }
+        //         else
+        //         {
+        //             return make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_p.data()), SmemLayoutP{});
+        //         }
+        //     }();
+        //     Tensor sScale = [&]
+        //     {
+        //         if constexpr (LargeHeadDimV)
+        //         {
+        //             return make_tensor(make_smem_ptr(shared_storage.tensors.mainloop.smem_scale.data()), SmemLayoutScale{});
+        //         }
+        //         else
+        //         { // won't be used, just a placeholder
+        //             return make_tensor(make_smem_ptr(static_cast<float *>(nullptr)), SmemLayoutScale{});
+        //         }
+        //     }();
 
-            if constexpr (!MmaQK_is_RS)
-            {
-                static_assert(stride<0>(typename TiledMmaQK::ALayout{}) == 0 and
-                                  stride<0>(typename TiledMmaQK::BLayout{}) == 0 and
-                                  size<0>(typename TiledMmaQK::ALayout{}) == cutlass::NumThreadsPerWarpGroup and
-                                  size<0>(typename TiledMmaQK::BLayout{}) == cutlass::NumThreadsPerWarpGroup,
-                              "Stride of the first mode must be 0 and the size of the mode must be NumThreadsPerWarpGroup");
-            }
-            static constexpr int MmaWarpGroups = size(TiledMmaPV{}) / cutlass::NumThreadsPerWarpGroup;
-            // Use CuTe Layout for warp group thread mapping
-            Layout warp_group_thread_layout = flash::make_reint8_warp_group_thread_layout<MmaWarpGroups>();
+        //     if constexpr (!MmaQK_is_RS)
+        //     {
+        //         static_assert(stride<0>(typename TiledMmaQK::ALayout{}) == 0 and
+        //                           stride<0>(typename TiledMmaQK::BLayout{}) == 0 and
+        //                           size<0>(typename TiledMmaQK::ALayout{}) == cutlass::NumThreadsPerWarpGroup and
+        //                           size<0>(typename TiledMmaQK::BLayout{}) == cutlass::NumThreadsPerWarpGroup,
+        //                       "Stride of the first mode must be 0 and the size of the mode must be NumThreadsPerWarpGroup");
+        //     }
+        //     static constexpr int MmaWarpGroups = size(TiledMmaPV{}) / cutlass::NumThreadsPerWarpGroup;
+        //     // Use CuTe Layout for warp group thread mapping
+        //     Layout warp_group_thread_layout = flash::make_reint8_warp_group_thread_layout<MmaWarpGroups>();
             
-            // Compute warp group indices for wg0 and wg1 based on mapping mode
-            int const wg_idx0 = flash::ReInt8UseNewThreadMapping ? warp_group_idx * 2 : warp_group_idx;
-            int const wg_idx1 = flash::ReInt8UseNewThreadMapping ? (warp_group_idx * 2 + 1) : (warp_group_idx + 2);
+        //     // Compute warp group indices for wg0 and wg1 based on mapping mode
+        //     int const wg_idx0 = flash::ReInt8UseNewThreadMapping ? warp_group_idx * 2 : warp_group_idx;
+        //     int const wg_idx1 = flash::ReInt8UseNewThreadMapping ? (warp_group_idx * 2 + 1) : (warp_group_idx + 2);
             
-            TiledMmaQK tiled_mma_qk;
-            TiledMmaPV tiled_mma_pv;
-            // (thread_idx, value ) -> index in some op or memory
-            auto wg_mma_qk0 = tiled_mma_qk.get_slice(warp_group_thread_layout(wg_idx0));
-            auto wg_mma_qk1 = tiled_mma_qk.get_slice(warp_group_thread_layout(wg_idx1));
-            auto wg_mma_pv0 = tiled_mma_pv.get_slice(warp_group_thread_layout(wg_idx0));
-            auto wg_mma_pv1 = tiled_mma_pv.get_slice(warp_group_thread_layout(wg_idx1));
+        //     TiledMmaQK tiled_mma_qk;
+        //     TiledMmaPV tiled_mma_pv;
+        //     // (thread_idx, value ) -> index in some op or memory
+        //     auto wg_mma_qk0 = tiled_mma_qk.get_slice(warp_group_thread_layout(wg_idx0));
+        //     auto wg_mma_qk1 = tiled_mma_qk.get_slice(warp_group_thread_layout(wg_idx1));
+        //     auto wg_mma_pv0 = tiled_mma_pv.get_slice(warp_group_thread_layout(wg_idx0));
+        //     auto wg_mma_pv1 = tiled_mma_pv.get_slice(warp_group_thread_layout(wg_idx1));
 
-            auto smem_tiled_copy_P = make_tiled_copy_C(SmemCopyAtomP{}, tiled_mma_qk);
-            auto smem_thr_copy_P0 = smem_tiled_copy_P.get_thread_slice(flash::get_reint8_thread_idx_base(thread_idx, warp_group_idx));
-            auto smem_thr_copy_P1 = smem_tiled_copy_P.get_thread_slice(flash::get_reint8_thread_idx_second(thread_idx, warp_group_idx));
+        //     auto smem_tiled_copy_P = make_tiled_copy_C(SmemCopyAtomP{}, tiled_mma_qk);
+        //     auto smem_thr_copy_P0 = smem_tiled_copy_P.get_thread_slice(flash::get_reint8_thread_idx_base(thread_idx, warp_group_idx));
+        //     auto smem_thr_copy_P1 = smem_tiled_copy_P.get_thread_slice(flash::get_reint8_thread_idx_second(thread_idx, warp_group_idx));
 
-            // Allocate "fragments/descriptors"
-            Tensor tSrQ0 = wg_mma_qk0.partition_fragment_A(sQ);
-            Tensor tSrQ1 = wg_mma_qk1.partition_fragment_A(sQ);
+        //     // Allocate "fragments/descriptors"
+        //     Tensor tSrQ0 = wg_mma_qk0.partition_fragment_A(sQ);
+        //     Tensor tSrQ1 = wg_mma_qk1.partition_fragment_A(sQ);
 
-            Tensor tSrK0 = wg_mma_qk0.partition_fragment_B(sK);
-            // Tensor tSrK1 = tSrK0;
-            Tensor tSrK1 = wg_mma_qk1.partition_fragment_B(sK);
+        //     Tensor tSrK0 = wg_mma_qk0.partition_fragment_B(sK);
+        //     // Tensor tSrK1 = tSrK0;
+        //     Tensor tSrK1 = wg_mma_qk1.partition_fragment_B(sK);
 
-            Tensor tOrV0 = wg_mma_pv0.partition_fragment_B(sV);
-            // Tensor tOrV1 = tOrV0;
-            Tensor tOrV1 = wg_mma_pv1.partition_fragment_B(sV);
+        //     Tensor tOrV0 = wg_mma_pv0.partition_fragment_B(sV);
+        //     // Tensor tOrV1 = tOrV0;
+        //     Tensor tOrV1 = wg_mma_pv1.partition_fragment_B(sV);
 
-            Tensor tOsP0 = wg_mma_pv0.partition_fragment_A(sP);
-            Tensor tOsP1 = wg_mma_pv1.partition_fragment_A(sP);
-            Tensor tPsP0 = smem_thr_copy_P0.partition_D(cute::as_position_independent_swizzle_tensor(sP));
-            Tensor tPsP1 = smem_thr_copy_P1.partition_D(cute::as_position_independent_swizzle_tensor(sP));
+        //     Tensor tOsP0 = wg_mma_pv0.partition_fragment_A(sP);
+        //     Tensor tOsP1 = wg_mma_pv1.partition_fragment_A(sP);
+        //     Tensor tPsP0 = smem_thr_copy_P0.partition_D(cute::as_position_independent_swizzle_tensor(sP));
+        //     Tensor tPsP1 = smem_thr_copy_P1.partition_D(cute::as_position_independent_swizzle_tensor(sP));
 
-            auto consumer_wait = [](auto &pipeline, auto &smem_pipe_read)
-            {
-                auto barrier_token = pipeline.consumer_try_wait(smem_pipe_read);
-                pipeline.consumer_wait(smem_pipe_read, barrier_token);
-            };
+        //     auto consumer_wait = [](auto &pipeline, auto &smem_pipe_read)
+        //     {
+        //         auto barrier_token = pipeline.consumer_try_wait(smem_pipe_read);
+        //         pipeline.consumer_wait(smem_pipe_read, barrier_token);
+        //     };
 
-            int const seqlen_q = seqlen_info.seqlen_q;
-            int const seqlen_k = seqlen_info.seqlen_k;
-            int n_block = n_block_max - 1;
+        //     int const seqlen_q = seqlen_info.seqlen_q;
+        //     int const seqlen_k = seqlen_info.seqlen_k;
+        //     int n_block = n_block_max - 1;
 
-            flash::Mask<kBlockM, kBlockN, PackGQA, TiledMmaQK> mask0(
-                flash::get_reint8_thread_idx_base(thread_idx, warp_group_idx), seqlen_q, seqlen_k, params.window_size_left, params.window_size_right, 0 /*sink_token_length*/,
-                params.attention_chunk_divmod, params.qhead_per_khead_divmod);
+        //     flash::Mask<kBlockM, kBlockN, PackGQA, TiledMmaQK> mask0(
+        //         flash::get_reint8_thread_idx_base(thread_idx, warp_group_idx), seqlen_q, seqlen_k, params.window_size_left, params.window_size_right, 0 /*sink_token_length*/,
+        //         params.attention_chunk_divmod, params.qhead_per_khead_divmod);
 
-            flash::Mask<kBlockM, kBlockN, PackGQA, TiledMmaQK> mask1(
-                flash::get_reint8_thread_idx_second(thread_idx, warp_group_idx), seqlen_q, seqlen_k, params.window_size_left, params.window_size_right, 0 /*sink_token_length*/,
-                params.attention_chunk_divmod, params.qhead_per_khead_divmod);
+        //     flash::Mask<kBlockM, kBlockN, PackGQA, TiledMmaQK> mask1(
+        //         flash::get_reint8_thread_idx_second(thread_idx, warp_group_idx), seqlen_q, seqlen_k, params.window_size_left, params.window_size_right, 0 /*sink_token_length*/,
+        //         params.attention_chunk_divmod, params.qhead_per_khead_divmod);
 
-            // For INT8: K descale tensor creation removed - now loaded from shared memory in producer
-            // The dequantization scalar (k_descale * softmax_scale_log2) is stored in skip_list_storage.descale_array
-            // and accessed via shared_storage.skip_list_storage.descale_array[smem_pipe_read.index()] in the consumer
-            // Note: sDescale tensor view is created earlier in this function (around line 1378)
+        //     // For INT8: K descale tensor creation removed - now loaded from shared memory in producer
+        //     // The dequantization scalar (k_descale * softmax_scale_log2) is stored in skip_list_storage.descale_array
+        //     // and accessed via shared_storage.skip_list_storage.descale_array[smem_pipe_read.index()] in the consumer
+        //     // Note: sDescale tensor view is created earlier in this function (around line 1378)
 
-            auto write_P0_to_smem = [&](auto &tOrP0)
-            {
-                if constexpr (LargeHeadDimV)
-                {
-                    cutlass::arch::NamedBarrier::sync(NumMmaThreads, static_cast<uint32_t>(FwdNamedBarriers::PEmpty) /*id*/);
-                }
-                cute::copy(smem_tiled_copy_P, smem_thr_copy_P0.retile_S(tOrP0), tPsP0);
-            };
+        //     auto write_P0_to_smem = [&](auto &tOrP0)
+        //     {
+        //         if constexpr (LargeHeadDimV)
+        //         {
+        //             cutlass::arch::NamedBarrier::sync(NumMmaThreads, static_cast<uint32_t>(FwdNamedBarriers::PEmpty) /*id*/);
+        //         }
+        //         cute::copy(smem_tiled_copy_P, smem_thr_copy_P0.retile_S(tOrP0), tPsP0);
+        //     };
 
-            auto write_P1_to_smem = [&](auto &tOrP1)
-            {
-                if constexpr (LargeHeadDimV)
-                {
-                    cutlass::arch::NamedBarrier::sync(NumMmaThreads, static_cast<uint32_t>(FwdNamedBarriers::PEmpty) /*id*/);
-                }
-                cute::copy(smem_tiled_copy_P, smem_thr_copy_P1.retile_S(tOrP1), tPsP1);
-            };
+        //     auto write_P1_to_smem = [&](auto &tOrP1)
+        //     {
+        //         if constexpr (LargeHeadDimV)
+        //         {
+        //             cutlass::arch::NamedBarrier::sync(NumMmaThreads, static_cast<uint32_t>(FwdNamedBarriers::PEmpty) /*id*/);
+        //         }
+        //         cute::copy(smem_tiled_copy_P, smem_thr_copy_P1.retile_S(tOrP1), tPsP1);
+        //     };
 
-            auto arrive_on_P_write_barrier = [&]
-            {
-                cutlass::arch::fence_view_async_shared();
-                __syncwarp(); // Only need syncwarp since each warp is using its own P values for MmaPV
-                if constexpr (LargeHeadDimV)
-                {
-                    cutlass::arch::NamedBarrier::arrive(NumMmaThreads, static_cast<uint32_t>(FwdNamedBarriers::PFull) /*id*/);
-                }
-            };
+        //     auto arrive_on_P_write_barrier = [&]
+        //     {
+        //         cutlass::arch::fence_view_async_shared();
+        //         __syncwarp(); // Only need syncwarp since each warp is using its own P values for MmaPV
+        //         if constexpr (LargeHeadDimV)
+        //         {
+        //             cutlass::arch::NamedBarrier::arrive(NumMmaThreads, static_cast<uint32_t>(FwdNamedBarriers::PFull) /*id*/);
+        //         }
+        //     };
 
-            auto &barrier_Q = shared_storage.pipelines.barrier_Q;
-            if constexpr (!AppendKV)
-            {
-                barrier_Q.wait(work_idx % 2);
-            }
-            else
-            {
-                if (get<1>(params.shape_rotary) > 0)
-                { // Apply rotary to Q
-                    using Rotary_t = Rotary<kBlockM, kHeadDim, NumMmaThreadsQK, Element, !(Is_causal || Is_local) /*FixedPosition*/>;
-                    Rotary_t rotary(params.ptr_rotary_cos, params.shape_rotary, params.stride_rotary_cos,
-                                    params.ptr_rotary_sin, params.stride_rotary_sin,
-                                    params.is_rotary_interleaved, thread_idx, seqlen_q,
-                                    seqlen_info.seqlen_rotary);
-                    Tensor sQ_pi = cute::as_position_independent_swizzle_tensor(sQ);
-                    int const qhead_per_khead = !PackGQA ? 1 : params.qhead_per_khead_divmod.divisor;
-                    if (params.is_rotary_interleaved)
-                    {
-                        auto [tRrCos, tRrSin] = cute::conditional_return<!PackGQA>(
-                            rotary.template load_cos_sin<true /*kInterleaved*/>(m_block),
-                            rotary.template load_cos_sin_packgqa<true /*kInterleaved*/>(m_block, params.qhead_per_khead_divmod));
-                        barrier_Q.wait(work_idx % 2);
-                        rotary.apply_Q_interleaved(sQ_pi, tRrCos, tRrSin, m_block, qhead_per_khead);
-                    }
-                    else
-                    {
-                        auto [tRrCosCont, tRrSinCont] = cute::conditional_return<!PackGQA>(
-                            rotary.template load_cos_sin<false /*kInterleaved*/>(m_block),
-                            rotary.template load_cos_sin_packgqa<false /*kInterleaved*/>(m_block, params.qhead_per_khead_divmod));
-                        barrier_Q.wait(work_idx % 2);
-                        rotary.apply_Q_contiguous(sQ_pi, tRrCosCont, tRrSinCont, m_block, qhead_per_khead);
-                    }
-                    // SMEM fence to make sure the rotated Q is visible to GMMA
-                    cutlass::arch::fence_view_async_shared();
-                    cutlass::arch::NamedBarrier::sync(NumMmaThreadsQK, static_cast<uint32_t>(FwdNamedBarriers::QueryRotated) /*id*/);
-                }
-                else
-                {
-                    barrier_Q.wait(work_idx % 2);
-                }
-            }
+        //     auto &barrier_Q = shared_storage.pipelines.barrier_Q;
+        //     if constexpr (!AppendKV)
+        //     {
+        //         barrier_Q.wait(work_idx % 2);
+        //     }
+        //     else
+        //     {
+        //         if (get<1>(params.shape_rotary) > 0)
+        //         { // Apply rotary to Q
+        //             using Rotary_t = Rotary<kBlockM, kHeadDim, NumMmaThreadsQK, Element, !(Is_causal || Is_local) /*FixedPosition*/>;
+        //             Rotary_t rotary(params.ptr_rotary_cos, params.shape_rotary, params.stride_rotary_cos,
+        //                             params.ptr_rotary_sin, params.stride_rotary_sin,
+        //                             params.is_rotary_interleaved, thread_idx, seqlen_q,
+        //                             seqlen_info.seqlen_rotary);
+        //             Tensor sQ_pi = cute::as_position_independent_swizzle_tensor(sQ);
+        //             int const qhead_per_khead = !PackGQA ? 1 : params.qhead_per_khead_divmod.divisor;
+        //             if (params.is_rotary_interleaved)
+        //             {
+        //                 auto [tRrCos, tRrSin] = cute::conditional_return<!PackGQA>(
+        //                     rotary.template load_cos_sin<true /*kInterleaved*/>(m_block),
+        //                     rotary.template load_cos_sin_packgqa<true /*kInterleaved*/>(m_block, params.qhead_per_khead_divmod));
+        //                 barrier_Q.wait(work_idx % 2);
+        //                 rotary.apply_Q_interleaved(sQ_pi, tRrCos, tRrSin, m_block, qhead_per_khead);
+        //             }
+        //             else
+        //             {
+        //                 auto [tRrCosCont, tRrSinCont] = cute::conditional_return<!PackGQA>(
+        //                     rotary.template load_cos_sin<false /*kInterleaved*/>(m_block),
+        //                     rotary.template load_cos_sin_packgqa<false /*kInterleaved*/>(m_block, params.qhead_per_khead_divmod));
+        //                 barrier_Q.wait(work_idx % 2);
+        //                 rotary.apply_Q_contiguous(sQ_pi, tRrCosCont, tRrSinCont, m_block, qhead_per_khead);
+        //             }
+        //             // SMEM fence to make sure the rotated Q is visible to GMMA
+        //             cutlass::arch::fence_view_async_shared();
+        //             cutlass::arch::NamedBarrier::sync(NumMmaThreadsQK, static_cast<uint32_t>(FwdNamedBarriers::QueryRotated) /*id*/);
+        //         }
+        //         else
+        //         {
+        //             barrier_Q.wait(work_idx % 2);
+        //         }
+        //     }
 
-            // if constexpr (MmaQK_is_RS)
-            // {
-            //     using SmemCopyAtomQ = Copy_Atom<cute::SM75_U32x4_LDSM_N, Element>;
-            //     auto smem_tiled_copy_Q = make_tiled_copy_A(SmemCopyAtomQ{}, tiled_mma_qk);
-            //     auto smem_thr_copy_Q = smem_tiled_copy_Q.get_thread_slice(thread_idx);
-            //     Tensor tSrQ_copy_view = smem_thr_copy_Q.retile_D(tSrQ);
-            //     Tensor tSsQ_copy_view = smem_thr_copy_Q.partition_S(cute::as_position_independent_swizzle_tensor(sQ));
-            //     cute::copy(smem_tiled_copy_Q, tSsQ_copy_view, tSrQ_copy_view);
-            // }
+        //     // if constexpr (MmaQK_is_RS)
+        //     // {
+        //     //     using SmemCopyAtomQ = Copy_Atom<cute::SM75_U32x4_LDSM_N, Element>;
+        //     //     auto smem_tiled_copy_Q = make_tiled_copy_A(SmemCopyAtomQ{}, tiled_mma_qk);
+        //     //     auto smem_thr_copy_Q = smem_tiled_copy_Q.get_thread_slice(thread_idx);
+        //     //     Tensor tSrQ_copy_view = smem_thr_copy_Q.retile_D(tSrQ);
+        //     //     Tensor tSsQ_copy_view = smem_thr_copy_Q.partition_S(cute::as_position_independent_swizzle_tensor(sQ));
+        //     //     cute::copy(smem_tiled_copy_Q, tSsQ_copy_view, tSrQ_copy_view);
+        //     // }
 
-            // Initialize skip_reader with shared memory buffers
-            DelayedSkipListReader<kStagesForSkips, NumMmaWarpGroups> skip_reader(
-                shared_storage.skip_list_storage.n_blocks_buffer,
-                shared_storage.skip_list_storage.skip_tests,
-                shared_storage.skip_list_storage.last_n_block
-            );
+        //     // Initialize skip_reader with shared memory buffers
+        //     DelayedSkipListReader<kStagesForSkips, NumMmaWarpGroups> skip_reader(
+        //         shared_storage.skip_list_storage.n_blocks_buffer,
+        //         shared_storage.skip_list_storage.skip_tests,
+        //         shared_storage.skip_list_storage.last_n_block
+        //     );
 
-            // Helper to convert QK accumulator to ElementAccum (only needed when tSrS is int32_t in INT8 mode)
-            // In INT8 mode: converts int32 to float and multiplies by dequan_s to dequantize
-            // auto convert_qk_accum_to_float = [&](auto& tSrS_ambiguous_type, float dequan_s) {
-            auto convert_qk_accum_to_float = [&](auto& tSrS_ambiguous_type) {
-                if constexpr (Is_INT8) {
-                    // // Tensor tSrS_converted = make_tensor_like<ElementAccum>(tSrS_ambiguous_type);
-                    // Reinterpret the same tensor with ElementAccum type (static cast)
-                    return recast<ElementAccum>(tSrS_ambiguous_type);
-                    // // Convert int32 to float and multiply by dequantization scale
-                    // // Uses automatic type promotion: int32 * float -> float
-                    // flash::convert_int32_to_float_scaled(tSrS_ambiguous_type, tSrS_converted, dequan_s);
-                    // return tSrS_converted;
-                } else {
-                    return tSrS_ambiguous_type;
-                }
-            };
+        //     // Helper to convert QK accumulator to ElementAccum (only needed when tSrS is int32_t in INT8 mode)
+        //     // In INT8 mode: converts int32 to float and multiplies by dequan_s to dequantize
+        //     // auto convert_qk_accum_to_float = [&](auto& tSrS_ambiguous_type, float dequan_s) {
+        //     auto convert_qk_accum_to_float = [&](auto& tSrS_ambiguous_type) {
+        //         if constexpr (Is_INT8) {
+        //             // // Tensor tSrS_converted = make_tensor_like<ElementAccum>(tSrS_ambiguous_type);
+        //             // Reinterpret the same tensor with ElementAccum type (static cast)
+        //             return recast<ElementAccum>(tSrS_ambiguous_type);
+        //             // // Convert int32 to float and multiply by dequantization scale
+        //             // // Uses automatic type promotion: int32 * float -> float
+        //             // flash::convert_int32_to_float_scaled(tSrS_ambiguous_type, tSrS_converted, dequan_s);
+        //             // return tSrS_converted;
+        //         } else {
+        //             return tSrS_ambiguous_type;
+        //         }
+        //     };
 
-            // ~~~~~~~~~~~~ start of ReInt8 specific code ~~~~~~~~~~~~
+        //     // ~~~~~~~~~~~~ start of ReInt8 specific code ~~~~~~~~~~~~
 
-            Tensor tSrS_ambiguous_type = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
-            consumer_wait(pipeline_k, smem_pipe_read);
-            if constexpr (Is_skipable){
-                n_block = skip_reader.next_n_block();
-            }
-            flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ0, tSrK0(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
-            warpgroup_wait<0>();
+        //     Tensor tSrS_ambiguous_type = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
+        //     consumer_wait(pipeline_k, smem_pipe_read);
+        //     if constexpr (Is_skipable){
+        //         n_block = skip_reader.next_n_block();
+        //     }
+        //     flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ0, tSrK0(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
+        //     warpgroup_wait<0>();
 
-            if constexpr (Is_INT8) {
-                // Load dequantization scalar from shared memory (already multiplied by softmax_scale_log2)
-                float const dequan_s_val = shared_storage.skip_list_storage.descale_array[smem_pipe_read.index()];
-                softmax0.set_dequan_s(dequan_s_val);
-                softmax1.set_dequan_s(dequan_s_val);
-            }
+        //     if constexpr (Is_INT8) {
+        //         // Load dequantization scalar from shared memory (already multiplied by softmax_scale_log2)
+        //         float const dequan_s_val = shared_storage.skip_list_storage.descale_array[smem_pipe_read.index()];
+        //         softmax0.set_dequan_s(dequan_s_val);
+        //         softmax1.set_dequan_s(dequan_s_val);
+        //     }
 
-            mask0.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS_ambiguous_type, m_block, n_block);
+        //     mask0.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS_ambiguous_type, m_block, n_block);
 
-            Tensor scores_scale0 = [&]
-            {
-                if constexpr (Is_skipable)
-                {
-                    return softmax0.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, /*Is_first=*/true, true>(
-                        tSrS_ambiguous_type, params.qk_skip_mask_args.thr, skip_reader, m_block);
-                }
-                else
-                {
-                    return softmax0.template max_get_scale</*Is_first=*/true, /*Check_inf=*/true>(tSrS_ambiguous_type);
-                }
-            }();
-            // Don't need to store scales to send to WG1 (in the case of LargeHeadDimV) since it's 1.f
+        //     Tensor scores_scale0 = [&]
+        //     {
+        //         if constexpr (Is_skipable)
+        //         {
+        //             return softmax0.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, /*Is_first=*/true, true>(
+        //                 tSrS_ambiguous_type, params.qk_skip_mask_args.thr, skip_reader, m_block);
+        //         }
+        //         else
+        //         {
+        //             return softmax0.template max_get_scale</*Is_first=*/true, /*Check_inf=*/true>(tSrS_ambiguous_type);
+        //         }
+        //     }();
+        //     // Don't need to store scales to send to WG1 (in the case of LargeHeadDimV) since it's 1.f
 
-            auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
+        //     auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
 
-            softmax0.template online_softmax_dequantize</*Is_first=*/true, /*Check_inf=*/true>(tSrS_ambiguous_type, tSrS);
+        //     softmax0.template online_softmax_dequantize</*Is_first=*/true, /*Check_inf=*/true>(tSrS_ambiguous_type, tSrS);
 
-            Tensor tOrP_acc = make_tensor(tSrS.data(), flash::convert_layout_acc_Aregs<TiledMmaPV>(tSrS.layout()));
-            Tensor tOrP = make_tensor_like<ElementV>(tOrP_acc);
-            convert_type_out(tOrP_acc, tOrP);
-            write_P0_to_smem(tOrP);
+        //     Tensor tOrP_acc = make_tensor(tSrS.data(), flash::convert_layout_acc_Aregs<TiledMmaPV>(tSrS.layout()));
+        //     Tensor tOrP = make_tensor_like<ElementV>(tOrP_acc);
+        //     convert_type_out(tOrP_acc, tOrP);
+        //     write_P0_to_smem(tOrP);
 
-            // Need to initialize tOrO in the case of RescaleOBeforeGemm where we will scale tOrO even in the 1st iter
-            clear(tOrO0);
+        //     // Need to initialize tOrO in the case of RescaleOBeforeGemm where we will scale tOrO even in the 1st iter
+        //     clear(tOrO0);
 
-            // Each step does gemm0 for iter n_block, gemm1 for iter n_block + 1, and softmax for iter n_block.
-            auto fwd_step = [&](const int n_block, auto mask_fn0, auto mask_fn1, auto check_inf_type, auto &skip_reader) -> bool
-            {
-                static constexpr bool Check_inf = decltype(check_inf_type)::value;
-                // PipelineState smem_pipe_read_v(smem_pipe_read.index(), smem_pipe_read.phase(), smem_pipe_read.count());
-                // ++smem_pipe_read;
-                Tensor tSrS_ambiguous_type = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
-                // if constexpr (!UseSchedulerBarrier || warp_group_idx == 0)
-                // if (!UseSchedulerBarrier || warp_group_idx == 0)
-                // {
-                //     consumer_wait(pipeline_k, smem_pipe_read);
-                // }
+        //     // Each step does gemm0 for iter n_block, gemm1 for iter n_block + 1, and softmax for iter n_block.
+        //     auto fwd_step = [&](const int n_block, auto mask_fn0, auto mask_fn1, auto check_inf_type, auto &skip_reader) -> bool
+        //     {
+        //         static constexpr bool Check_inf = decltype(check_inf_type)::value;
+        //         // PipelineState smem_pipe_read_v(smem_pipe_read.index(), smem_pipe_read.phase(), smem_pipe_read.count());
+        //         // ++smem_pipe_read;
+        //         Tensor tSrS_ambiguous_type = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
+        //         // if constexpr (!UseSchedulerBarrier || warp_group_idx == 0)
+        //         // if (!UseSchedulerBarrier || warp_group_idx == 0)
+        //         // {
+        //         //     consumer_wait(pipeline_k, smem_pipe_read);
+        //         // }
 
-                warp_scheduler_barrier_sync();
+        //         warp_scheduler_barrier_sync();
 
-                flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ1, tSrK1(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
+        //         flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ1, tSrK1(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
 
-                int new_n_block;
-                if constexpr (Is_skipable)
-                {
-                    // we put this after the warp_scheduler_barrier_sync so wg1 woudn't
-                    // read the next n_block too early since it's not waiting for pipeline_k
-                    new_n_block = skip_reader.next_n_block();
-                }
-                else
-                {
-                    new_n_block = n_block;
-                }
+        //         int new_n_block;
+        //         if constexpr (Is_skipable)
+        //         {
+        //             // we put this after the warp_scheduler_barrier_sync so wg1 woudn't
+        //             // read the next n_block too early since it's not waiting for pipeline_k
+        //             new_n_block = skip_reader.next_n_block();
+        //         }
+        //         else
+        //         {
+        //             new_n_block = n_block;
+        //         }
 
-                bool has_more = true;
-                if constexpr (Is_skipable)
-                {
-                    has_more = skip_reader.has_more(new_n_block);
-                }
+        //         bool has_more = true;
+        //         if constexpr (Is_skipable)
+        //         {
+        //             has_more = skip_reader.has_more(new_n_block);
+        //         }
 
-                if (!UseSchedulerBarrier || warp_group_idx == 0)
-                {
-                    consumer_wait(pipeline_v, smem_pipe_read_v);
-                }
+        //         if (!UseSchedulerBarrier || warp_group_idx == 0)
+        //         {
+        //             consumer_wait(pipeline_v, smem_pipe_read_v);
+        //         }
 
-                flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP0), tOrV0(_, _, _, smem_pipe_read_v.index()), tOrO0);
-                warp_scheduler_barrier_arrive();
+        //         flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP0), tOrV0(_, _, _, smem_pipe_read_v.index()), tOrO0);
+        //         warp_scheduler_barrier_arrive();
 
-                warpgroup_wait<1>();
+        //         warpgroup_wait<1>();
 
-                pipeline_k.consumer_release(smem_pipe_read); // release K
+        //         pipeline_k.consumer_release(smem_pipe_read); // release K
 
-                if constexpr (Is_INT8)
-                {
-                    // Load dequantization scalar from shared memory (already multiplied by softmax_scale_log2)
-                    float const dequan_s_val = shared_storage.skip_list_storage.descale_array[smem_pipe_read.index()];
-                    softmax0.set_dequan_s(dequan_s_val);
-                    softmax1.set_dequan_s(dequan_s_val);
-                }
+        //         if constexpr (Is_INT8)
+        //         {
+        //             // Load dequantization scalar from shared memory (already multiplied by softmax_scale_log2)
+        //             float const dequan_s_val = shared_storage.skip_list_storage.descale_array[smem_pipe_read.index()];
+        //             softmax0.set_dequan_s(dequan_s_val);
+        //             softmax1.set_dequan_s(dequan_s_val);
+        //         }
 
-                //TODO: somehow make this function inner_idx aware
-                mask_fn1(tSrS_ambiguous_type, new_n_block);
-                if constexpr (Is_skipable)
-                {
-                    auto scales_res = softmax1.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, /*Is_first=*/false, Check_inf>(tSrS_ambiguous_type, params.qk_skip_mask_args.thr, skip_reader, m_block);
-                    cute::copy(scales_res, scores_scale1);
-                }
-                else
-                {
-                    cute::copy(softmax1.template max_get_scale</*Is_first=*/false, Check_inf>(tSrS_ambiguous_type), scores_scale1);
-                }
+        //         //TODO: somehow make this function inner_idx aware
+        //         mask_fn1(tSrS_ambiguous_type, new_n_block);
+        //         if constexpr (Is_skipable)
+        //         {
+        //             auto scales_res = softmax1.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, /*Is_first=*/false, Check_inf>(tSrS_ambiguous_type, params.qk_skip_mask_args.thr, skip_reader, m_block);
+        //             cute::copy(scales_res, scores_scale1);
+        //         }
+        //         else
+        //         {
+        //             cute::copy(softmax1.template max_get_scale</*Is_first=*/false, Check_inf>(tSrS_ambiguous_type), scores_scale1);
+        //         }
 
-                auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
-                softmax1.template online_softmax_dequantize</*Is_first=*/false, Check_inf>(tSrS_ambiguous_type, tSrS);
+        //         auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
+        //         softmax1.template online_softmax_dequantize</*Is_first=*/false, Check_inf>(tSrS_ambiguous_type, tSrS);
 
-                warpgroup_wait<0>();
+        //         warpgroup_wait<0>();
 
-                convert_type_out(make_tensor(tSrS.data(), tOrP.layout()), tOrP);
-                if constexpr (!MmaPV_is_RS)
-                {
-                    // TODO: maybe allocate a bit more space for P3 and remove the warpgroup_wait<0>(); and push pipeline_v.consumer_release(smem_pipe_read_v); // release V
-                    write_P1_to_smem(tOrP);
-                }
+        //         convert_type_out(make_tensor(tSrS.data(), tOrP.layout()), tOrP);
+        //         if constexpr (!MmaPV_is_RS)
+        //         {
+        //             // TODO: maybe allocate a bit more space for P3 and remove the warpgroup_wait<0>(); and push pipeline_v.consumer_release(smem_pipe_read_v); // release V
+        //             write_P1_to_smem(tOrP);
+        //         }
 
-                softmax0.rescale_o(tOrO0, scores_scale0);
+        //         softmax0.rescale_o(tOrO0, scores_scale0);
 
-                if constexpr (!MmaPV_is_RS)
-                {
-                    arrive_on_P_write_barrier();
-                }
+        //         if constexpr (!MmaPV_is_RS)
+        //         {
+        //             arrive_on_P_write_barrier();
+        //         }
 
-                warp_scheduler_barrier_sync();
+        //         warp_scheduler_barrier_sync();
 
-                if constexpr (!UseSchedulerBarrier || warp_group_idx == 0)
-                if (!UseSchedulerBarrier || warp_group_idx == 0)
-                {
-                    consumer_wait(pipeline_k, smem_pipe_read);
-                }
+        //         if constexpr (!UseSchedulerBarrier || warp_group_idx == 0)
+        //         if (!UseSchedulerBarrier || warp_group_idx == 0)
+        //         {
+        //             consumer_wait(pipeline_k, smem_pipe_read);
+        //         }
 
-                flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ0, tSrK0(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
-                flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP1), tOrV1(_, _, _, smem_pipe_read_v.index()), tOrO1);
+        //         flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ0, tSrK0(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
+        //         flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP1), tOrV1(_, _, _, smem_pipe_read_v.index()), tOrO1);
 
-                warp_scheduler_barrier_arrive();
+        //         warp_scheduler_barrier_arrive();
 
-                warpgroup_wait<1>();
+        //         warpgroup_wait<1>();
 
-                pipeline_k.consumer_release(smem_pipe_read); // release K
+        //         pipeline_k.consumer_release(smem_pipe_read); // release K
 
-                softmax0.rescale_o(tOrO0, scores_scale0);
+        //         softmax0.rescale_o(tOrO0, scores_scale0);
 
-                //TODO: somehow make this function inner_idx aware
-                mask_fn1(tSrS_ambiguous_type, new_n_block);
-                if constexpr (Is_skipable)
-                {
-                    cute::copy(
-                        softmax1.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, /*Is_first=*/false, Check_inf>(
-                            tSrS_ambiguous_type, params.qk_skip_mask_args.thr, skip_reader, m_block),
-                        scores_scale1);
-                }
-                else
-                {
-                    cute::copy(softmax1.template max_get_scale</*Is_first=*/false, Check_inf>(tSrS_ambiguous_type), scores_scale1);
-                }
+        //         //TODO: somehow make this function inner_idx aware
+        //         mask_fn1(tSrS_ambiguous_type, new_n_block);
+        //         if constexpr (Is_skipable)
+        //         {
+        //             cute::copy(
+        //                 softmax1.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, /*Is_first=*/false, Check_inf>(
+        //                     tSrS_ambiguous_type, params.qk_skip_mask_args.thr, skip_reader, m_block),
+        //                 scores_scale1);
+        //         }
+        //         else
+        //         {
+        //             cute::copy(softmax1.template max_get_scale</*Is_first=*/false, Check_inf>(tSrS_ambiguous_type), scores_scale1);
+        //         }
 
-                tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
-                softmax1.template online_softmax_dequantize</*Is_first=*/false, Check_inf>(tSrS_ambiguous_type, tSrS);
+        //         tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
+        //         softmax1.template online_softmax_dequantize</*Is_first=*/false, Check_inf>(tSrS_ambiguous_type, tSrS);
 
-                warpgroup_wait<0>();
-                pipeline_v.consumer_release(smem_pipe_read_v); // release V
+        //         warpgroup_wait<0>();
+        //         pipeline_v.consumer_release(smem_pipe_read_v); // release V
 
-                convert_type_out(make_tensor(tSrS.data(), tOrP.layout()), tOrP);
+        //         convert_type_out(make_tensor(tSrS.data(), tOrP.layout()), tOrP);
 
-                if constexpr (!MmaPV_is_RS)
-                {
-                    write_P1_to_smem(tOrP);
-                }
+        //         if constexpr (!MmaPV_is_RS)
+        //         {
+        //             write_P1_to_smem(tOrP);
+        //         }
 
-                // softmax1.rescale_o(tOrO1, scores_scale1);
+        //         // softmax1.rescale_o(tOrO1, scores_scale1);
 
-                if constexpr (!MmaPV_is_RS)
-                {
-                    arrive_on_P_write_barrier();
-                }
+        //         if constexpr (!MmaPV_is_RS)
+        //         {
+        //             arrive_on_P_write_barrier();
+        //         }
 
-                return has_more;
-            };
-            // ~~~~~~~~~~~~~~~~~~~
-            ++work_idx;
-            return true;
-        }
+        //         return has_more;
+        //     };
+        //     // ~~~~~~~~~~~~~~~~~~~
+        //     ++work_idx;
+        //     return true;
+        // }
     };
 
 } // namespace flash

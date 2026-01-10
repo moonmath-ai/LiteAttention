@@ -91,9 +91,9 @@ def mem_calc(m, n, k, q_dtype=torch.int8, k_dtype=torch.int8, v_dtype=torch.floa
     smem = q_size + k_size + v_size  # we always hold Q, K, V in smem
 
     if MmaPV_is_RS:
-        rmem += p_size * isIntraWGOverlap
+        rmem += p_size * (isIntraWGOverlap or strictly_two_wg)
     else:
-        smem += p_size * isIntraWGOverlap
+        smem += p_size * (isIntraWGOverlap or strictly_two_wg)
 
     return torch.tensor([rmem, smem])
 
