@@ -16,6 +16,7 @@
 #endif
 
 #include <cute/tensor.hpp>
+#include <cute/algorithm/fill.hpp>
 
 #include <cutlass/cutlass.h>
 #include <cutlass/array.h>
@@ -36,7 +37,7 @@ static constexpr bool ReInt8UseNewThreadMapping = true;
 // Magic float value: float(1 << 23) + float(1 << 22), reinterpreted as int32_t
 // Used for int8 quantization/dequantization
 constexpr float magic_float = float(1 << 23) + float(1 << 22);
-constexpr int32_t magic_int32 = 0x4B400000;
+inline constexpr int32_t magic_int32 = 0x4B400000;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // ReInt8 Thread Mapping Helpers using CuTe Layout concepts
@@ -380,10 +381,8 @@ CUTLASS_DEVICE void gemm(TiledMma& tiled_mma, Tensor0 const& tCrA, Tensor1 const
         
         if constexpr (Is_INT8) {
             // Initialize accumulator with magic value (same approach as softmax.h)
-            CUTLASS_PRAGMA_UNROLL
-            for (int i = 0; i < size(tCrC); ++i) {
-                tCrC(i) = magic_int32;
-            }
+            // constexpr int32_t magic_val = 0x4B400000;
+            cute::fill(tCrC, 0x4B400000);
             // For int8_t, we want to accumulate on top of the magic value, so start with ScaleOut::One
             tiled_mma.accumulate_ = GMMA::ScaleOut::One;
         } else if constexpr (zero_init) {
