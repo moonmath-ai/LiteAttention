@@ -191,20 +191,25 @@ namespace flash
         CUTE_STATIC_ASSERT_V(size<0>(tensor) == size<0>(tensor_dequantized));
         CUTE_STATIC_ASSERT_V(size<1>(tensor) == size<1>(tensor_dequantized));
         
+        constexpr float magic_float = float(1 << 23) + float(1 << 22);
+
         // Helper lambda to compute max_scaled for a given row index
         auto get_max_scaled = [&](int mi) -> float {
+            float max_value;
             if constexpr (Check_inf){
-                return max(mi) == -INFINITY ? 0.f : (!Scale_max ? max(mi) : max(mi)) - max_offset;
+                max_value = max(mi) == -INFINITY ? 0.f : (!Scale_max ? max(mi) : max(mi)) - max_offset;
             }else{
-                return (!Scale_max ? max(mi) : max(mi)) - max_offset;
+                max_value = (!Scale_max ? max(mi) : max(mi)) - max_offset;
             }
+            return dequan_s * magic_float + max_value;
         };
         
         // Helper lambda to process a single element
         auto process_element = [&](int mi, int ni, float max_scaled) {
             // Dequantize int32 to float, then compute exp2(dequantized_value - max_scaled)
             // tensor(mi, ni) is int32_t, multiply by dequan_s to get float
-            const float dequantized_value = tensor(mi, ni) * dequan_s - max_scaled;
+            // const float dequantized_value = tensor(mi, ni) * dequan_s - max_scaled;
+            const float dequantized_value = reinterpret_cast<float &>(reinterpret_cast<uint32_t &>(tensor(mi, ni)) + reinterpret_cast<uint32_t &>(magic_float)) * dequan_s - max_scaled;
             tensor_dequantized(mi, ni) = exp2f(dequantized_value);
         };
         

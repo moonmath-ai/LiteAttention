@@ -769,4 +769,38 @@ int canonical_warp_group_idx_nosync() {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+// // Convert an integer in range [0, 2^23) to a float exactly.
+// // Produces an incorrect result for integers outside the range.
+// CUTLASS_HOST_DEVICE
+// float u23_to_f32(uint32_t x) {
+//     // Magic number: bit representation of 2^23 as float
+//     const float magic_float = static_cast<float>(1u << 23);
+//     union { float f; uint32_t u; } magic_union;
+//     magic_union.f = magic_float;
+//     const uint32_t magic_bits = magic_union.u;
+    
+//     union { float f; uint32_t u; } result_union;
+//     result_union.u = x ^ magic_bits;
+//     return result_union.f - magic_float;
+// }
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// Convert an integer in range [-2^22, 2^22) to a float exactly.
+// Produces an incorrect result for integers outside the range.
+CUTLASS_HOST_DEVICE
+float i23_to_f32(int32_t x) {
+    // Magic number: bit representation of 2^23 as float
+    const float magic_float = static_cast<float>(1u << 23) + static_cast<float>(1u << 22);
+    union { float f; uint32_t u; } magic_union;
+    magic_union.f = magic_float;
+    const uint32_t magic_bits = magic_union.u;
+    
+    union { float f; uint32_t u; } result_union;
+    result_union.u = x + magic_bits;
+    return result_union.f - magic_float;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
 } // namespace flash
