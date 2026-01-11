@@ -33,6 +33,11 @@ using namespace cute;
 // When false: wg0 handles threads 0-127 and 256-383, wg1 handles threads 128-255 and 384-511
 static constexpr bool ReInt8UseNewThreadMapping = true;
 
+// Magic float value: float(1 << 23) + float(1 << 22), reinterpreted as int32_t
+// Used for int8 quantization/dequantization
+constexpr float magic_float = float(1 << 23) + float(1 << 22);
+constexpr int32_t magic_int32 = 0x4B400000;
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // ReInt8 Thread Mapping Helpers using CuTe Layout concepts
 // These helpers map thread indices for ReInt8 mode to support different warp group layouts
@@ -368,7 +373,20 @@ CUTLASS_DEVICE void gemm(TiledMma& tiled_mma, Tensor0 const& tCrA, Tensor1 const
         }
         warpgroup_fence_operand(tCrC);
         warpgroup_arrive();
-        if constexpr (zero_init) {
+        
+        // // Check if inputs are int8_t and initialize accumulator with magic value
+        using OperandADataType = typename TiledMma::ValTypeA;
+        constexpr bool Is_INT8 = cute::is_same_v<OperandADataType, int8_t>;
+        
+        if constexpr (Is_INT8) {
+            // Initialize accumulator with magic value (same approach as softmax.h)
+            CUTLASS_PRAGMA_UNROLL
+            for (int i = 0; i < size(tCrC); ++i) {
+                tCrC(i) = magic_int32;
+            }
+            // For int8_t, we want to accumulate on top of the magic value, so start with ScaleOut::One
+            tiled_mma.accumulate_ = GMMA::ScaleOut::One;
+        } else if constexpr (zero_init) {
             tiled_mma.accumulate_ = GMMA::ScaleOut::Zero;
         }
         static constexpr int kNumKIters = CUTE_STATIC_V(size<2>(tCrA));

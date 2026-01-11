@@ -73,7 +73,8 @@ namespace flash
 #pragma unroll
         for (int mi = 0; mi < size(src); mi++)
         {
-            const float value = src(mi) * dequan_s;
+            // const float value = src(mi) * dequan_s;
+            const float value = (src(mi) - magic_int32) * dequan_s;
             if constexpr (zero_init){
                 dst(mi) = value;
             }else{
@@ -191,8 +192,6 @@ namespace flash
         CUTE_STATIC_ASSERT_V(size<0>(tensor) == size<0>(tensor_dequantized));
         CUTE_STATIC_ASSERT_V(size<1>(tensor) == size<1>(tensor_dequantized));
         
-        constexpr float magic_float = float(1 << 23) + float(1 << 22);
-
         // Helper lambda to compute max_scaled for a given row index
         auto get_max_scaled = [&](int mi) -> float {
             float max_value;
@@ -208,16 +207,16 @@ namespace flash
         auto process_element = [&](int mi, int ni, float max_scaled) {
             // Dequantize int32 to float, then compute exp2(dequantized_value - max_scaled)
             // tensor(mi, ni) is int32_t, multiply by dequan_s to get float
+
             // const float dequantized_value = tensor(mi, ni) * dequan_s - max_scaled;
-            // Fix: store tensor value in a variable first, then perform bit manipulation
-            // const int32_t tensor_val = tensor(mi, ni);
-            // union { int32_t i; uint32_t u; } tensor_union;
-            // union { float f; uint32_t u; } magic_union, result_union;
-            union { float f; int32_t i; } magic_union, result_union;
-            // tensor_union.i = tensor_val;
-            magic_union.f = magic_float;
-            // result_union.u = tensor_union.u + magic_union.u;
-            result_union.i = tensor(mi, ni) + magic_union.i;
+
+            // union { float f; int32_t i; } magic_union, result_union;
+            // magic_union.f = magic_float;
+            // result_union.i = tensor(mi, ni) + magic_union.i;
+
+            union { float f; int32_t i; } result_union;
+            result_union.i = tensor(mi, ni);
+
             const float dequantized_value = result_union.f * dequan_s - max_scaled;
             tensor_dequantized(mi, ni) = exp2f(dequantized_value);
         };
