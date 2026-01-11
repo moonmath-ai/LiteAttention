@@ -1562,6 +1562,9 @@ namespace flash
             if constexpr (IntraWGOverlap)
             {
                 Tensor tSrS_ambiguous_type = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
+                if constexpr (Is_INT8){
+                    fill_vectorized_128bit(tSrS_ambiguous_type);
+                }
                 consumer_wait(pipeline_k, smem_pipe_read);
                 if constexpr (Is_skipable){
                     n_block = skip_reader.next_n_block();
@@ -1642,6 +1645,9 @@ namespace flash
                     PipelineState smem_pipe_read_v(smem_pipe_read.index(), smem_pipe_read.phase(), smem_pipe_read.count());
                     ++smem_pipe_read;
                     Tensor tSrS_ambiguous_type = partition_fragment_C(tiled_mma_qk, select<0, 1>(TileShape_MNK{}));
+                    if constexpr (Is_INT8){
+                        fill_vectorized_128bit(tSrS_ambiguous_type);
+                    }
                     // if constexpr (!UseSchedulerBarrier || warp_group_idx == 0)
                     if(!UseSchedulerBarrier || warp_group_idx == 0){
                         consumer_wait(pipeline_k, smem_pipe_read);

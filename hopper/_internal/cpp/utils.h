@@ -301,6 +301,33 @@ CUTLASS_DEVICE void convert_type_out(Tensor<Engine, Layout> const &tensor, Tenso
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+// Vectorized fill function assuming 128-bit alignment (4 int32_t elements per int4)
+// Fills a tensor with a given int32_t value using vectorized assignment for efficiency
+template <int32_t value = 0x4B400000, typename Engine, typename Layout>
+CUTLASS_DEVICE void fill_vectorized_128bit(Tensor<Engine, Layout>& tensor) {
+    int4 magic_vec = make_int4(value, value, value, value);
+    int32_t* data_ptr = reinterpret_cast<int32_t*>(tensor.data());
+    constexpr int total_size = CUTE_STATIC_V(size(tensor));
+    constexpr int vec_count = total_size / 4;
+    constexpr int remainder = total_size % 4;
+    
+    // Vectorized assignment: 4 elements at once (128 bits)
+    CUTLASS_PRAGMA_UNROLL
+    for (int i = 0; i < vec_count; ++i) {
+        *reinterpret_cast<int4*>(data_ptr + i * 4) = magic_vec;
+    }
+    
+    // Handle remainder elements
+    if constexpr (remainder > 0) {
+        CUTLASS_PRAGMA_UNROLL
+        for (int i = 0; i < remainder; ++i) {
+            data_ptr[vec_count * 4 + i] = value;
+        }
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
 // Convert int32 tensor to float by multiplying with a scalar (dequantization scale).
 // Leverages automatic type promotion: int32 * float -> float
 template <typename Engine, typename Layout, typename EngineOut>
@@ -380,9 +407,8 @@ CUTLASS_DEVICE void gemm(TiledMma& tiled_mma, Tensor0 const& tCrA, Tensor1 const
         constexpr bool Is_INT8 = cute::is_same_v<OperandADataType, int8_t>;
         
         if constexpr (Is_INT8) {
-            // Initialize accumulator with magic value (same approach as softmax.h)
-            // constexpr int32_t magic_val = 0x4B400000;
-            cute::fill(tCrC, 0x4B400000);
+            // // Initialize accumulator with magic value (same approach as softmax.h)
+            // fill_vectorized_128bit(tCrC);
             // For int8_t, we want to accumulate on top of the magic value, so start with ScaleOut::One
             tiled_mma.accumulate_ = GMMA::ScaleOut::One;
         } else if constexpr (zero_init) {
