@@ -209,7 +209,16 @@ namespace flash
             // Dequantize int32 to float, then compute exp2(dequantized_value - max_scaled)
             // tensor(mi, ni) is int32_t, multiply by dequan_s to get float
             // const float dequantized_value = tensor(mi, ni) * dequan_s - max_scaled;
-            const float dequantized_value = reinterpret_cast<float &>(reinterpret_cast<uint32_t &>(tensor(mi, ni)) + reinterpret_cast<uint32_t &>(magic_float)) * dequan_s - max_scaled;
+            // Fix: store tensor value in a variable first, then perform bit manipulation
+            // const int32_t tensor_val = tensor(mi, ni);
+            // union { int32_t i; uint32_t u; } tensor_union;
+            // union { float f; uint32_t u; } magic_union, result_union;
+            union { float f; int32_t i; } magic_union, result_union;
+            // tensor_union.i = tensor_val;
+            magic_union.f = magic_float;
+            // result_union.u = tensor_union.u + magic_union.u;
+            result_union.i = tensor(mi, ni) + magic_union.i;
+            const float dequantized_value = result_union.f * dequan_s - max_scaled;
             tensor_dequantized(mi, ni) = exp2f(dequantized_value);
         };
         
