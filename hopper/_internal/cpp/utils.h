@@ -403,15 +403,18 @@ CUTLASS_DEVICE void gemm(TiledMma& tiled_mma, Tensor0 const& tCrA, Tensor1 const
         warpgroup_arrive();
         
         // // Check if inputs are int8_t and initialize accumulator with magic value
-        using OperandADataType = typename TiledMma::ValTypeA;
-        constexpr bool Is_INT8 = cute::is_same_v<OperandADataType, int8_t>;
+        // using OperandADataType = typename TiledMma::ValTypeA;
+        // constexpr bool Is_INT8 = cute::is_same_v<OperandADataType, int8_t>;
         
-        if constexpr (Is_INT8) {
-            // // Initialize accumulator with magic value (same approach as softmax.h)
-            // fill_vectorized_128bit(tCrC);
-            // For int8_t, we want to accumulate on top of the magic value, so start with ScaleOut::One
-            tiled_mma.accumulate_ = GMMA::ScaleOut::One;
-        } else if constexpr (zero_init) {
+        // if constexpr (Is_INT8) {
+        //     // // Initialize accumulator with magic value (same approach as softmax.h)
+        //     // fill_vectorized_128bit(tCrC);
+        //     // For int8_t, we want to accumulate on top of the magic value, so start with ScaleOut::One
+        //     tiled_mma.accumulate_ = GMMA::ScaleOut::One;
+        // } else if constexpr (zero_init) {
+        //     tiled_mma.accumulate_ = GMMA::ScaleOut::Zero;
+        // }
+        if constexpr (zero_init) {
             tiled_mma.accumulate_ = GMMA::ScaleOut::Zero;
         }
         static constexpr int kNumKIters = CUTE_STATIC_V(size<2>(tCrA));

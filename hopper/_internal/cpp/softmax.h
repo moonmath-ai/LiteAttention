@@ -73,8 +73,8 @@ namespace flash
 #pragma unroll
         for (int mi = 0; mi < size(src); mi++)
         {
-            // const float value = src(mi) * dequan_s;
-            const float value = (src(mi) - magic_int32) * dequan_s;
+            const float value = src(mi) * dequan_s;
+            // const float value = (src(mi) - magic_int32) * dequan_s;
             if constexpr (zero_init){
                 dst(mi) = value;
             }else{
@@ -215,7 +215,10 @@ namespace flash
             // result_union.i = tensor(mi, ni) + magic_union.i;
 
             union { float f; int32_t i; } result_union;
-            result_union.i = tensor(mi, ni);
+            result_union.i = tensor(mi, ni) + magic_int32;
+
+            // union { float f; int32_t i; } result_union;
+            // result_union.i = tensor(mi, ni);
 
             const float dequantized_value = result_union.f * dequan_s - max_scaled;
             tensor_dequantized(mi, ni) = exp2f(dequantized_value);

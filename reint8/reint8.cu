@@ -15,7 +15,8 @@ static constexpr bool ReInt8 = true;
 
 static constexpr int kStages = 2;
 
-static constexpr int kBlockM = ReInt8 ? 256 : 128;
+// static constexpr int kBlockM = ReInt8 ? 256 : 128;
+static constexpr int kBlockM = ReInt8 ? 256 : 192;
 static constexpr int kBlockMI = 128;
 static constexpr int kBlockN = 128;
 static constexpr int kHeadDim = 128;
@@ -389,10 +390,10 @@ int main()
 
 /*
 # Compile with ReInt8 = true
-nvcc -std=c++20 --use_fast_math -I./csrc/cutlass/include -arch=sm_90a -DREINT8_ENABLED -o reint8 reint8.cu && \
-./reint8 > shapes_and_such.txt 2>&1
+nvcc -std=c++20 --use_fast_math -I./csrc/cutlass/include -arch=sm_90a -DREINT8_ENABLED -o reint8/reint8 reint8/reint8.cu && \
+./reint8/reint8 > reint8/shapes_and_such.txt 2>&1
 
 # Compile with ReInt8 = false
-nvcc -std=c++20 --use_fast_math -I./csrc/cutlass/include -arch=sm_90a -o reint8 reint8.cu && \
-./reint8 > shapes_and_such_no_reint8.txt 2>&1
+nvcc -std=c++20 --use_fast_math -I./csrc/cutlass/include -arch=sm_90a -o reint8/reint8 reint8/reint8.cu && \
+./reint8/reint8 > reint8/shapes_and_such_no_reint8.txt 2>&1
 */
