@@ -200,27 +200,29 @@ namespace flash
             }else{
                 max_value = (!Scale_max ? max(mi) : max(mi)) - max_offset;
             }
-            return dequan_s * magic_float + max_value;
+            if (mi % 2 == 0){
+                return dequan_s * magic_float + max_value;
+            }else{
+                return max_value;
+            }
         };
         
         // Helper lambda to process a single element
         auto process_element = [&](int mi, int ni, float max_scaled) {
             // Dequantize int32 to float, then compute exp2(dequantized_value - max_scaled)
             // tensor(mi, ni) is int32_t, multiply by dequan_s to get float
-
             // const float dequantized_value = tensor(mi, ni) * dequan_s - max_scaled;
 
-            // union { float f; int32_t i; } magic_union, result_union;
-            // magic_union.f = magic_float;
-            // result_union.i = tensor(mi, ni) + magic_union.i;
+            float dequantized_value;
+            if (mi % 2 == 0){
+                union { float f; int32_t i; } result_union;
+                result_union.i = tensor(mi, ni) + magic_int32;
 
-            union { float f; int32_t i; } result_union;
-            result_union.i = tensor(mi, ni) + magic_int32;
-
-            // union { float f; int32_t i; } result_union;
-            // result_union.i = tensor(mi, ni);
-
-            const float dequantized_value = result_union.f * dequan_s - max_scaled;
+                // const float dequantized_value = result_union.f * dequan_s - max_scaled;
+                dequantized_value = result_union.f * dequan_s - max_scaled;
+            }else{
+                dequantized_value = tensor(mi, ni) * dequan_s - max_scaled;
+            }
             tensor_dequantized(mi, ni) = exp2f(dequantized_value);
         };
         
