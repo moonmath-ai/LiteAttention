@@ -251,8 +251,8 @@ namespace flash
 #pragma unroll
                 for (int mi = 0; mi < size<0>(tensor); ++mi)
                 {
-                    const float max_scaled = max_scaled[mi];
-                    process_element(mi, ni, max_scaled);
+                    const float max_scaled_val = max_scaled[mi];
+                    process_element(mi, ni, max_scaled_val);
                 }
             }
         }
