@@ -239,11 +239,6 @@ namespace flash
                 }
             }
         } else {
-
-            float max_scaled[size<0>(tensor)];
-            for (int mi = 0; mi < size<0>(tensor); ++mi) {
-                max_scaled[mi] = get_max_scaled(mi);
-            }
             // Outer loop: columns (ni), Inner loop: rows (mi)
 #pragma unroll
             for (int ni = 0; ni < size<1>(tensor); ++ni)
@@ -251,8 +246,8 @@ namespace flash
 #pragma unroll
                 for (int mi = 0; mi < size<0>(tensor); ++mi)
                 {
-                    const float max_scaled_val = max_scaled[mi];
-                    process_element(mi, ni, max_scaled_val);
+                    const float max_scaled = get_max_scaled(mi);
+                    process_element(mi, ni, max_scaled);
                 }
             }
         }
@@ -501,7 +496,7 @@ namespace flash
             // consider: scores are Int's when Is_INT8 is enabled, so we need to pass the dequan_s instead of scale_apply_exp2
             //           and also we need to define a new scores tensor for float type (we dequantize and take the exp2 inside this function)
             // flash::template scale_apply_exp2</*Scale_max=*/true, Check_inf, Max_offset>(scores, row_max, softmax_scale_log2);
-            flash::template scale_apply_exp2_dequantize</*Scale_max=*/true, Check_inf, Max_offset>(scores, row_max, scores_float, dequan_s);
+            flash::template scale_apply_exp2_dequantize</*Scale_max=*/true, Check_inf, Max_offset, false>(scores, row_max, scores_float, dequan_s);
 
             // consider: here we should reduce_sum with the values of the float exp2 scores (which we need to create a float tensor for when Is_INT8 is enabled)
             // We don't do the reduce across threads here since we don't need to use the row_sum.
