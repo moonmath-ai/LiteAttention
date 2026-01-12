@@ -239,6 +239,11 @@ namespace flash
                 }
             }
         } else {
+
+            float max_scaled[size<0>(tensor)];
+            for (int mi = 0; mi < size<0>(tensor); ++mi) {
+                max_scaled[mi] = get_max_scaled(mi);
+            }
             // Outer loop: columns (ni), Inner loop: rows (mi)
 #pragma unroll
             for (int ni = 0; ni < size<1>(tensor); ++ni)
@@ -246,7 +251,7 @@ namespace flash
 #pragma unroll
                 for (int mi = 0; mi < size<0>(tensor); ++mi)
                 {
-                    const float max_scaled = get_max_scaled(mi);
+                    const float max_scaled = max_scaled[mi];
                     process_element(mi, ni, max_scaled);
                 }
             }

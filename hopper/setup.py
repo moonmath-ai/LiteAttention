@@ -547,7 +547,7 @@ if not SKIP_CUDA_BUILD:
         "-std=c++20",
         "--ftemplate-backtrace-limit=0",  # To debug template code
         "--use_fast_math",
-        # "--keep",
+        "--keep",
         # "--ptxas-options=--verbose,--register-usage-level=5,--warn-on-local-memory-usage",  # printing out number of registers
         "--resource-usage",  # printing out number of registers
         # f"--split-compile={os.getenv('NVCC_THREADS', '4')}",  # split-compile is faster
