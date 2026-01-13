@@ -39,6 +39,22 @@ static constexpr bool ReInt8UseNewThreadMapping = true;
 constexpr float magic_float = float(1 << 23) + float(1 << 22);
 inline constexpr int32_t magic_int32 = 0x4B400000;
 
+// Utility function to reinterpret int32_t bits as float
+__device__ __forceinline__ float reinterpret_bits_as_float(int32_t value)
+{
+    union { float f; int32_t i; } u;
+    u.i = value;
+    return u.f;
+}
+
+// Utility function to reinterpret float bits as int32_t
+__device__ __forceinline__ int32_t reinterpret_bits_as_int32(float value)
+{
+    union { float f; int32_t i; } u;
+    u.f = value;
+    return u.i;
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // ReInt8 Thread Mapping Helpers using CuTe Layout concepts
 // These helpers map thread indices for ReInt8 mode to support different warp group layouts
