@@ -792,91 +792,108 @@ public:
 
 ///////////////////////////////////////////////////////////////////////////////
 
-// template<bool Split=false>
-// class QKSkipTileScheduler {
+template<int NumRow = 5, bool Varlen=false, bool Split=false, bool PackGQA=false, int kBlock=128>
+class FixedTileScheduler {
 
-// protected:
-//     uint64_t* skip_mask;
+public:
 
-// public:
+    using SharedStorage = int;
 
-//     using SharedStorage = int;
+    // Device side kernel params
+    struct Params {
+        int const num_blocks, num_head, num_batch, num_splits;
+        int const qhead_per_khead;
+        int const seqlen;
+        cutlass::FastDivmod nsplits_divmod;
+        int const* const cu_seqlens;
+        int const* const seqused;
+        int const* const num_splits_dynamic_ptr = nullptr;
+    };
 
-//     // Device side kernel params
-//     struct Params {
-//         int total_blocks;
-//         cutlass::FastDivmod m_block_divmod, head_divmod;
-//         cutlass::FastDivmod nsplits_divmod;
-//     };
+    static Params
+    to_underlying_arguments(TileSchedulerArguments const& args) {
+        assert(!Split || !Varlen || args.num_splits_dynamic_ptr != nullptr);
+        assert(!Split || !Varlen || args.num_splits < (1 << 16)); // We use the top 16 bits to store num_splits
+        return {args.num_blocks, args.num_head, args.num_batch, !Split ? 1 : args.num_splits,
+                args.qhead_per_khead, args.seqlen,
+                cutlass::FastDivmod(!Split ? 1 : args.num_splits),
+                !Varlen ? nullptr : args.cu_seqlens, !Varlen ? nullptr : args.seqused,
+                args.num_splits_dynamic_ptr};
+    }
 
-//     static Params
-//     to_underlying_arguments(TileSchedulerArguments const& args) {
-//         return {args.num_blocks * args.num_head * args.num_batch * (!Split ? 1 : args.num_splits),
-//                 cutlass::FastDivmod(args.num_blocks), cutlass::FastDivmod(args.num_head * (!Split ? 1 : args.num_splits)),
-//                 cutlass::FastDivmod(!Split ? 1 : args.num_splits)};
-//     }
+    static dim3
+    get_grid_shape(Params const& params, int num_sm) {
+        int num_rows = cutlass::ceildiv(params.num_blocks, NumRow);
+        return {uint32_t(num_rows), uint32_t((!Split ? 1 : params.num_splits) * params.num_head), uint32_t(params.num_batch)};
+    }
 
-//     static dim3
-//     get_grid_shape(Params const& params, int num_sm) {
-//         return {uint32_t(num_sm)};
-//     }
+    struct WorkTileInfo {
+        int block_idx = 0;
+        int bidh = 0;
+        int bidb = 0;
+        int split_idx = 0;
 
-//     struct WorkTileInfo {
-//         int tile_idx;
+        CUTLASS_DEVICE
+        bool
+        is_valid(Params const& params) const {
+            return (block_idx < params.num_blocks) && (block_idx < (int(blockIdx.x) + 1) * NumRow);
+        }
 
-//         CUTLASS_DEVICE
-//         bool
-//         is_valid(Params const& params) const {
-//             return tile_idx < params.total_blocks;
-//         }
+        CUTLASS_DEVICE
+        cute::tuple<int32_t, int32_t, int32_t, int32_t>
+        get_block_coord(Params const& params) const {
+            return {block_idx, bidh, bidb, !Split ? 0 : split_idx};
+        }
 
-//         CUTLASS_DEVICE
-//         cute::tuple<int32_t, int32_t, int32_t, int32_t>
-//         get_block_coord(Params const& params) const {
-//             int block, bidh, bidb;
-//             bidb = params.head_divmod.divmod(bidh, params.m_block_divmod.divmod(block, tile_idx));
-//             int split_idx = 0;
-//             if constexpr (Split) {
-//                 bidh = params.nsplits_divmod.divmod(split_idx, bidh);
-//             }
-//             return {block, bidh, bidb, split_idx};
-//         }
+    };
 
-//     };
+    CUTLASS_DEVICE
+    FixedTileScheduler(SharedStorage* const smem_scheduler) { }
 
-//     CUTLASS_DEVICE
-//     QKSkipTileScheduler(SharedStorage* const smem_scheduler) {};
+    template<bool IsProducerWarp=false>
+    CUTLASS_DEVICE
+    WorkTileInfo
+    get_initial_work(Params const& params) const {
+        WorkTileInfo work_info {int(blockIdx.x) * NumRow, int(blockIdx.y), int(blockIdx.z), 0};
+        if constexpr (Split) {
+            int split_idx;
+            work_info.bidh = params.nsplits_divmod.divmod(split_idx, work_info.bidh);
+            work_info.split_idx = split_idx;
+        }
+        bool is_valid_tile = true;
+        if constexpr (Varlen) {
+            int seqlen = params.seqused
+                ? params.seqused[work_info.bidb]
+                : (params.cu_seqlens ? params.cu_seqlens[work_info.bidb + 1] - params.cu_seqlens[work_info.bidb] : params.seqlen);
+            if constexpr (PackGQA) { seqlen *= params.qhead_per_khead; }
+            is_valid_tile = work_info.block_idx * kBlock < seqlen;
+        }
+        if constexpr (Varlen && Split) {
+            int num_splits_dynamic = params.num_splits_dynamic_ptr ? params.num_splits_dynamic_ptr[work_info.bidb] : params.num_splits;
+            is_valid_tile &= work_info.split_idx < num_splits_dynamic;
+            // Use the top 16 bits to store num_splits
+            work_info.split_idx |= (num_splits_dynamic << 16);
+        }
+        work_info.bidb = is_valid_tile ? work_info.bidb : -1;
+        return work_info;
+    }
 
+    CUTLASS_DEVICE
+    void
+    init_consumer() const {}
 
-//     CUTLASS_DEVICE
-//     void
-//     set_skip_mask(uint64_t* raw_skip_mask) const {
-        
-//     }
+    CUTLASS_DEVICE
+    void
+    prefetch_next_work(Params const& params, WorkTileInfo& current_work) const {}
 
-//     template<bool IsProducerWarp=false>
-//     CUTLASS_DEVICE
-//     WorkTileInfo
-//     get_initial_work(Params const& params) const {
-//         return {int(blockIdx.x)};
-//     }
+    template<bool IsProducerWarp=false>
+    CUTLASS_DEVICE
+    WorkTileInfo
+    get_next_work(Params const& params, WorkTileInfo const& current_work) const {
+        return {current_work.block_idx + 1, current_work.bidh, current_work.bidb, current_work.split_idx};
+    }
 
-//     CUTLASS_DEVICE
-//     void
-//     init_consumer() const {}
-
-//     CUTLASS_DEVICE
-//     void
-//     prefetch_next_work(Params const& params, WorkTileInfo& current_work) const {}
-
-//     template<bool IsProducerWarp=false>
-//     CUTLASS_DEVICE
-//     WorkTileInfo
-//     get_next_work(Params const& params, WorkTileInfo const& current_work) const {
-//         return {current_work.tile_idx + int(gridDim.x)};
-//     }
-
-// };
+};
 
 ///////////////////////////////////////////////////////////////////////////////
 
