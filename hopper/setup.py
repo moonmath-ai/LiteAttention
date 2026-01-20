@@ -35,38 +35,38 @@ this_dir = os.path.dirname(os.path.abspath(__file__))
 
 PACKAGE_NAME = "lite_attention"
 
-BASE_WHEEL_URL = "https://github.com/Dao-AILab/flash-attention/releases/download/{tag_name}/{wheel_name}"
+BASE_WHEEL_URL = "https://github.com/moonmath-ai/LiteAttention/releases/download/{tag_name}/{wheel_name}"
 
 # FORCE_BUILD: Force a fresh build locally, instead of attempting to find prebuilt wheels
 # SKIP_CUDA_BUILD: Intended to allow CI to use a simple `python setup.py sdist` run to copy over raw files, without any cuda compilation
-FORCE_BUILD = os.getenv("FLASH_ATTENTION_FORCE_BUILD", "TRUE") == "TRUE"
-SKIP_CUDA_BUILD = os.getenv("FLASH_ATTENTION_SKIP_CUDA_BUILD", "FALSE") == "TRUE"
+FORCE_BUILD = os.getenv("LITE_ATTENTION_FORCE_BUILD", "TRUE") == "TRUE"
+SKIP_CUDA_BUILD = os.getenv("LITE_ATTENTION_SKIP_CUDA_BUILD", "FALSE") == "TRUE"
 # For CI, we want the option to build with C++11 ABI since the nvcr images use C++11 ABI
-FORCE_CXX11_ABI = os.getenv("FLASH_ATTENTION_FORCE_CXX11_ABI", "FALSE") == "TRUE"
+FORCE_CXX11_ABI = os.getenv("LITE_ATTENTION_FORCE_CXX11_ABI", "FALSE") == "TRUE"
 
-DISABLE_BACKWARD = os.getenv("FLASH_ATTENTION_DISABLE_BACKWARD", "TRUE") == "TRUE"
-DISABLE_SPLIT = os.getenv("FLASH_ATTENTION_DISABLE_SPLIT", "TRUE") == "TRUE"
-DISABLE_PAGEDKV = os.getenv("FLASH_ATTENTION_DISABLE_PAGEDKV", "TRUE") == "TRUE"
-DISABLE_APPENDKV = os.getenv("FLASH_ATTENTION_DISABLE_APPENDKV", "TRUE") == "TRUE"
-DISABLE_LOCAL = os.getenv("FLASH_ATTENTION_DISABLE_LOCAL", "TRUE") == "TRUE"
-DISABLE_SOFTCAP = os.getenv("FLASH_ATTENTION_DISABLE_SOFTCAP", "TRUE") == "TRUE"
-DISABLE_PACKGQA = os.getenv("FLASH_ATTENTION_DISABLE_PACKGQA", "TRUE") == "TRUE"
-DISABLE_FP16 = os.getenv("FLASH_ATTENTION_DISABLE_FP16", "TRUE") == "TRUE"
-DISABLE_FP8 = os.getenv("FLASH_ATTENTION_DISABLE_FP8", "TRUE") == "TRUE"
-DISABLE_INT8 = os.getenv("FLASH_ATTENTION_DISABLE_INT8", "FALSE") == "TRUE"
-DISABLE_VARLEN = os.getenv("FLASH_ATTENTION_DISABLE_VARLEN", "TRUE") == "TRUE"
-DISABLE_CLUSTER = os.getenv("FLASH_ATTENTION_DISABLE_CLUSTER", "TRUE") == "TRUE"
-DISABLE_HDIM64 = os.getenv("FLASH_ATTENTION_DISABLE_HDIM64", "FALSE") == "TRUE"
-DISABLE_HDIM96 = os.getenv("FLASH_ATTENTION_DISABLE_HDIM96", "FALSE") == "TRUE"
-DISABLE_HDIM128 = os.getenv("FLASH_ATTENTION_DISABLE_HDIM128", "FALSE") == "TRUE"
-DISABLE_HDIM192 = os.getenv("FLASH_ATTENTION_DISABLE_HDIM192", "FALSE") == "TRUE"
-DISABLE_HDIM256 = os.getenv("FLASH_ATTENTION_DISABLE_HDIM256", "FALSE") == "TRUE"
-DISABLE_SM8x = os.getenv("FLASH_ATTENTION_DISABLE_SM80", "TRUE") == "TRUE"
+DISABLE_BACKWARD = os.getenv("LITE_ATTENTION_DISABLE_BACKWARD", "TRUE") == "TRUE"
+DISABLE_SPLIT = os.getenv("LITE_ATTENTION_DISABLE_SPLIT", "TRUE") == "TRUE"
+DISABLE_PAGEDKV = os.getenv("LITE_ATTENTION_DISABLE_PAGEDKV", "TRUE") == "TRUE"
+DISABLE_APPENDKV = os.getenv("LITE_ATTENTION_DISABLE_APPENDKV", "TRUE") == "TRUE"
+DISABLE_LOCAL = os.getenv("LITE_ATTENTION_DISABLE_LOCAL", "TRUE") == "TRUE"
+DISABLE_SOFTCAP = os.getenv("LITE_ATTENTION_DISABLE_SOFTCAP", "TRUE") == "TRUE"
+DISABLE_PACKGQA = os.getenv("LITE_ATTENTION_DISABLE_PACKGQA", "TRUE") == "TRUE"
+DISABLE_FP16 = os.getenv("LITE_ATTENTION_DISABLE_FP16", "TRUE") == "TRUE"
+DISABLE_FP8 = os.getenv("LITE_ATTENTION_DISABLE_FP8", "TRUE") == "TRUE"
+DISABLE_INT8 = os.getenv("LITE_ATTENTION_DISABLE_INT8", "FALSE") == "TRUE"
+DISABLE_VARLEN = os.getenv("LITE_ATTENTION_DISABLE_VARLEN", "TRUE") == "TRUE"
+DISABLE_CLUSTER = os.getenv("LITE_ATTENTION_DISABLE_CLUSTER", "TRUE") == "TRUE"
+DISABLE_HDIM64 = os.getenv("LITE_ATTENTION_DISABLE_HDIM64", "FALSE") == "TRUE"
+DISABLE_HDIM96 = os.getenv("LITE_ATTENTION_DISABLE_HDIM96", "FALSE") == "TRUE"
+DISABLE_HDIM128 = os.getenv("LITE_ATTENTION_DISABLE_HDIM128", "FALSE") == "TRUE"
+DISABLE_HDIM192 = os.getenv("LITE_ATTENTION_DISABLE_HDIM192", "FALSE") == "TRUE"
+DISABLE_HDIM256 = os.getenv("LITE_ATTENTION_DISABLE_HDIM256", "FALSE") == "TRUE"
+DISABLE_SM8x = os.getenv("LITE_ATTENTION_DISABLE_SM80", "TRUE") == "TRUE"
 
-ENABLE_VCOLMAJOR = os.getenv("FLASH_ATTENTION_ENABLE_VCOLMAJOR", "FALSE") == "TRUE"
+ENABLE_VCOLMAJOR = os.getenv("LITE_ATTENTION_ENABLE_VCOLMAJOR", "FALSE") == "TRUE"
 
-DISABLE_HDIMDIFF64 = os.getenv("FLASH_ATTENTION_DISABLE_HDIMDIFF64", "TRUE") == "TRUE"
-DISABLE_HDIMDIFF192 = os.getenv("FLASH_ATTENTION_DISABLE_HDIMDIFF192", "TRUE") == "TRUE"
+DISABLE_HDIMDIFF64 = os.getenv("LITE_ATTENTION_DISABLE_HDIMDIFF64", "TRUE") == "TRUE"
+DISABLE_HDIMDIFF192 = os.getenv("LITE_ATTENTION_DISABLE_HDIMDIFF192", "TRUE") == "TRUE"
 
 # HACK: we monkey patch pytorch's _write_ninja_file to pass
 # "-gencode arch=compute_sm90a,code=sm_90a" to files ending in '_sm90.cu',
@@ -314,7 +314,7 @@ def is_offline_build() -> bool:
     """
     Downstream projects and distributions which bootstrap their own dependencies from scratch
     and run builds in offline sandboxes
-    may set `FLASH_ATTENTION_OFFLINE_BUILD` in the build environment to prevent any attempts at downloading
+    may set `LITE_ATTENTION_OFFLINE_BUILD` in the build environment to prevent any attempts at downloading
     pinned dependencies from the internet or at using dependencies vendored in-tree.
 
     Dependencies must be defined using respective search paths (cf. `syspath_var_name` in `Package`).
@@ -323,17 +323,17 @@ def is_offline_build() -> bool:
 
     Note that this flag isn't tested by the CI and does not provide any guarantees.
     """
-    return check_env_flag("FLASH_ATTENTION_OFFLINE_BUILD", "")
+    return check_env_flag("LITE_ATTENTION_OFFLINE_BUILD", "")
 
 
 # Copied from https://github.com/triton-lang/triton/blob/main/python/setup.py
-def get_flashattn_cache_path():
-    user_home = os.getenv("FLASH_ATTENTION_HOME")
+def get_liteattention_cache_path():
+    user_home = os.getenv("LITE_ATTENTION_HOME")
     if not user_home:
         user_home = os.getenv("HOME") or os.getenv("USERPROFILE") or os.getenv("HOMEPATH") or None
     if not user_home:
         raise RuntimeError("Could not find user home directory")
-    return os.path.join(user_home, ".flashattn")
+    return os.path.join(user_home, ".liteattention")
 
 
 def open_url(url):
@@ -349,7 +349,7 @@ def open_url(url):
 def download_and_copy(name, src_func, dst_path, version, url_func):
     if is_offline_build():
         return
-    flashattn_cache_path = get_flashattn_cache_path()
+    liteattention_cache_path = get_liteattention_cache_path()
     base_dir = os.path.dirname(__file__)
     system = platform.system()
     arch = platform.machine()
@@ -357,7 +357,7 @@ def download_and_copy(name, src_func, dst_path, version, url_func):
     supported = {"Linux": "linux", "Darwin": "linux"}
     url = url_func(supported[system], arch, version)
     src_path = src_func(supported[system], arch, version)
-    tmp_path = os.path.join(flashattn_cache_path, "nvidia", name)  # path to cache the download
+    tmp_path = os.path.join(liteattention_cache_path, "nvidia", name)  # path to cache the download
     dst_path = os.path.join(base_dir, os.pardir, "third_party", "nvidia", "backend", dst_path)  # final binary path
     src_path = os.path.join(tmp_path, src_path)
     download = not os.path.exists(src_path)
@@ -575,11 +575,11 @@ if not SKIP_CUDA_BUILD:
             name=f"lite_attention._C",
             sources=sources,
             extra_compile_args={
-                "cxx": ["-O3", "-std=c++17", "-DPy_LIMITED_API=0x03090000"] + feature_args,
+                "cxx": ["-O3", "-std=c++17"] + feature_args,
                 "nvcc": nvcc_threads_args() + nvcc_flags + cc_flag + feature_args,
             },
             include_dirs=include_dirs,
-            py_limited_api=True,
+            py_limited_api=False,
         )
     )
 
@@ -588,7 +588,7 @@ def get_package_version():
     with open(Path(this_dir) / "__init__.py", "r") as f:
         version_match = re.search(r"^__version__\s*=\s*(.*)$", f.read(), re.MULTILINE)
     public_version = ast.literal_eval(version_match.group(1))
-    local_version = os.environ.get("FLASH_ATTN_LOCAL_VERSION")
+    local_version = os.environ.get("LITE_ATTENTION_LOCAL_VERSION")
     if local_version:
         return f"{public_version}+{local_version}"
     else:
@@ -678,5 +678,4 @@ setup(
         "packaging",
         "ninja",
     ],
-    options={"bdist_wheel": {"py_limited_api": "cp39"}},
 )
