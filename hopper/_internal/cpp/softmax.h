@@ -138,6 +138,16 @@ namespace flash
 #pragma unroll
         for (int mi = 0; mi < size<0>(tensor); mi++)
         {
+            // For uneven (odd) rows, add magic_int32 to each element before taking max
+            // Also update the tensor values in place
+            if (mi % 2 != 0) {
+#pragma unroll
+                for (int ni = 0; ni < size<1>(tensor); ni++)
+                {
+                    tensor(mi, ni) = tensor(mi, ni) + magic_int32;
+                }
+            }
+            
             // Split columns between max_converted and max_converted_temp for parallelization
             max_converted(mi) = tensor(mi, 0);
             max_converted_temp(mi) = tensor(mi, 0);
@@ -160,7 +170,13 @@ namespace flash
 #pragma unroll
         for (int mi = 0; mi < size(max); mi++)
         {
-            const float value = max_converted(mi) * dequan_s;
+            // const float value = max_converted(mi) * dequan_s;
+            float value;
+            if (mi % 2 == 0){
+                value = max_converted(mi) * dequan_s;
+            }else{
+                value = (max_converted(mi) - magic_int32) * dequan_s;
+            }
             if constexpr (zero_init) {
                 max(mi) = value;
             } else {
@@ -250,11 +266,12 @@ namespace flash
             }else{
                 max_value = (!Scale_max ? max(mi) : max(mi)) - max_offset;
             }
-            if (mi % 2 == 0){
-                return dequan_s * magic_float + max_value;
-            }else{
-                return max_value;
-            }
+            // if (mi % 2 == 0){
+            //     return dequan_s * magic_float + max_value;
+            // }else{
+            //     return max_value;
+            // }
+            return dequan_s * magic_float + max_value;
         };
         
         // Helper lambda to process a single element
