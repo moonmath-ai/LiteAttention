@@ -127,83 +127,44 @@ namespace flash
     template <bool const zero_init = true, typename Engine0, typename Layout0, typename Engine1, typename Layout1>
     __device__ __forceinline__ void reduce_max_dequantize(Tensor<Engine0, Layout0> &tensor, Tensor<Engine1, Layout1> &max, float const dequan_s)
     {
-        // Half of the rows do max on int's and the other half do max on float's
-        // This overlaps the conversion with the max finding and avoids register pressure
+        // Do all max operations on ints, then dequantize to float at the end
         MaxOp<int32_t> max_op_int;
         MaxOp<float> max_op_float;
         Tensor max_converted = make_tensor_like<int32_t>(max);
-        Tensor max_float = make_tensor_like<float>(max);
         Tensor max_converted_temp = make_tensor_like<int32_t>(max);
-        Tensor max_float_temp = make_tensor_like<float>(max);
         
-        // Convert odd rows (mi % 2 == 1) from int to float in-place
-        // and do max on floats for those rows
-        // Even rows (mi % 2 == 0) do max on ints
+        // Do max on ints for all rows
         // Use temp tensors to parallelize column processing
 #pragma unroll
         for (int mi = 0; mi < size<0>(tensor); mi++)
         {
-            if (mi % 2 == 1) {
-                // Odd rows: convert int to float in-place and do max on floats
-                // Split columns between max_float and max_float_temp for parallelization
-                float float_val = static_cast<float>(tensor(mi, 0));
-                tensor(mi, 0) = reinterpret_bits_as_int32(float_val);
-                max_float(mi) = float_val;
-                max_float_temp(mi) = float_val;
+            // Split columns between max_converted and max_converted_temp for parallelization
+            max_converted(mi) = tensor(mi, 0);
+            max_converted_temp(mi) = tensor(mi, 0);
 #pragma unroll
-                for (int ni = 1; ni < size<1>(tensor); ni++)
-                {
-                    float_val = static_cast<float>(tensor(mi, ni));
-                    tensor(mi, ni) = reinterpret_bits_as_int32(float_val);
-                    if (ni % 2 == 0) {
-                        max_float(mi) = max_op_float(max_float(mi), float_val);
-                    } else {
-                        max_float_temp(mi) = max_op_float(max_float_temp(mi), float_val);
-                    }
+            for (int ni = 1; ni < size<1>(tensor); ni++)
+            {
+                if (ni % 2 == 0) {
+                    max_converted(mi) = max_op_int(max_converted(mi), tensor(mi, ni));
+                } else {
+                    max_converted_temp(mi) = max_op_int(max_converted_temp(mi), tensor(mi, ni));
                 }
-                max_float(mi) = max_op_float(max_float(mi), max_float_temp(mi));
-            } else {
-                // Even rows: do max on ints (original behavior)
-                // Split columns between max_converted and max_converted_temp for parallelization
-                max_converted(mi) = tensor(mi, 0);
-                max_converted_temp(mi) = tensor(mi, 0);
-#pragma unroll
-                for (int ni = 1; ni < size<1>(tensor); ni++)
-                {
-                    if (ni % 2 == 0) {
-                        max_converted(mi) = max_op_int(max_converted(mi), tensor(mi, ni));
-                    } else {
-                        max_converted_temp(mi) = max_op_int(max_converted_temp(mi), tensor(mi, ni));
-                    }
-                }
-                max_converted(mi) = max_op_int(max_converted(mi), max_converted_temp(mi));
             }
+            max_converted(mi) = max_op_int(max_converted(mi), max_converted_temp(mi));
         }
         
         // Reduce across threads
         quad_allreduce_(max_converted, max_converted, max_op_int);
-        quad_allreduce_(max_float, max_float, max_op_float);
         
-        // Dequantize: for even rows use int max, for odd rows use float max
+        // Dequantize: convert int max to float and multiply by dequan_s
 #pragma unroll
         for (int mi = 0; mi < size(max); mi++)
         {
-            if (mi % 2 == 0) {
-                // Even rows: dequantize int max
-                const float value = max_converted(mi) * dequan_s;
-                if constexpr (zero_init) {
-                    max(mi) = value;
-                } else {
-                    max(mi) = max_op_float(max(mi), value);
-                }
+            const float value = max_converted(mi) * dequan_s;
+            if constexpr (zero_init) {
+                max(mi) = value;
             } else {
-                // Odd rows: max is already a float, just multiply by dequan_s
-                const float value = max_float(mi) * dequan_s;
-                if constexpr (zero_init) {
-                    max(mi) = value;
-                } else {
-                    max(mi) = max_op_float(max(mi), value);
-                }
+                max(mi) = max_op_float(max(mi), value);
             }
         }
     }
