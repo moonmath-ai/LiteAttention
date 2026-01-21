@@ -26,15 +26,24 @@ namespace flash
         static_assert(Layout0::rank == 2, "Only support 2D Tensor");
         static_assert(Layout1::rank == 1, "Only support 1D Tensor");
         CUTE_STATIC_ASSERT_V(size<0>(summary) == size<0>(tensor));
-        
+
+        Tensor temp = make_tensor_like(summary);
+
         // Helper lambda to reduce code duplication
-        auto reduce_element = [&](int mi, int ni){
+        auto reduce_element = [&](int mi, int ni, Tensor<Engine1, Layout1> &result){
             if constexpr (zero_init){
-                summary(mi) = ni == 0 ? tensor(mi, ni) : op(summary(mi), tensor(mi, ni));
+                result(mi) = ni == 0 ? tensor(mi, ni) : op(result(mi), tensor(mi, ni));
             }else{
-                summary(mi) = op(summary(mi), tensor(mi, ni));
+                result(mi) = op(result(mi), tensor(mi, ni));
             }
-            // summary(mi) = zero_init && ni == 0 ? tensor(mi, ni) : op(summary(mi), tensor(mi, ni));
+        };
+
+        auto reduce_element_parallel = [&](int mi, int ni){
+            if (ni % 2 == 0){
+                reduce_element(mi, ni, summary);
+            }else{
+                reduce_element(mi, ni, temp);
+            }
         };
         
         if constexpr (outer_loop_is_rows) {
@@ -45,8 +54,10 @@ namespace flash
 #pragma unroll
                 for (int ni = 0; ni < size<1>(tensor); ni++)
                 {
-                    reduce_element(mi, ni);
+                    // reduce_element(mi, ni);
+                    reduce_element_parallel(mi, ni);
                 }
+                summary(mi) = op(summary(mi), temp(mi));
             }
         } else {
             // Outer loop: columns (ni), Inner loop: rows (mi) - original order
@@ -56,8 +67,13 @@ namespace flash
 #pragma unroll
                 for (int mi = 0; mi < size<0>(tensor); mi++)
                 {
-                    reduce_element(mi, ni);
+                    // reduce_element(mi, ni);
+                    reduce_element_parallel(mi, ni);
                 }
+            }
+#pragma unroll
+            for (int mi = 0; mi < size<0>(tensor); mi++){
+                summary(mi) = op(summary(mi), temp(mi));
             }
         }
     }
@@ -117,35 +133,50 @@ namespace flash
         MaxOp<float> max_op_float;
         Tensor max_converted = make_tensor_like<int32_t>(max);
         Tensor max_float = make_tensor_like<float>(max);
+        Tensor max_converted_temp = make_tensor_like<int32_t>(max);
+        Tensor max_float_temp = make_tensor_like<float>(max);
         
         // Convert odd rows (mi % 2 == 1) from int to float in-place
         // and do max on floats for those rows
         // Even rows (mi % 2 == 0) do max on ints
+        // Use temp tensors to parallelize column processing
 #pragma unroll
         for (int mi = 0; mi < size<0>(tensor); mi++)
         {
             if (mi % 2 == 1) {
                 // Odd rows: convert int to float in-place and do max on floats
+                // Split columns between max_float and max_float_temp for parallelization
                 float float_val = static_cast<float>(tensor(mi, 0));
                 tensor(mi, 0) = reinterpret_bits_as_int32(float_val);
-                float row_max_float = float_val;
+                max_float(mi) = float_val;
+                max_float_temp(mi) = float_val;
 #pragma unroll
                 for (int ni = 1; ni < size<1>(tensor); ni++)
                 {
                     float_val = static_cast<float>(tensor(mi, ni));
                     tensor(mi, ni) = reinterpret_bits_as_int32(float_val);
-                    row_max_float = max_op_float(row_max_float, float_val);
+                    if (ni % 2 == 0) {
+                        max_float(mi) = max_op_float(max_float(mi), float_val);
+                    } else {
+                        max_float_temp(mi) = max_op_float(max_float_temp(mi), float_val);
+                    }
                 }
-                max_float(mi) = row_max_float;
+                max_float(mi) = max_op_float(max_float(mi), max_float_temp(mi));
             } else {
                 // Even rows: do max on ints (original behavior)
-                int32_t row_max_int = tensor(mi, 0);
+                // Split columns between max_converted and max_converted_temp for parallelization
+                max_converted(mi) = tensor(mi, 0);
+                max_converted_temp(mi) = tensor(mi, 0);
 #pragma unroll
                 for (int ni = 1; ni < size<1>(tensor); ni++)
                 {
-                    row_max_int = max_op_int(row_max_int, tensor(mi, ni));
+                    if (ni % 2 == 0) {
+                        max_converted(mi) = max_op_int(max_converted(mi), tensor(mi, ni));
+                    } else {
+                        max_converted_temp(mi) = max_op_int(max_converted_temp(mi), tensor(mi, ni));
+                    }
                 }
-                max_converted(mi) = row_max_int;
+                max_converted(mi) = max_op_int(max_converted(mi), max_converted_temp(mi));
             }
         }
         
