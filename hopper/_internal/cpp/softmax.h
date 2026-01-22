@@ -20,7 +20,7 @@ namespace flash
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-    template <bool const zero_init = true, bool const outer_loop_is_rows = false, typename Engine0, typename Layout0, typename Engine1, typename Layout1, typename Operator>
+    template <bool const zero_init = true, bool const outer_loop_is_rows = false, bool const use_temp = false, typename Engine0, typename Layout0, typename Engine1, typename Layout1, typename Operator>
     __device__ __forceinline__ void thread_reduce_(Tensor<Engine0, Layout0> &tensor, Tensor<Engine1, Layout1> &summary, Operator &op)
     {
         static_assert(Layout0::rank == 2, "Only support 2D Tensor");
@@ -32,17 +32,25 @@ namespace flash
         // Helper lambda to reduce code duplication
         auto reduce_element = [&](int mi, int ni, Tensor<Engine1, Layout1> &result){
             if constexpr (zero_init){
-                result(mi) = ni == 0 ? tensor(mi, ni) : op(result(mi), tensor(mi, ni));
+                if constexpr (use_temp){
+                    result(mi) = ((ni / 2) == 0) ? tensor(mi, ni) : op(result(mi), tensor(mi, ni));
+                }else{
+                    result(mi) = ni == 0 ? tensor(mi, ni) : op(result(mi), tensor(mi, ni));
+                }
             }else{
                 result(mi) = op(result(mi), tensor(mi, ni));
             }
         };
 
         auto reduce_element_parallel = [&](int mi, int ni){
-            if (ni % 2 == 0){
-                reduce_element(mi, ni, summary);
+            if constexpr (use_temp) {
+                if (ni % 2 == 0){
+                    reduce_element(mi, ni, summary);
+                }else{
+                    reduce_element(mi, ni, temp);
+                }
             }else{
-                reduce_element(mi, ni, temp);
+                reduce_element(mi, ni, summary);
             }
         };
         
@@ -57,7 +65,9 @@ namespace flash
                     // reduce_element(mi, ni);
                     reduce_element_parallel(mi, ni);
                 }
-                summary(mi) = op(summary(mi), temp(mi));
+                if constexpr (use_temp) {
+                    summary(mi) = op(summary(mi), temp(mi));
+                }
             }
         } else {
             // Outer loop: columns (ni), Inner loop: rows (mi) - original order
@@ -71,30 +81,11 @@ namespace flash
                     reduce_element_parallel(mi, ni);
                 }
             }
+            if constexpr (use_temp) {
 #pragma unroll
-            for (int mi = 0; mi < size<0>(tensor); mi++){
-                summary(mi) = op(summary(mi), temp(mi));
-            }
-        }
-    }
-
-    // Dequantize a 1D tensor (e.g., after reduction) to another 1D tensor with optional max operation
-    template <bool const zero_init = true, typename Engine0, typename Layout0, typename Engine1, typename Layout1>
-    __device__ __forceinline__ void dequantize_max_1d_(Tensor<Engine0, Layout0> &src, Tensor<Engine1, Layout1> &dst, float const dequan_s)
-    {
-        MaxOp<float> op;
-        static_assert(Layout0::rank == 1, "Only support 1D Tensor for source");
-        static_assert(Layout1::rank == 1, "Only support 1D Tensor for destination");
-        CUTE_STATIC_ASSERT_V(size(src) == size(dst));
-#pragma unroll
-        for (int mi = 0; mi < size(src); mi++)
-        {
-            const float value = src(mi) * dequan_s;
-            // const float value = (src(mi) - magic_int32) * dequan_s;
-            if constexpr (zero_init){
-                dst(mi) = value;
-            }else{
-                dst(mi) = op(dst(mi), value);
+                for (int mi = 0; mi < size<0>(tensor); mi++){
+                    summary(mi) = op(summary(mi), temp(mi));
+                }
             }
         }
     }
@@ -124,7 +115,7 @@ namespace flash
         reduce_<zero_init>(tensor, max, max_op);
     }
 
-    template <bool const zero_init = true, typename Engine0, typename Layout0, typename Engine1, typename Layout1>
+    template <bool const zero_init = true, bool const use_temp = true, typename Engine0, typename Layout0, typename Engine1, typename Layout1>
     __device__ __forceinline__ void reduce_max_dequantize(Tensor<Engine0, Layout0> &tensor, Tensor<Engine1, Layout1> &max, float const dequan_s)
     {
         // Do all max operations on ints, then dequantize to float at the end
@@ -140,7 +131,7 @@ namespace flash
         {
             // For uneven (odd) rows, add magic_int32 to each element before taking max
             // Also update the tensor values in place
-            if (mi % 2 != 0) {
+            if (mi % 2 == 2) {
 #pragma unroll
                 for (int ni = 0; ni < size<1>(tensor); ni++)
                 {
@@ -148,19 +139,29 @@ namespace flash
                 }
             }
             
-            // Split columns between max_converted and max_converted_temp for parallelization
-            max_converted(mi) = tensor(mi, 0);
-            max_converted_temp(mi) = tensor(mi, 0);
+            if constexpr (use_temp) {
+                // Split columns between max_converted and max_converted_temp for parallelization
+                max_converted(mi) = tensor(mi, 0);
+                max_converted_temp(mi) = tensor(mi, 1);
 #pragma unroll
-            for (int ni = 1; ni < size<1>(tensor); ni++)
-            {
-                if (ni % 2 == 0) {
+                for (int ni = 2; ni < size<1>(tensor); ni++)
+                {
+                    if (ni % 2 == 0) {
+                        max_converted(mi) = max_op_int(max_converted(mi), tensor(mi, ni));
+                    } else {
+                        max_converted_temp(mi) = max_op_int(max_converted_temp(mi), tensor(mi, ni));
+                    }
+                }
+                max_converted(mi) = max_op_int(max_converted(mi), max_converted_temp(mi));
+            } else {
+                // Direct reduction into max_converted without parallelization
+                max_converted(mi) = tensor(mi, 0);
+#pragma unroll
+                for (int ni = 1; ni < size<1>(tensor); ni++)
+                {
                     max_converted(mi) = max_op_int(max_converted(mi), tensor(mi, ni));
-                } else {
-                    max_converted_temp(mi) = max_op_int(max_converted_temp(mi), tensor(mi, ni));
                 }
             }
-            max_converted(mi) = max_op_int(max_converted(mi), max_converted_temp(mi));
         }
         
         // Reduce across threads
@@ -172,7 +173,7 @@ namespace flash
         {
             // const float value = max_converted(mi) * dequan_s;
             float value;
-            if (mi % 2 == 0){
+            if (mi % 2 != 2){
                 value = max_converted(mi) * dequan_s;
             }else{
                 value = (max_converted(mi) - magic_int32) * dequan_s;
@@ -197,7 +198,7 @@ namespace flash
     }
 
     // Apply the exp to all the elements.
-    template <bool const Scale_max = true, bool const Check_inf = true, int const Max_offset = 0,
+    template <bool const Scale_max = true, bool const Check_inf = true, int const Max_offset = 0, bool const outer_loop_is_rows = true,
               typename Engine0, typename Layout0, typename Engine1, typename Layout1>
     __forceinline__ __device__ void scale_apply_exp2(Tensor<Engine0, Layout0> &tensor, Tensor<Engine1, Layout1> const &max, const float scale)
     {
@@ -207,33 +208,61 @@ namespace flash
         static_assert(Layout0::rank == 2, "Only support 2D Tensor");
         static_assert(Layout1::rank == 1, "Only support 1D Tensor");
         CUTE_STATIC_ASSERT_V(size<0>(max) == size<0>(tensor));
-#pragma unroll
-        for (int mi = 0; mi < size<0>(tensor); ++mi)
-        {
-            // If max is -inf, then all elements must have been -inf (possibly due to masking).
-            // We don't want (-inf - (-inf)) since that would give NaN.
-            // const float max_scaled = Check_inf
-            //                              ? (max(mi) == -INFINITY ? 0.f : (!Scale_max ? max(mi) : max(mi) * scale) - max_offset)
-            //                              : (!Scale_max ? max(mi) : max(mi) * scale) - max_offset;
-            if constexpr (Check_inf){
-                const float max_scaled = max(mi) == -INFINITY ? 0.f : (!Scale_max ? max(mi) : max(mi) * scale) - max_offset;
+        if constexpr (outer_loop_is_rows) {
     #pragma unroll
-                for (int ni = 0; ni < size<1>(tensor); ++ni)
-                {
-                    // Instead of computing exp(x - max), we compute exp2(x * log_2(e) -
-                    // max * log_2(e)). This allows the compiler to use the ffma
-                    // instruction instead of fadd and fmul separately.
-                    tensor(mi, ni) = exp2f(tensor(mi, ni) * scale - max_scaled);
+            for (int mi = 0; mi < size<0>(tensor); ++mi)
+            {
+                // If max is -inf, then all elements must have been -inf (possibly due to masking).
+                // We don't want (-inf - (-inf)) since that would give NaN.
+                // const float max_scaled = Check_inf
+                //                              ? (max(mi) == -INFINITY ? 0.f : (!Scale_max ? max(mi) : max(mi) * scale) - max_offset)
+                //                              : (!Scale_max ? max(mi) : max(mi) * scale) - max_offset;
+                if constexpr (Check_inf){
+                    const float max_scaled = max(mi) == -INFINITY ? 0.f : (!Scale_max ? max(mi) : max(mi) * scale) - max_offset;
+        #pragma unroll
+                    for (int ni = 0; ni < size<1>(tensor); ++ni)
+                    {
+                        // Instead of computing exp(x - max), we compute exp2(x * log_2(e) -
+                        // max * log_2(e)). This allows the compiler to use the ffma
+                        // instruction instead of fadd and fmul separately.
+                        tensor(mi, ni) = exp2f(tensor(mi, ni) * scale - max_scaled);
+                    }
+                }else{
+                    const float max_scaled = (!Scale_max ? max(mi) : max(mi) * scale) - max_offset;
+        #pragma unroll
+                    for (int ni = 0; ni < size<1>(tensor); ++ni)
+                    {
+                        // Instead of computing exp(x - max), we compute exp2(x * log_2(e) -
+                        // max * log_2(e)). This allows the compiler to use the ffma
+                        // instruction instead of fadd and fmul separately.
+                        tensor(mi, ni) = exp2f(tensor(mi, ni) * scale - max_scaled);
+                    }
                 }
-            }else{
-                const float max_scaled = (!Scale_max ? max(mi) : max(mi) * scale) - max_offset;
+            }
+        }
+        else {
+            // Outer loop: columns (ni), Inner loop: rows (mi)
     #pragma unroll
-                for (int ni = 0; ni < size<1>(tensor); ++ni)
+            for (int ni = 0; ni < size<1>(tensor); ++ni)
+            {
+    #pragma unroll
+                for (int mi = 0; mi < size<0>(tensor); ++mi)
                 {
-                    // Instead of computing exp(x - max), we compute exp2(x * log_2(e) -
-                    // max * log_2(e)). This allows the compiler to use the ffma
-                    // instruction instead of fadd and fmul separately.
-                    tensor(mi, ni) = exp2f(tensor(mi, ni) * scale - max_scaled);
+                    // If max is -inf, then all elements must have been -inf (possibly due to masking).
+                    // We don't want (-inf - (-inf)) since that would give NaN.
+                    if constexpr (Check_inf){
+                        const float max_scaled = max(mi) == -INFINITY ? 0.f : (!Scale_max ? max(mi) : max(mi) * scale) - max_offset;
+                        // Instead of computing exp(x - max), we compute exp2(x * log_2(e) -
+                        // max * log_2(e)). This allows the compiler to use the ffma
+                        // instruction instead of fadd and fmul separately.
+                        tensor(mi, ni) = exp2f(tensor(mi, ni) * scale - max_scaled);
+                    }else{
+                        const float max_scaled = (!Scale_max ? max(mi) : max(mi) * scale) - max_offset;
+                        // Instead of computing exp(x - max), we compute exp2(x * log_2(e) -
+                        // max * log_2(e)). This allows the compiler to use the ffma
+                        // instruction instead of fadd and fmul separately.
+                        tensor(mi, ni) = exp2f(tensor(mi, ni) * scale - max_scaled);
+                    }
                 }
             }
         }
@@ -281,7 +310,7 @@ namespace flash
             // const float dequantized_value = tensor(mi, ni) * dequan_s - max_scaled;
 
             float dequantized_value;
-            if (mi % 2 == 0){
+            if (mi % 2 != 2){
                 union { float f; int32_t i; } result_union;
                 result_union.i = tensor(mi, ni) + magic_int32;
 
