@@ -115,7 +115,7 @@ namespace flash
         reduce_<zero_init>(tensor, max, max_op);
     }
 
-    template <bool const zero_init = true, bool const use_temp = true, typename Engine0, typename Layout0, typename Engine1, typename Layout1>
+    template <bool const zero_init = true, bool const use_temp = false, typename Engine0, typename Layout0, typename Engine1, typename Layout1>
     __device__ __forceinline__ void reduce_max_dequantize(Tensor<Engine0, Layout0> &tensor, Tensor<Engine1, Layout1> &max, float const dequan_s)
     {
         // Do all max operations on ints, then dequantize to float at the end
@@ -123,6 +123,8 @@ namespace flash
         MaxOp<float> max_op_float;
         Tensor max_converted = make_tensor_like<int32_t>(max);
         Tensor max_converted_temp = make_tensor_like<int32_t>(max);
+
+        // Tensor max_float = make_tensor_like<float>(max);
         
         // Do max on ints for all rows
         // Use temp tensors to parallelize column processing
@@ -162,10 +164,12 @@ namespace flash
                     max_converted(mi) = max_op_int(max_converted(mi), tensor(mi, ni));
                 }
             }
+            // max(mi) = max_op_float(max(mi), max_converted(mi) * dequan_s);
         }
         
         // Reduce across threads
         quad_allreduce_(max_converted, max_converted, max_op_int);
+        // quad_allreduce_(max, max, max_op_float);
         
         // Dequantize: convert int max to float and multiply by dequan_s
 #pragma unroll
@@ -295,12 +299,12 @@ namespace flash
             }else{
                 max_value = (!Scale_max ? max(mi) : max(mi)) - max_offset;
             }
-            // if (mi % 2 == 0){
-            //     return dequan_s * magic_float + max_value;
-            // }else{
-            //     return max_value;
-            // }
-            return dequan_s * magic_float + max_value;
+            if (mi % 2 == 1){
+                return dequan_s * magic_float + max_value;
+            }else{
+                return max_value;
+            }
+            // return dequan_s * magic_float + max_value;
         };
         
         // Helper lambda to process a single element
@@ -310,7 +314,7 @@ namespace flash
             // const float dequantized_value = tensor(mi, ni) * dequan_s - max_scaled;
 
             float dequantized_value;
-            if (mi % 2 != 2){
+            if (mi % 2 == 1){
                 union { float f; int32_t i; } result_union;
                 result_union.i = tensor(mi, ni) + magic_int32;
 
@@ -320,7 +324,8 @@ namespace flash
                 // Odd rows: tensor already contains float bits from in-place conversion, just reinterpret as float
                 union { float f; int32_t i; } result_union;
                 result_union.i = tensor(mi, ni);
-                dequantized_value = result_union.f * dequan_s - max_scaled;
+                // dequantized_value = result_union.f * dequan_s - max_scaled;
+                dequantized_value = result_union.i * dequan_s - max_scaled;
             }
             tensor_dequantized(mi, ni) = exp2f(dequantized_value);
         };
