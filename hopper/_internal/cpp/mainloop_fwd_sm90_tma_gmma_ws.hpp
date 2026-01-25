@@ -1649,11 +1649,12 @@ namespace flash
                     //     fill_vectorized_128bit(tSrS_ambiguous_type);
                     // }
                     // if constexpr (!UseSchedulerBarrier || warp_group_idx == 0)
+                    warp_scheduler_barrier_sync();
                     if(!UseSchedulerBarrier || warp_group_idx == 0){
                         consumer_wait(pipeline_k, smem_pipe_read);
                     }
 
-                    warp_scheduler_barrier_sync();
+                    // warp_scheduler_barrier_sync();
                     // int new_n_block = n_block;
                     int new_n_block;
                     if constexpr (Is_skipable){
@@ -1705,6 +1706,13 @@ namespace flash
                         scoremod_premask_fn(tSrS_ambiguous_type);
                     }
                     mask_fn(tSrS_ambiguous_type, new_n_block);
+
+                    if constexpr (!HasQv)
+                    {
+                        warpgroup_wait<0>();
+                        pipeline_v.consumer_release(smem_pipe_read_v); // release V
+                    }
+
                     if constexpr (Is_skipable){
                         cute::copy(
                             softmax.template max_get_scale_detect_qk_skip<kBlockM, TiledMmaQK, /*Is_first=*/false, Check_inf>(
@@ -1725,11 +1733,11 @@ namespace flash
                     } else {
                         softmax.template online_softmax_dequantize</*Is_first=*/false, Check_inf>(tSrS_ambiguous_type, tSrS);
                     }
-                    if constexpr (!HasQv)
-                    {
-                        warpgroup_wait<0>();
-                        pipeline_v.consumer_release(smem_pipe_read_v); // release V
-                    }
+                    // if constexpr (!HasQv)
+                    // {
+                    //     warpgroup_wait<0>();
+                    //     pipeline_v.consumer_release(smem_pipe_read_v); // release V
+                    // }
                     if constexpr (Is_FP8 && !V_colmajor)
                     {
                         flash::permute_Cregs_fp8(tSrS);
