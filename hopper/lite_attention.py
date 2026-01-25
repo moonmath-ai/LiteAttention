@@ -814,7 +814,7 @@ class LiteAttention:
         Changing the threshold does not reset the skip list state. The new threshold
         will be applied starting from the next forward pass.
         """
-        if threshold >= 0 and os.getenv("LITE_ATTENTION_DEBUG", "FALSE") == "FALSE":
+        if torch.any(threshold >= 0) and os.getenv("LITE_ATTENTION_DEBUG", "FALSE") == "FALSE":
             raise ValueError("threshold must be negative when debug mode is not enabled")
 
         self.threshold = threshold
