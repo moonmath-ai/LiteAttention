@@ -62,50 +62,54 @@ namespace flash
         }
     }
 
-    // Working space is a raw array in shared memory - 32 contiguous floats per warp
-    // Pointer is aligned to warp boundary (thread_idx & ~31) and broadcast across warp via shuffle
-    // Template on ElementType to support both float (default) and int32_t (via reinterpret_cast)
-    template<typename T, typename Operator, typename ElementType>
-    __device__ __forceinline__ T reduce4(T x, Operator &op, ElementType* __restrict__ working_space) {
-        int lane = threadIdx.x % 32;
-        working_space[lane] = x;
-        // lane = lane & ~3;
-        __syncwarp();
-        #pragma unroll
-        for (int i = 1; i < 4; i++) {
-            x = op(x, working_space[lane ^ i]);
+    // Dequantize a 1D tensor (e.g., after reduction) to another 1D tensor with optional max operation
+    template <bool const zero_init = true, typename Engine0, typename Layout0, typename Engine1, typename Layout1>
+    __device__ __forceinline__ void dequantize_max_1d_(Tensor<Engine0, Layout0> &src, Tensor<Engine1, Layout1> &dst, float const dequan_s)
+    {
+        MaxOp<float> op;
+        static_assert(Layout0::rank == 1, "Only support 1D Tensor for source");
+        static_assert(Layout1::rank == 1, "Only support 1D Tensor for destination");
+        CUTE_STATIC_ASSERT_V(size(src) == size(dst));
+#pragma unroll
+        for (int mi = 0; mi < size(src); mi++)
+        {
+            const float value = src(mi) * dequan_s;
+            // const float value = (src(mi) - magic_int32) * dequan_s;
+            if constexpr (zero_init){
+                dst(mi) = value;
+            }else{
+                dst(mi) = op(dst(mi), value);
+            }
         }
-        return x;
     }
 
-    template <typename Engine0, typename Layout0, typename Engine1, typename Layout1, typename Operator, typename ElementType>
-    __device__ __forceinline__ void quad_allreduce_(Tensor<Engine0, Layout0> &dst, Tensor<Engine1, Layout1> &src, Operator &op, ElementType* __restrict__ working_space)
+    template <typename Engine0, typename Layout0, typename Engine1, typename Layout1, typename Operator>
+    __device__ __forceinline__ void quad_allreduce_(Tensor<Engine0, Layout0> &dst, Tensor<Engine1, Layout1> &src, Operator &op)
     {
         CUTE_STATIC_ASSERT_V(size(dst) == size(src));
 #pragma unroll
         for (int i = 0; i < size(dst); i++)
         {
-            // dst(i) = Allreduce<4>::run(src(i), op);
-            dst(i) = reduce4(src(i), op, working_space);
+            dst(i) = Allreduce<4>::run(src(i), op);
         }
     }
 
     template <bool zero_init = true, typename Engine0, typename Layout0, typename Engine1, typename Layout1, typename Operator>
-    __device__ __forceinline__ void reduce_(Tensor<Engine0, Layout0> &tensor, Tensor<Engine1, Layout1> &summary, Operator &op, float* __restrict__ working_space)
+    __device__ __forceinline__ void reduce_(Tensor<Engine0, Layout0> &tensor, Tensor<Engine1, Layout1> &summary, Operator &op)
     {
         thread_reduce_<zero_init>(tensor, summary, op);
-        quad_allreduce_(summary, summary, op, working_space);
+        quad_allreduce_(summary, summary, op);
     }
 
     template <bool const zero_init = true, typename Engine0, typename Layout0, typename Engine1, typename Layout1>
-    __device__ __forceinline__ void reduce_max(Tensor<Engine0, Layout0> &tensor, Tensor<Engine1, Layout1> &max, float* __restrict__ working_space)
+    __device__ __forceinline__ void reduce_max(Tensor<Engine0, Layout0> &tensor, Tensor<Engine1, Layout1> &max)
     {
         MaxOp<float> max_op;
-        reduce_<zero_init>(tensor, max, max_op, working_space);
+        reduce_<zero_init>(tensor, max, max_op);
     }
 
     template <bool const zero_init = true, typename Engine0, typename Layout0, typename Engine1, typename Layout1>
-    __device__ __forceinline__ void reduce_max_dequantize(Tensor<Engine0, Layout0> &tensor, Tensor<Engine1, Layout1> &max, float const dequan_s, float* __restrict__ working_space)
+    __device__ __forceinline__ void reduce_max_dequantize(Tensor<Engine0, Layout0> &tensor, Tensor<Engine1, Layout1> &max, float const dequan_s)
     {
         // Half of the rows do max on int's and the other half do max on float's
         // This overlaps the conversion with the max finding and avoids register pressure
@@ -145,10 +149,9 @@ namespace flash
             }
         }
         
-        // Reduce across threads - reinterpret working_space as int32_t for int reductions
-        int32_t* __restrict__ working_space_int = reinterpret_cast<int32_t*>(working_space);
-        quad_allreduce_(max_converted, max_converted, max_op_int, working_space_int);
-        quad_allreduce_(max_float, max_float, max_op_float, working_space);
+        // Reduce across threads
+        quad_allreduce_(max_converted, max_converted, max_op_int);
+        quad_allreduce_(max_float, max_float, max_op_float);
         
         // Dequantize: for even rows use int max, for odd rows use float max
 #pragma unroll
@@ -175,13 +178,13 @@ namespace flash
     }
 
     template <bool const zero_init = true, bool warp_reduce = true, typename Engine0, typename Layout0, typename Engine1, typename Layout1>
-    __device__ __forceinline__ void reduce_sum(Tensor<Engine0, Layout0> &tensor, Tensor<Engine1, Layout1> &sum, float* __restrict__ working_space)
+    __device__ __forceinline__ void reduce_sum(Tensor<Engine0, Layout0> &tensor, Tensor<Engine1, Layout1> &sum)
     {
         SumOp<float> sum_op;
         thread_reduce_<zero_init>(tensor, sum, sum_op);
         if constexpr (warp_reduce)
         {
-            quad_allreduce_(sum, sum, sum_op, working_space);
+            quad_allreduce_(sum, sum, sum_op);
         }
     }
 
@@ -313,7 +316,7 @@ namespace flash
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-    template <int kNRows, int Max_offset = 0, const bool Is_INT8 = false, int NumMmaThreads = 256>
+    template <int kNRows, int Max_offset = 0, const bool Is_INT8 = false>
     struct Softmax
     {
 
@@ -331,43 +334,9 @@ namespace flash
         // float const dequan_q;
         float dequan_s;
 
-        // // warpSize / threads_per_row = 32 / 4 = 8
-        // // using RowMaxsLayout = Layout<Shape<Int<kNRows>, <_4, Int<NumMmaThreads/4>>>, Stride<_8, <_0, _16>>>;
-        // using RowMaxsLayout = Layout<
-        //     Shape<Int<kNRows>, <_4, Int<NumMmaThreads/4>>,
-        //     Stride<Int<NumMmaThreads/4>, <_0, _1>>
-        // >;
-        // using RowSumsLayout = Layout<
-        //     Shape<Int<kNRows>, Int<NumMmaThreads>>,
-        //     Stride<Int<NumMmaThreads>, _1>
-        // >;
-        // WorkingSpaceLayout: (NumMmaThreads/32 warps, 32 elements per warp) with stride (32, 1)
-        // This makes it easy to get a slice: working_space(warp_id, _) gives the warp's slice
-        // using WorkingSpaceLayout = Layout<Shape<Int<NumMmaThreads / 32>, Int<32>>, Stride<Int<32>, _1>>;
-
-        struct SoftmaxStorage : cute::aligned_struct<128, _0>
-        {
-            // cute::array_aligned<float, cute::cosize_v<RowMaxsLayout>, 32> row_maxs;
-            // cute::array_aligned<float, cute::cosize_v<RowSumsLayout>, 128> row_sums;
-
-            // the type isn't really float but whatever we need at the moment (but it's always 4 bytes per element)
-            // Storage organized as (NumMmaThreads/32) slices of 32 elements each
-            // cute::array_aligned<float, cute::cosize_v<WorkingSpaceLayout>, 128> working_space;
-            float working_space[NumMmaThreads];
-        };
-
-        // Pointer to warp's slice of working space (32 contiguous floats)
-        // Offset by thread_idx & ~31 to align to warp boundary, then broadcast via shuffle
-        float* __restrict__ working_space;
-
-        CUTLASS_DEVICE Softmax(float const softmax_scale_log2_, int const seqlen_q_, int const thread_idx_, SoftmaxStorage &softmax_storage) 
-            : softmax_scale_log2(softmax_scale_log2_), seqlen_q(seqlen_q_), thread_idx(thread_idx_) {
-            // Compute warp-aligned offset: thread_idx & ~31 clears lower 5 bits
-            int warp_base_idx = thread_idx_ & ~31;
-            warp_base_idx = __shfl_sync(0xffffffff, warp_base_idx, 0);
-            working_space = &softmax_storage.working_space[warp_base_idx];
-            };
-        // : softmax_scale_log2(softmax_scale_log2_), dequan_q(dequan_q_), seqlen_q(seqlen_q_), thread_idx(thread_idx_) {};
+        CUTLASS_DEVICE Softmax(float const softmax_scale_log2_, int const seqlen_q_, int const thread_idx_) 
+            : softmax_scale_log2(softmax_scale_log2_), seqlen_q(seqlen_q_), thread_idx(thread_idx_) {};
+            // : softmax_scale_log2(softmax_scale_log2_), dequan_q(dequan_q_), seqlen_q(seqlen_q_), thread_idx(thread_idx_) {};
 
         CUTLASS_DEVICE void set_dequan_s(float const dequan_k)
         {
@@ -394,9 +363,9 @@ namespace flash
                 // consider: seperate into  max scores (over int's) and after it dequantize (multiply by dequan_s) and take the max with row_max
                 // flash::template reduce_max</*zero_init=*/true>(scores, row_max);
                 if constexpr (!Is_INT8) {
-                    flash::template reduce_max</*zero_init=*/true>(scores, row_max, working_space);
+                    flash::template reduce_max</*zero_init=*/true>(scores, row_max);
                 } else {
-                    flash::template reduce_max_dequantize</*zero_init=*/true>(scores, row_max, dequan_s, working_space);
+                    flash::template reduce_max_dequantize</*zero_init=*/true>(scores, row_max, dequan_s);
                 }
                 cute::fill(scores_scale, 1.f);
                 if (is_warp_leader)
@@ -420,9 +389,9 @@ namespace flash
                 */
                 // flash::template reduce_max</*zero_init=*/true>(scores, scores_max_local);
                 if constexpr (!Is_INT8) {
-                    flash::template reduce_max</*zero_init=*/true>(scores, scores_max_local, working_space);
+                    flash::template reduce_max</*zero_init=*/true>(scores, scores_max_local);
                 } else {
-                    flash::template reduce_max_dequantize</*zero_init=*/true>(scores, scores_max_local, dequan_s, working_space);
+                    flash::template reduce_max_dequantize</*zero_init=*/true>(scores, scores_max_local, dequan_s);
                 }
 
                 // update row max
@@ -512,9 +481,9 @@ namespace flash
             {
                 // flash::template reduce_max</*zero_init=*/true>(scores, row_max);
                 if constexpr (!Is_INT8) {
-                    flash::template reduce_max</*zero_init=*/true>(scores, row_max, working_space);
+                    flash::template reduce_max</*zero_init=*/true>(scores, row_max);
                 } else {
-                    flash::template reduce_max_dequantize</*zero_init=*/true>(scores, row_max, dequan_s, working_space);
+                    flash::template reduce_max_dequantize</*zero_init=*/true>(scores, row_max, dequan_s);
                 }
                 cute::fill(scores_scale, 1.f);
             }
@@ -526,11 +495,11 @@ namespace flash
                 // For INT8, we need to create a local max tensor and dequantize
                 // flash::template reduce_max</*zero_init=*/false>(scores, row_max);
                 if constexpr (!Is_INT8) {
-                    flash::template reduce_max</*zero_init=*/false>(scores, row_max, working_space);
+                    flash::template reduce_max</*zero_init=*/false>(scores, row_max);
                 } else {
                     // For INT8: reduce to local max first, then manually update row_max
                     // Tensor scores_max_local = make_fragment_like(row_max);
-                    flash::template reduce_max_dequantize</*zero_init=*/false>(scores, row_max, dequan_s, working_space);
+                    flash::template reduce_max_dequantize</*zero_init=*/false>(scores, row_max, dequan_s);
                 }
                 
 #pragma unroll
@@ -574,7 +543,7 @@ namespace flash
             // consider: here we should reduce_sum with the values of the float exp2 scores (which we need to create a float tensor for when Is_INT8 is enabled)
             // We don't do the reduce across threads here since we don't need to use the row_sum.
             // We do that reduce at the end when we need to normalize the softmax.
-            flash::reduce_sum</*zero_init=*/Is_first, /*warp_reduce=*/false>(scores, row_sum, working_space);
+            flash::reduce_sum</*zero_init=*/Is_first, /*warp_reduce=*/false>(scores, row_sum);
         };
 
         template <bool const Is_first, bool const Check_inf = false, typename Tensor0, typename Tensor1>
@@ -593,13 +562,13 @@ namespace flash
             // consider: here we should reduce_sum with the values of the float exp2 scores (which we need to create a float tensor for when Is_INT8 is enabled)
             // We don't do the reduce across threads here since we don't need to use the row_sum.
             // We do that reduce at the end when we need to normalize the softmax.
-            flash::reduce_sum</*zero_init=*/Is_first, /*warp_reduce=*/false>(scores_float, row_sum, working_space);
+            flash::reduce_sum</*zero_init=*/Is_first, /*warp_reduce=*/false>(scores_float, row_sum);
         };
 
         __forceinline__ __device__ TensorT finalize(float const final_scale = 1.f)
         {
             SumOp<float> sum_op;
-            quad_allreduce_(row_sum, row_sum, sum_op, working_space);
+            quad_allreduce_(row_sum, row_sum, sum_op);
             TensorT scores_scale;
 #pragma unroll
             for (int mi = 0; mi < size(row_sum); ++mi)
