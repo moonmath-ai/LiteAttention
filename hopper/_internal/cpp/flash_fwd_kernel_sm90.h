@@ -132,6 +132,11 @@ namespace flash
         static constexpr int mainloop_smem_padding = mainloop_smem_padding_ < 0 ? 0 : mainloop_smem_padding_;
 
         static constexpr int BufferSize = CollectiveMainloop::kStagesForSkips * 2;
+        // Compute maximum kNRows for SoftmaxStorage
+        static constexpr int kBlockM = get<0>(TileShape_MNK_PV{});
+        static constexpr int NumMmaThreads = NumMmaWarpGroups * cutlass::NumThreadsPerWarpGroup;
+        static constexpr int kNRowsMax = !LargeHeadDimV ? 2 * ((2 * kBlockM) / (ReInt8 ? (2 * NumMmaThreads) : NumMmaThreads)) : 2;
+        using SoftmaxStorageType = typename flash::Softmax<kNRowsMax, /*Max_offset=*/!Is_FP8 ? 0 : 8, Is_INT8, NumMmaThreads>::SoftmaxStorage;
         struct SharedStorage
         {
             struct TensorStorage : cute::aligned_struct<128, _1>
@@ -163,6 +168,10 @@ namespace flash
 
             // SkipListStorage<BufferSize> skip_list_storage;
             SkipListStorage<BufferSize, ReverseSkipList, Phase, HasMustDoList> skip_list_storage;
+            
+            // SoftmaxStorage for softmax and softmax1
+            SoftmaxStorageType softmax_storage;
+            // SoftmaxStorageType softmax1_storage;
         };
 
         static constexpr int SharedStorageSize = sizeof(SharedStorage);
@@ -559,8 +568,9 @@ namespace flash
                     // DOR: kNRows = 2 * (2 * 128 / 256) = 2
                     // static constexpr int kNRows = !LargeHeadDimV ? 2 * (2 * kBlockM / (ReInt8 ? (2 * NumMmaThreads) : NumMmaThreads)) : 2;
                     static constexpr int kNRows = !LargeHeadDimV ? 2 * ((2 * kBlockM) / (ReInt8 ? (2 * NumMmaThreads) : NumMmaThreads)) : 2;
-                    flash::Softmax<kNRows, /*Max_offset=*/!Is_FP8 ? 0 : 8, Is_INT8> softmax(softmax_scale_log2, seqlen_info.seqlen_q, ReInt8 ? flash::get_reint8_thread_idx_base(thread_idx, warp_group_idx - 1) : thread_idx);
-                    flash::Softmax<kNRows, /*Max_offset=*/!Is_FP8 ? 0 : 8, Is_INT8> softmax1(softmax_scale_log2, seqlen_info.seqlen_q, flash::get_reint8_thread_idx_second(thread_idx, warp_group_idx - 1));
+                    flash::Softmax<kNRows, /*Max_offset=*/!Is_FP8 ? 0 : 8, Is_INT8, NumMmaThreads> softmax(softmax_scale_log2, seqlen_info.seqlen_q, ReInt8 ? flash::get_reint8_thread_idx_base(thread_idx, warp_group_idx - 1) : thread_idx, shared_storage.softmax_storage);
+                    // flash::Softmax<kNRows, /*Max_offset=*/!Is_FP8 ? 0 : 8, Is_INT8, NumMmaThreads> softmax1(softmax_scale_log2, seqlen_info.seqlen_q, flash::get_reint8_thread_idx_second(thread_idx, warp_group_idx - 1), shared_storage.softmax1_storage);
+                    flash::Softmax<kNRows, /*Max_offset=*/!Is_FP8 ? 0 : 8, Is_INT8, NumMmaThreads> softmax1(softmax_scale_log2, seqlen_info.seqlen_q, flash::get_reint8_thread_idx_second(thread_idx, warp_group_idx - 1), shared_storage.softmax_storage);
 
                     /*
                     taken from the answer here: https://youtu.be/JwUcZwPOCpA?t=3152
