@@ -62,27 +62,6 @@ namespace flash
         }
     }
 
-    // Dequantize a 1D tensor (e.g., after reduction) to another 1D tensor with optional max operation
-    template <bool const zero_init = true, typename Engine0, typename Layout0, typename Engine1, typename Layout1>
-    __device__ __forceinline__ void dequantize_max_1d_(Tensor<Engine0, Layout0> &src, Tensor<Engine1, Layout1> &dst, float const dequan_s)
-    {
-        MaxOp<float> op;
-        static_assert(Layout0::rank == 1, "Only support 1D Tensor for source");
-        static_assert(Layout1::rank == 1, "Only support 1D Tensor for destination");
-        CUTE_STATIC_ASSERT_V(size(src) == size(dst));
-#pragma unroll
-        for (int mi = 0; mi < size(src); mi++)
-        {
-            const float value = src(mi) * dequan_s;
-            // const float value = (src(mi) - magic_int32) * dequan_s;
-            if constexpr (zero_init){
-                dst(mi) = value;
-            }else{
-                dst(mi) = op(dst(mi), value);
-            }
-        }
-    }
-
     template <typename Engine0, typename Layout0, typename Engine1, typename Layout1, typename Operator>
     __device__ __forceinline__ void quad_allreduce_(Tensor<Engine0, Layout0> &dst, Tensor<Engine1, Layout1> &src, Operator &op)
     {
@@ -149,30 +128,38 @@ namespace flash
             }
         }
         
-        // Reduce across threads
-        quad_allreduce_(max_converted, max_converted, max_op_int);
-        quad_allreduce_(max_float, max_float, max_op_float);
+        // // Reduce across threads
+        // quad_allreduce_(max_converted, max_converted, max_op_int);
+        // quad_allreduce_(max_float, max_float, max_op_float);
         
         // Dequantize: for even rows use int max, for odd rows use float max
 #pragma unroll
         for (int mi = 0; mi < size(max); mi++)
         {
             if (mi % 2 == 0) {
+                max_converted(mi) = Allreduce<4>::run(max_converted(mi), max_op_int);
                 // Even rows: dequantize int max
-                const float value = max_converted(mi) * dequan_s;
+                float value = max_converted(mi) * dequan_s;
+                // const float value = max_int * dequan_s;
                 if constexpr (zero_init) {
                     max(mi) = value;
                 } else {
                     max(mi) = max_op_float(max(mi), value);
                 }
+
+                // // reduce max across threads
+                // max(mi) = Allreduce<4>::run(max(mi), max_op_int);
             } else {
                 // Odd rows: max is already a float, just multiply by dequan_s
-                const float value = max_float(mi) * dequan_s;
+                float value = max_float(mi) * dequan_s;
+                value = Allreduce<4>::run(value, max_op_float);
                 if constexpr (zero_init) {
                     max(mi) = value;
                 } else {
                     max(mi) = max_op_float(max(mi), value);
                 }
+                // reduce max across threads
+                // max(mi) = Allreduce<4>::run(max(mi), max_op_float);
             }
         }
     }
