@@ -198,6 +198,16 @@ namespace flash
         using SmemLayoutK = decltype(tile_to_shape(
             SmemLayoutAtomK{},
             make_shape(shape<1>(TileShape_MNK{}), shape<2>(TileShape_MNK{}), Int<kStages>{})));
+        
+        // For INT8: K is already stored with swizzle in global memory, so TMA should NOT apply swizzle transformation
+        // Use Swizzle<0,4,3> (identity/no swizzle) explicitly to tell TMA not to apply swizzle
+        // For other types: use swizzled layout as TMA will apply swizzle during the copy
+        using SmemLayoutKTMA_swizzled = decltype(take<0, 2>(SmemLayoutK{}));
+        using SmemLayoutKTMA_base = decltype(tile_to_shape(
+            Layout<Shape<Int<kBlockN>, Int<kHeadDim>>, Stride<Int<kHeadDim>, _1>>{},
+            make_shape(shape<1>(TileShape_MNK{}), shape<2>(TileShape_MNK{}))));
+        using SmemLayoutKTMA_nonswizzled = decltype(composition(Swizzle<0, 4, 3>{}, SmemLayoutKTMA_base{}));
+        using SmemLayoutKTMA = std::conditional_t<Is_INT8, SmemLayoutKTMA_nonswizzled, SmemLayoutKTMA_swizzled>;
 
         using SmemLayoutAtomVt = decltype(cutlass::gemm::collective::detail::ss_smem_selector<TmaMajorV, ElementV,
                                                                                               Int<kHeadDimV>, decltype(cute::get<2>(TileShape_MNK_PV{}))>());
@@ -322,7 +332,7 @@ namespace flash
         using TMA_K = decltype(make_tma_copy_B_sm90(
             GmemTiledCopyKV{},
             make_tensor(make_gmem_ptr(static_cast<Element const *>(nullptr)), ShapeQKV{}, StrideQK{}),
-            take<0, 2>(SmemLayoutK{}),
+            SmemLayoutKTMA{},
             TileShape_MNK{},
             ClusterShape{})); // mcast along M mode for this N load, if any
 
@@ -344,7 +354,7 @@ namespace flash
 
         // Set the bytes transferred in this TMA transaction (may involve multiple issues)
         static constexpr uint32_t TmaTransactionBytesQ = static_cast<uint32_t>(size(SmemLayoutQ{}) * cutlass::sizeof_bits_v<Element> / 8);
-        static constexpr uint32_t TmaTransactionBytesK = static_cast<uint32_t>(size(take<0, 2>(SmemLayoutK{})) * cutlass::sizeof_bits_v<Element> / 8);
+        static constexpr uint32_t TmaTransactionBytesK = static_cast<uint32_t>(size(SmemLayoutKTMA{}) * cutlass::sizeof_bits_v<Element> / 8);
         static constexpr uint32_t TmaTransactionBytesV = static_cast<uint32_t>(size(take<0, 2>(SmemLayoutVt{})) * cutlass::sizeof_bits_v<ElementV> / 8);
         static constexpr uint32_t TmaTransactionBytesQv = static_cast<uint32_t>(size(SmemLayoutQv{}) * cutlass::sizeof_bits_v<ElementV> / 8);
 
@@ -553,7 +563,7 @@ namespace flash
             TMA_K tma_load_K = make_tma_copy_B_sm90(
                 GmemTiledCopyKV{},
                 mK,
-                take<0, 2>(SmemLayoutK{}),
+                SmemLayoutKTMA{},
                 TileShape_MNK{},
                 ClusterShape{}); // mcast along M mode for this N load, if any
             Tensor mV = make_tensor(make_gmem_ptr(args.ptr_V),
@@ -569,7 +579,7 @@ namespace flash
             TMA_K tma_load_K_new = make_tma_copy_B_sm90(
                 GmemTiledCopyKV{},
                 cute::conditional_return<AppendKV>(mKnew, mK),
-                take<0, 2>(SmemLayoutK{}),
+                SmemLayoutKTMA{},
                 TileShape_MNK{},
                 ClusterShape{}); // mcast along M mode for this N load, if any
             Tensor mVnew = make_tensor(make_gmem_ptr(args.ptr_V_new),

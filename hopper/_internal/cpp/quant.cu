@@ -15,6 +15,7 @@
 #include <cutlass/numeric_types.h>
 #include <cutlass/arch/barrier.h>
 #include <cutlass/array.h>
+#include "cutlass/gemm/collective/builders/sm90_common.inl"
 
 #include <cub/cub.cuh>
 
@@ -209,7 +210,11 @@ quantize_k_kernel(
     static_assert((NUM_THREADS * 8) % HEAD_DIM == 0, "NUM_THREADS * 8 must be divisible by HEAD_DIM to eliminate cycle logic");
 
     using SmemLayoutIn = typename SmemConfig<BLOCK_N, HEAD_DIM, Element>::SmemLayoutIn;
-    using SmemLayoutOut = typename SmemConfig<BLOCK_N, HEAD_DIM, Element>::SmemLayoutOut;
+    // Use the same swizzled layout as mainloop to avoid swizzling during TMA load
+    // This must match the layout used in launch_quantize_k_config
+    using SmemLayoutAtomK = decltype(cutlass::gemm::collective::detail::ss_smem_selector<GMMA::Major::K, int8_t,
+                                                                                         Int<BLOCK_N>, Int<HEAD_DIM>>());
+    using SmemLayoutOut = decltype(tile_to_shape(SmemLayoutAtomK{}, make_shape(Int<BLOCK_N>{}, Int<HEAD_DIM>{})));
     using SharedStorage = TmaSharedStorage<HEAD_DIM, NUM_THREADS, Element, SmemLayoutIn, SmemLayoutOut>;
     using BlockReduce = typename SharedStorage::BlockReduce;
 
@@ -392,7 +397,10 @@ void launch_quantize_k_config(
     Tensor mK_q = make_tensor(make_gmem_ptr(K_q), make_layout(shape_K, stride_K));
 
     using SmemLayoutInK  = typename SmemConfigK::SmemLayoutIn;
-    using SmemLayoutOutK = typename SmemConfigK::SmemLayoutOut;
+    // Use the same swizzled layout as mainloop to avoid swizzling during TMA load
+    using SmemLayoutAtomK = decltype(cutlass::gemm::collective::detail::ss_smem_selector<GMMA::Major::K, int8_t,
+                                                                                         Int<BLOCK_N>, Int<HEAD_DIM>>());
+    using SmemLayoutOutK = decltype(tile_to_shape(SmemLayoutAtomK{}, make_shape(Int<BLOCK_N>{}, Int<HEAD_DIM>{})));
 
     auto tma_load_K = make_tma_copy<Element>(
         SM90_TMA_LOAD{}, mK, SmemLayoutInK{}, Shape<Int<BLOCK_N>, Int<HEAD_DIM>>{}, _1{});
