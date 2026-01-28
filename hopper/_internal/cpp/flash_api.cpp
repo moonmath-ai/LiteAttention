@@ -1858,11 +1858,20 @@ quantize_qk(
      auto [block_m, block_n, mma_pv_is_rs, intra_wg_overlap] = tile_size_fwd_sm90(
          head_dim, head_dim, false, false, 1, v_colmajor, false, false, is_skipable, true);
 
-     // Allocate output tensors
-     auto Q_q = at::empty({batch, seqlen_q, num_heads, head_dim},
-                          Q.options().dtype(torch::kInt8));
-     auto K_q = at::empty({batch, seqlen_k, num_heads, head_dim},
-                          K.options().dtype(torch::kInt8));
+    // Allocate output tensors
+    auto Q_q = at::empty({batch, seqlen_q, num_heads, head_dim},
+                         Q.options().dtype(torch::kInt8));
+    // Create K_q with custom strides to match quant.cu layout
+    // quant.cu shape: (seqlen_k, HEAD_DIM, num_heads, batch) with stride (HEAD_DIM, 1, seqlen_k * HEAD_DIM, seqlen_k * HEAD_DIM * num_heads)
+    // flash_api.cpp shape: {batch, seqlen_k, num_heads, head_dim}
+    // Matching strides: {seqlen_k * head_dim * num_heads, head_dim, seqlen_k * head_dim, 1}
+    int64_t stride_batch = seqlen_k * head_dim * num_heads;
+    int64_t stride_seqlen = head_dim;
+    int64_t stride_heads = seqlen_k * head_dim;
+    int64_t stride_dim = 1;
+    auto K_q = at::empty_strided({batch, seqlen_k, num_heads, head_dim},
+                                 {stride_batch, stride_seqlen, stride_heads, stride_dim},
+                                 K.options().dtype(torch::kInt8));
 
      const int num_q_blocks = (seqlen_q + block_m - 1) / block_m;
      const int num_k_blocks = (seqlen_k + block_n - 1) / block_n;
