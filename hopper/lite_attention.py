@@ -86,6 +86,16 @@ from ._internal.flash_attn_interface import flash_attn_func
 import lite_attention._C  # noqa: F401
 _lite_attention_ops = torch.ops.lite_attention
 
+# 1. Define the operation globally
+@torch.compile(dynamic=True, fullgraph=True)
+def _k_mean_op(key):
+    # Fusing: float64 conversion -> mean -> float32 conversion -> contiguous
+    # return key.mean(dim=1, dtype=torch.float64).float().contiguous()
+    return key.mean(dim=1).float().contiguous()
+
+# # 2. Compile it once at the module level
+# # This object is shared across all instances that import this module
+# compiled_k_mean = torch.compile(_k_mean_op, dynamic=True, fullgraph=True)
 
 class LiteAttention:
     """
@@ -642,7 +652,10 @@ class LiteAttention:
         if self.use_int8:
             # Pre-compute K mean
             # K shape: [batch, seqlen_k, num_heads, head_dim] -> mean: [batch, num_heads, head_dim]
-            k_mean = key.mean(dim=1).float().contiguous()
+            # k_mean = key.mean(dim=1).float().contiguous() # TODO: do the mean on float64 and fuse this with torch.compile
+            # k_mean = key.mean(dim=1, dtype=torch.float32).contiguous() # TODO: do the mean on float64 and fuse this with torch.compile
+            # k_mean = key.mean(dim=1, dtype=torch.float64).float().contiguous() # TODO: do the mean on float64 and fuse this with torch.compile
+            k_mean = _k_mean_op(key) # TODO: do the mean on float64 and fuse this with torch.compile
 
             # Compute q_scale: log2(e) / sqrt(head_dim) = 1.44269504089 / sqrt(head_dim)
             head_dim = query.shape[-1]
