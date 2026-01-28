@@ -864,5 +864,40 @@ float i23_to_f32(int32_t x) {
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
+// TMA Copy Wrapper for INT8
+// For INT8: K is already stored with swizzle in global memory, so TMA should NOT apply swizzle transformation
+// This wrapper strips swizzle from the layout for int8 types before creating the TMA copy
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+template <class TmaInternalType = void,
+          class CopyOp,
+          class GEngine, class GLayout,
+          class SLayout,
+          class CTA_Tiler,
+          class Cluster_Size>
+CUTE_HOST_RTC
+auto
+make_tma_copy_B_sm90_int8_aware(CopyOp                  const& copy_op,
+                                 Tensor<GEngine,GLayout> const& gtensor,
+                                 SLayout                 const& slayout,
+                                 CTA_Tiler               const& cta_tiler,
+                                 Cluster_Size            const& cluster_size)
+{
+  // For int8: strip swizzle from layout since data is already swizzled in global memory
+  // When swizzle is stripped, get_swizzle_portion returns Swizzle<0,4,3> (identity),
+  // which automatically maps to CU_TENSOR_MAP_SWIZZLE_NONE in the TMA descriptor
+  using ElementType = conditional_t<is_same<void, TmaInternalType>::value, typename GEngine::value_type, TmaInternalType>;
+  if constexpr (is_same_v<ElementType, int8_t>) {
+    // Strip swizzle portion for int8 - use non-swizzled layout
+    // Identity swizzle (B=0) automatically maps to CU_TENSOR_MAP_SWIZZLE_NONE
+    auto slayout_nonswizzled = get_nonswizzle_portion(slayout);
+    return make_tma_copy_B_sm90<TmaInternalType>(copy_op, gtensor, slayout_nonswizzled, cta_tiler, cluster_size);
+  } else {
+    // For non-int8 types, use layout as-is (with swizzle)
+    return make_tma_copy_B_sm90<TmaInternalType>(copy_op, gtensor, slayout, cta_tiler, cluster_size);
+  }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
 
 } // namespace flash
