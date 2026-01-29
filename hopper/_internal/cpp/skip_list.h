@@ -18,11 +18,105 @@ namespace flash
     template <bool IsSkipList, bool Reverse, bool Phase = true>
     struct ListReader
     {
+
+        // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ new code ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        /*
+
+        range_reverse: the range itself is in decending order
+        range_iter: the order we iter over the ranges is in reverse order
+
+        * ranges always inclusive
+        public:
+            set_read_mode(bool is_ordered) -> void (meaning i++ or i--)
+            get_num_ranges() -> number of ranges in the list
+            get_next_range() -> (by reference) range_start_idx, range_end_idx
+
+            set_write_mode(int start_n_block, bool is_ordered) -> void (is the n_block accend or decend)
+            add_entry(int n_block, bool skip) -> void (add a new entry to the list, only when skip is false)
+            close_range() ->
+            finalize() -> void (finalize the list)
+        
+        private:
+            bool is_new_range
+        
+        members (private):
+            const int16_t *list_ptr;
+            int list_len; // number of ranges
+            int read_idx; // index in the read list (for get next)
+            int is_ordered (user argument) ? 1 : -1; // whether the n_block is ordered
+            bool skip = true;
+            int previous_n_block;
+
+
+        [len?, idx0, ..., , ... ,...]
+
+    [0, 30], [40, 50]
+    [0, seq_len]
+
+        [len?, 0, (30, 40), 50, ..., , ... ,...]
+
+
+        read_list.set_read_order(iter % 2 == 0);
+        write_list.set_write_order(iter % 2 == 0);
+        int step = iter % 2 == 0 ? 1 : -1;
+        // loop over the ranges:
+        for(int i = 0; i < read_list.get_num_ranges(); i++){
+            start, end = read_list.get_next_range();
+            // loop over the range:
+            for(int j = start; j != end; j+= step){
+                curr_skip = skip_test(j);
+                write_list.add_entry(j, curr_skip);
+            }
+            write_list.close_range();
+        }
+        write_list.finilize();
+
+        ~~~~~~~~~~~~~~
+
+        void do_range(start, end, read_list, write_list){
+            for(int j = start; j != end; j+= step){
+                curr_skip = skip_test(j);
+                write_list.add_entry(j, curr_skip);
+            }
+            // write_list.close_range();
+        }
+
+        read_list.set_read_order(iter % 2 == 0);
+        write_list.set_write_order(iter % 2 == 0);
+        start0, end0 = read_list.get_next_range();
+        curr_skip = skip_test(j);
+        write_list.add_entry(j, curr_skip);
+
+        do_range(start0+1, end0, read_list, write_list);
+
+        for(int i = 1; i < read_list.get_num_ranges(); i++){
+            start, end = read_list.get_next_range();
+            // loop over the range:
+            do_range(start, end, read_list, write_list);
+        }
+        write_list.finilize();
+
+        ~~~~~~~~~~~~~~
+        read_list.set_read_order(iter % 2 == 0);
+        write_list.set_write_order(iter % 2 == 0);
+        start0, end0 = read_list.get_next_range();
+        curr_skip = skip_test(j);
+        write_list.add_entry(j, curr_skip);
+
+        do{
+            start, end = read_list.get_next_range();
+            // loop over the range:
+            do_range(start, end, read_list, write_list);
+            stop cond
+        }while
+        write_list.finilize();
+        */
+        // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ old code ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         const int16_t *list_ptr;
         int list_len;
         int read_idx;
-        int start_idx;
-        int end_idx;
+        int start_idx; // current range start index (the value in the read list)
+        int end_idx; // current range start index (the value in the read list)
 
         static constexpr int step = Phase ? 1 : -1;
         /*
