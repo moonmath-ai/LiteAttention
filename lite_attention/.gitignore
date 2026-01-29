@@ -1,0 +1,13 @@
+# Generated instantiation files (created at build time by CMake)
+instantiations/*.cu
+
+# Build artifacts
+build/
+*.egg-info/
+dist/
+*.so
+*.o
+
+# Python cache
+__pycache__/
+*.pyc

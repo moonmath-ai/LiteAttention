@@ -1,0 +1,25 @@
+[build-system]
+requires = ["scikit-build-core>=0.11", "cmake>=3.26", "torch"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "lite_attention"
+version = "0.4.0"
+requires-python = ">=3.9"
+dependencies = ["torch"]
+description = "Lite Attention - Flash Attention 3 with skip list optimization"
+readme = "README.md"
+license = {text = "Apache-2.0"}
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: POSIX :: Linux",
+]
+
+[project.optional-dependencies]
+test = ["einops", "pytest"]
+benchmark = ["einops", "pandas", "matplotlib"]
+
+[tool.scikit-build]
+cmake.build-type = "Release"
+wheel.packages = ["lite_attention"]
