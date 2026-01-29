@@ -137,7 +137,7 @@ class LiteAttention:
         >>> output = lite_attn(query, key, value)
     """
     
-    def __init__(self, enable_skipping: bool = True, threshold: float = -10.0, max_batch_size: int = 2, reverse_skip_list: bool = True, use_int8: bool = False):
+    def __init__(self, enable_skipping: bool = True, threshold: float = -10.0, max_batch_size: int = 2, min_seq_len: int = 0, reverse_skip_list: bool = True, use_int8: bool = False):
         # Internal skip list management
         self._skip_list = None  # Shape: [2, max_batch_size, heads, qtiles, ktiles+1]
         self._phase = 0  # Alternates between 0 and 1 for double-buffering
@@ -163,6 +163,7 @@ class LiteAttention:
         self.enable_skipping = enable_skipping
         self.set_threshold(threshold)
         self.max_batch_size = max_batch_size
+        self.min_seq_len = min_seq_len
 
 
     @staticmethod
@@ -419,6 +420,7 @@ class LiteAttention:
         k_len = key.shape[1]
         heads = value.shape[2]
         head_dim = value.shape[3]
+        # seq_len = max(seq_len, min_seq_len)
         assert batch <= self.max_batch_size, "batch size must be less than or equal to max_batch_size (modify max_batch_size in LiteAttention constructor)"
         
         # Determine if value tensor is column-major (affects tile size selection)
@@ -429,7 +431,7 @@ class LiteAttention:
         # Allocate for max_batch_size to avoid reallocation on batch size changes.
         return LiteAttention.init_skip_list(
             self.max_batch_size,
-            (q_len, k_len),
+            (q_len, k_len, self.min_seq_len),
             heads,
             head_dim,
             v_colmajor,
@@ -495,7 +497,7 @@ class LiteAttention:
         device = query.device
 
         should_reinitialize = (self._skip_list is None or 
-            self._last_seq_len != current_seq_len or 
+            (self._last_seq_len != current_seq_len and current_seq_len < self.min_seq_len) or 
             self._skip_list.device != query.device or
             self._last_head_dim != current_head_dim or
             self._last_v_colmajor != v_colmajor or
@@ -507,6 +509,7 @@ class LiteAttention:
             should_reinitialize = LiteAttention.get_MN(head_dim, torch.int8, v_colmajor) != LiteAttention.get_MN(head_dim, dtype, v_colmajor)
             self._last_use_int8 = self.use_int8
 
+        extra_range = None
         # Initialize or reinitialize skip list if needed
         # we always enter this in the first call
         if should_reinitialize:
@@ -527,6 +530,18 @@ class LiteAttention:
 
             if os.getenv("LITE_ATTENTION_VERBOSE", "FALSE") != "FALSE":
                 print(f"[Warning]: reinitialized skip list during the forward pass")
+        # if the sequence length changed but we expected it to happend (do to min_seq_len)
+        elif (current_seq_len < self.min_seq_len and self._last_seq_len != current_seq_len):
+            extra_range = [min(self._last_seq_len, current_seq_len), max(self._last_seq_len, current_seq_len)]
+            # update the last attributes to the current values
+            self._last_seq_len = current_seq_len
+            self._last_head_dim = current_head_dim
+            self._last_v_colmajor = v_colmajor
+            self._last_dtype = dtype
+            self._last_device = device
+            self._last_num_heads = current_num_heads
+            self._last_batch_size = query.shape[0]
+            self._last_use_int8 = self.use_int8
         
         # Alternate between the two skip list buffers
         if self._phase == 0:
@@ -540,7 +555,7 @@ class LiteAttention:
             # switch so the current read_list and write_list roles would switch
             self._phase = 0
             
-        return read_list, write_list
+        return read_list, write_list, extra_range
 
     @staticmethod
     def _expand_must_do_list(must_do_list, list_shape, query, value, use_int8: bool = False):
@@ -721,7 +736,7 @@ class LiteAttention:
         """
 
         # Get read and write lists (internal mask management)
-        read_list, write_list = self._get_read_write_lists(query, key, value, must_skip_list)
+        read_list, write_list, extra_range = self._get_read_write_lists(query, key, value, must_skip_list)
 
         if self.enable_skipping and (must_do_list is not None):
             # handle must-do list - expand the 1d list to a list per head per batch per qi
@@ -750,6 +765,7 @@ class LiteAttention:
             # self._phase == 1 because we changed it in _get_read_write_lists!
             phase=(self._phase == 1) if self.reverse_skip_list else False,
             use_int8=self.use_int8,
+            extra_range=extra_range,
         )
 
         # Calculate and store statistics if enabled
