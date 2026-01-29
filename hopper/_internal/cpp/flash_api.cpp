@@ -740,10 +740,10 @@
          std::optional<at::Tensor> attn_write_list_,
          double thr,
          bool reverse_skip_list = false,
-         bool phase = false
+         bool phase = false,
+         std::optional<int> extra_range_start_,
+         std::optional<int> extra_range_end_
      ) {
-     // params.reverse_skip_list = reverse_skip_list;
-     // params.phase = phase;
  
      auto dprops = at::cuda::getCurrentDeviceProperties();
      bool is_sm8x = dprops->major >= 8;
@@ -1029,6 +1029,13 @@
  
      params.reverse_skip_list = reverse_skip_list;
      params.phase = phase;
+
+     params.has_extra_range = false;
+     if (extra_range_start_.has_value() && extra_range_end_.has_value()) {
+         params.has_extra_range = true;
+         params.qk_skip_mask_args.extra_range_start = extra_range_start_.value();
+         params.qk_skip_mask_args.extra_range_end = extra_range_end_.value();
+     }
  
      // Convert skip mask tensors to QKSkipMaskArgs struct
      // Expected shape: [batch, heads, limbs] where limbs = ceil_div(q_tiles * k_tiles, 64)

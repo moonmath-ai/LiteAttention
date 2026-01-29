@@ -765,7 +765,7 @@ class LiteAttention:
             # self._phase == 1 because we changed it in _get_read_write_lists!
             phase=(self._phase == 1) if self.reverse_skip_list else False,
             use_int8=self.use_int8,
-            extra_range=extra_range,
+            extra_range=extra_range, # TODO: should be rounded to tile indices (also take the reverse/phase into account)
         )
 
         # Calculate and store statistics if enabled
