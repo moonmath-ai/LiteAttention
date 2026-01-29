@@ -771,7 +771,7 @@ class LiteAttention:
             phase=(self._phase == 1) if self.reverse_skip_list else False,
             q_descale=q_descale,
             k_descale=k_descale,
-            extra_range=extra_range,
+            extra_range=extra_range, # TODO: should be rounded to tile indices (also take the reverse/phase into account)
         )
 
         # Calculate and store statistics if enabled
