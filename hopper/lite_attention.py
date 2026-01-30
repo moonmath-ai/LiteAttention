@@ -146,7 +146,10 @@ class LiteAttention:
         
         # Cache of last tensor properties (used to detect when reinitialization is needed)
         self._last_batch_size = None  # Actual batch size used (not max_batch_size)
-        self._last_seq_len = None  # Sequence length
+        # Sequence lengths used to size the skip list.
+        # For self-attention: (q_len, k_len) == (seq_len, seq_len)
+        # For rectangular attention (e.g. KV-sharded sequence parallel): q_len != k_len
+        self._last_seq_len = None  # Tuple[int, int] = (q_len, k_len)
         self._last_head_dim = None  # Head dimension
         self._last_v_colmajor = None  # Value tensor layout
         self._last_dtype = None  # Data type (fp16, bf16, fp32)
@@ -346,11 +349,19 @@ class LiteAttention:
         # kBlockN: number of key columns per tile
         kBlockM, kBlockN = LiteAttention.get_MN(head_dim, dtype, v_colmajor)
 
+        # Support both square and rectangular attention.
+        # - For standard self-attention, `seq_len` is an int.
+        # - For rectangular attention, pass `seq_len=(q_len, k_len)`.
+        if isinstance(seq_len, (tuple, list)):
+            q_len, k_len = int(seq_len[0]), int(seq_len[1])
+        else:
+            q_len = k_len = int(seq_len)
+
         # Calculate number of tiles needed to cover the attention matrix
         # qtiles: number of tiles along query dimension (rows of Q@K^T)
-        qtiles = LiteAttention.ceil_div(seq_len, kBlockM)
+        qtiles = LiteAttention.ceil_div(q_len, kBlockM)
         # ktiles: number of tiles along key dimension (columns of Q@K^T)
-        ktiles = LiteAttention.ceil_div(seq_len, kBlockN)
+        ktiles = LiteAttention.ceil_div(k_len, kBlockN)
         
         # Allocate memory for skip list data structure
         # Shape explained:
@@ -362,7 +373,12 @@ class LiteAttention:
         skip_list = torch.empty(2, batch, heads, qtiles, ktiles + 1, dtype=torch.int16, device=device)
 
         if must_skip_list is not None:
-            tile_indices = LiteAttention.convert_sequence_indices_to_tile_indices("must_skip_list", must_skip_list, kBlockN, seq_len)
+            tile_indices = LiteAttention.convert_sequence_indices_to_tile_indices(
+                "must_skip_list",
+                must_skip_list,
+                kBlockN,
+                k_len,
+            )
 
             # convert from skip-ranges to do-ranges for read list
             tile_indices.pop(0) if tile_indices[0] == 0 else tile_indices.insert(0, 0)
@@ -380,7 +396,7 @@ class LiteAttention:
         
         return skip_list
 
-    def _init_skip_list(self, query: torch.Tensor, value: torch.Tensor, must_skip_list: list = None) -> torch.Tensor:
+    def _init_skip_list(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, must_skip_list: list = None) -> torch.Tensor:
         """
         Initialize skip list tensors based on query and value tensor shapes.
         
@@ -398,8 +414,11 @@ class LiteAttention:
             The skip list is allocated with max_batch_size (not actual batch size) to
             avoid reallocation when batch size varies across forward passes.
         """
-        # batch, seq_len, heads, head_dim = query.shape
-        batch, seq_len, heads, head_dim = value.shape
+        batch = value.shape[0]
+        q_len = query.shape[1]
+        k_len = key.shape[1]
+        heads = value.shape[2]
+        head_dim = value.shape[3]
         assert batch <= self.max_batch_size, "batch size must be less than or equal to max_batch_size (modify max_batch_size in LiteAttention constructor)"
         
         # Determine if value tensor is column-major (affects tile size selection)
@@ -407,11 +426,21 @@ class LiteAttention:
         dtype = torch.int8 if self.use_int8 else query.dtype
         device = query.device
         
-        # Allocate for max_batch_size to avoid reallocation on batch size changes
-        return LiteAttention.init_skip_list(self.max_batch_size, seq_len, heads, head_dim, v_colmajor, dtype, device, must_skip_list, self.reverse_skip_list)
+        # Allocate for max_batch_size to avoid reallocation on batch size changes.
+        return LiteAttention.init_skip_list(
+            self.max_batch_size,
+            (q_len, k_len),
+            heads,
+            head_dim,
+            v_colmajor,
+            dtype,
+            device,
+            must_skip_list,
+            self.reverse_skip_list,
+        )
     
     
-    def _get_read_write_lists(self, query: torch.Tensor, value: torch.Tensor, must_skip_list: list = None) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+    def _get_read_write_lists(self, query: torch.Tensor, key: torch.Tensor, value: Optional[torch.Tensor] = None, must_skip_list: list = None) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
         """
         Get the current read and write skip lists for this attention forward pass.
         
@@ -449,9 +478,15 @@ class LiteAttention:
         # If skipping disabled, return None (standard Flash Attention)
         if not self.enable_skipping:
             return None, None
+
+        # Backward-compat: older callers pass (query, value) only.
+        # In that case `key` is actually the value tensor, and key/value lengths match.
+        if value is None:
+            value = key
+            key = value
             
         # attributes we check in the decision to REINITIALIZE the skip list
-        current_seq_len = query.shape[1]
+        current_seq_len = (int(query.shape[1]), int(key.shape[1]))
         head_dim = query.shape[-1]
         current_head_dim = head_dim
         current_num_heads = query.shape[2]
@@ -476,7 +511,7 @@ class LiteAttention:
         # we always enter this in the first call
         if should_reinitialize:
             # initialize the skip list (actually allocate the memory)
-            self._skip_list = self._init_skip_list(query, value, must_skip_list)
+            self._skip_list = self._init_skip_list(query, key, value, must_skip_list)
             # ditermines which part of self._skip_list to use for read_list and write_list
             self._phase = 0
 
@@ -719,7 +754,7 @@ class LiteAttention:
         query, key, q_descale, k_descale = self._quantize_query_key(query, key, scale)
 
         # Get read and write lists (internal mask management)
-        read_list, write_list = self._get_read_write_lists(query, value, must_skip_list)
+        read_list, write_list = self._get_read_write_lists(query, key, value, must_skip_list)
 
         if self.enable_skipping and (must_do_list is not None):
             # handle must-do list - expand the 1d list to a list per head per batch per qi
@@ -1084,7 +1119,15 @@ class SeqParallelLiteAttention:
     def __init__(self, num_nodes: int, enable_skipping: bool = True, threshold: float = -10.0, max_batch_size: int = 2, use_int8: bool = False):
         self.num_nodes = num_nodes
         # Create separate LiteAttention instance for each node
-        self.lite_attention = [LiteAttention(enable_skipping, threshold, max_batch_size, use_int8) for _ in range(num_nodes)]
+        self.lite_attention = [
+            LiteAttention(
+                enable_skipping=enable_skipping,
+                threshold=threshold,
+                max_batch_size=max_batch_size,
+                use_int8=use_int8,
+            )
+            for _ in range(num_nodes)
+        ]
         self.set_threshold(threshold)
 
     def __call__(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, split_idx: int,
