@@ -59,17 +59,17 @@ Build and look for warnings. Address warnings chronologically.
 
 Some warnings we saw:
 
-#### 4a. Remove `cmake` from build-system.requires
+#### 4a. Remove `cmake` from build-system.requires ✅ Fixed
 ```
 scikit_build_core - WARNING - cmake should not be in build-system.requires - scikit-build-core will inject it as needed
 ```
-**Action:** Remove `cmake>=3.26` from `build-system.requires` in pyproject.toml
+**Fixed:** Removed `cmake>=3.26` from `build-system.requires` in pyproject.toml. Committed in 693c791.
 
-#### 4b. kineto_LIBRARY-NOTFOUND
+#### 4b. kineto_LIBRARY-NOTFOUND ✅ Known issue, ignore
 ```
 CMake Warning: static library kineto_LIBRARY-NOTFOUND not found.
 ```
-**Context:** Kineto is PyTorch's profiling library. This is likely harmless but should verify.
+**Status:** PyTorch warning. Kineto is PyTorch's profiling library, not needed for LiteAttention.
 
 #### 4c. Ninja detection - reproducibility in clean docker?
 scikit-build-core auto-detects Ninja, even tought we didn't install it (and it is not installed on the server)
@@ -81,24 +81,22 @@ Or that the build is the same.
 - Or set `cmake.generator = "Unix Makefiles"` to force Make?
 Altough it's a very bad solution - we will have very long build times
 
-#### 4d. Fix `-std=c++20` redefinition warning
+#### 4d. Fix `-std=c++20` redefinition warning ✅ Fixed
 ```
 nvcc warning : incompatible redefinition for option 'std', the last value of this option was used
 ```
-Are both flags the same? How can we check that?
+**Fixed:** Use `CMAKE_CUDA_STANDARD 20` instead of `-std=c++20` flag. Committed in 166559d.
 
-**Ideas:**
-- Remove our `-std=c++20` flag (CMake/PyTorch may already set it)
-- Use `CMAKE_CUDA_STANDARD 20` instead of `-std=c++20` flag
-- Check what PyTorch's cmake sets and avoid conflict
-
-#### 4e. libnvrtc.so shorthash warning
+#### 4e. libnvrtc.so shorthash warning ✅ Known issue, ignore
 ```
 CMake Warning: Failed to compute shorthash for libnvrtc.so
 ```
-**Context:** From PyTorch's cmake.
+**Status:** Known PyTorch bug, harmless. When hash computation fails, PyTorch just sets
+`CUDA_NVRTC_SHORTHASH="XXXXXXXX"` as placeholder. Build continues normally.
 
-Investigate.
+**References:**
+- https://github.com/pytorch/pytorch/issues/129777
+- https://github.com/pytorch/pytorch/issues/53350
 
 #### 4f. ptxas C7512 performance warning (hdim256 bf16)
 ```
@@ -121,16 +119,13 @@ Build showed these warnings:
 ```
 **TODO:** Investigate / Verify LiteAttention doesn't need any of these features.
 
-#### 4h. CMAKE_CUDA_ARCHITECTURES ignored by PyTorch
-
+#### 4h. CMAKE_CUDA_ARCHITECTURES ignored by PyTorch ✅ Known issue, ignore
 ```
 CMake Warning: pytorch is not compatible with `CMAKE_CUDA_ARCHITECTURES` and will ignore its value. Please configure `TORCH_CUDA_ARCH_LIST` instead.
 ```
-**Context:** We set `CMAKE_CUDA_ARCHITECTURES "90a"` but PyTorch ignores it.
-**Options:**
-- Investigate
-- Set `TORCH_CUDA_ARCH_LIST` environment variable instead
-- Or just ignore since PyTorch auto-detects (showed "Autodetected CUDA architecture(s): 9.0")
+**Status:** PyTorch ignores this setting and auto-detects instead. We removed our global
+`CMAKE_CUDA_ARCHITECTURES` setting since we use per-file `-gencode` flags anyway (more precise).
+PyTorch auto-detects correctly: "Autodetected CUDA architecture(s): 9.0"
 
 
 ### 5. Verify compilation works
