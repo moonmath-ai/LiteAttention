@@ -32,36 +32,43 @@ Possible causes:
 - Variance in measurements
 (look for more ideas)
 
-### 2. Speed optimizations
+### 2. Test build with minimal environment variables
+
+Test what happens when envvars are unset to understand actual requirements:
+- Build without `CUDA_HOME` set
+- Build without adding cuda to `PATH`
+- Document which envvars are actually required vs auto-detected
+
+### 3. Speed optimizations
 
 Any way to improve the build time is welcome.
 Some ideas:
-- **2a. Try NVCC_THREADS=4** - currently default is 2, matching old setup.py
-- **2b. Try `--split-compile`** - commented out in old setup.py as "faster", worth testing
+- **3a. Try NVCC_THREADS=4** - currently default is 2, matching old setup.py
+- **3b. Try `--split-compile`** - commented out in old setup.py as "faster", worth testing
   ```
   # f"--split-compile={os.getenv('NVCC_THREADS', '4')}",  # split-compile is faster
   ```
 (look for more ideas)
 
-### 3. Handle allt build warnings
+### 4. Handle all build warnings
 
 Build and look for warnings. Address warnings chronologically.
 
 Some warnings we saw:
 
-#### 3a. Remove `cmake` from build-system.requires
+#### 4a. Remove `cmake` from build-system.requires
 ```
 scikit_build_core - WARNING - cmake should not be in build-system.requires - scikit-build-core will inject it as needed
 ```
 **Action:** Remove `cmake>=3.26` from `build-system.requires` in pyproject.toml
 
-#### 3b. kineto_LIBRARY-NOTFOUND
+#### 4b. kineto_LIBRARY-NOTFOUND
 ```
 CMake Warning: static library kineto_LIBRARY-NOTFOUND not found.
 ```
 **Context:** Kineto is PyTorch's profiling library. This is likely harmless but should verify.
 
-#### 3c. Ninja detection - reproducibility in clean docker?
+#### 4c. Ninja detection - reproducibility in clean docker?
 scikit-build-core auto-detects Ninja, even tought we didn't install it (and it is not installed on the server)
 If this is the intended work, and ninja will be detected on all macines, it is good.
 - Will it work in a clean docker without Ninja?
@@ -71,7 +78,7 @@ Or that the build is the same.
 - Or set `cmake.generator = "Unix Makefiles"` to force Make?
 Altough it's a very bad solution - we will have very long build times
 
-#### 3d. Fix `-std=c++20` redefinition warning
+#### 4d. Fix `-std=c++20` redefinition warning
 ```
 nvcc warning : incompatible redefinition for option 'std', the last value of this option was used
 ```
@@ -82,7 +89,7 @@ Are both flags the same? How can we check that?
 - Use `CMAKE_CUDA_STANDARD 20` instead of `-std=c++20` flag
 - Check what PyTorch's cmake sets and avoid conflict
 
-#### 3e. libnvrtc.so shorthash warning
+#### 4e. libnvrtc.so shorthash warning
 ```
 CMake Warning: Failed to compute shorthash for libnvrtc.so
 ```
@@ -90,17 +97,17 @@ CMake Warning: Failed to compute shorthash for libnvrtc.so
 
 Investigate.
 
-#### 3f. ptxas C7512 performance warning (hdim256 int8)
+#### 4f. ptxas C7512 performance warning (hdim256 bf16)
 ```
 ptxas info : (C7512) Potential Performance Loss: wgmma.mma_async instructions are serialized due to insufficient register resources
 ```
-**Context:** This appears for hdim256 int8 kernels. High register pressure.
+**Context:** This appears for hdim256 bf16 kernels (24 instances). High register pressure.
 
 Investigate.
 Those kernels are hand written for performence. Unless it's a known and expected warning, we should find out how to fix it.
 In any case, we should verify performance is acceptable.
 
-#### 3g. Check if we need cuDNN/cuSPARSELt/cuDSS/cuFile
+#### 4g. Check if we need cuDNN/cuSPARSELt/cuDSS/cuFile
 
 Build showed these warnings:
 ```
@@ -111,7 +118,7 @@ Build showed these warnings:
 ```
 **TODO:** Investigate / Verify LiteAttention doesn't need any of these features.
 
-#### 3h. CMAKE_CUDA_ARCHITECTURES ignored by PyTorch
+#### 4h. CMAKE_CUDA_ARCHITECTURES ignored by PyTorch
 
 ```
 CMake Warning: pytorch is not compatible with `CMAKE_CUDA_ARCHITECTURES` and will ignore its value. Please configure `TORCH_CUDA_ARCH_LIST` instead.
@@ -123,9 +130,9 @@ CMake Warning: pytorch is not compatible with `CMAKE_CUDA_ARCHITECTURES` and wil
 - Or just ignore since PyTorch auto-detects (showed "Autodetected CUDA architecture(s): 9.0")
 
 
-### 4. Verify compilation works
+### 5. Verify compilation works
 
-#### 4a. numpy warning - add to optional deps?
+#### 5a. numpy warning - add to optional deps?
 ```
 UserWarning: Failed to initialize NumPy: No module named 'numpy'
 ```
@@ -134,18 +141,18 @@ UserWarning: Failed to initialize NumPy: No module named 'numpy'
 - Add to optional-dependencies
 - Ignore (it's just a warning)
 
-#### 4b. Run pytest
+#### 5b. Run pytest
 ```bash
 cd lite_attention/tests
 pip install einops pytest
 pytest test_flash_attn.py::test_lite_attn_output -v
 ```
 
-#### 4c. Run in WAN2.2
+#### 5c. Run in WAN2.2
 WAN can use this as a requirement, we can generate a video and see that it works, and the speed.
 This is the practical usage, hence an important test.
 
-### 5. ccache - added, not tested
+### 6. ccache - added, not tested
 
 ccache might improve compile times.
 Added to CMakeLists.txt:
@@ -159,7 +166,7 @@ endif()
 **TODO:** Install ccache on remote and verify rebuild is fast
 NOTE: only after all build warnings go away. We don't want caching to hide issues.
 
-### 6. Build (and test) for more platforms
+### 7. Build (and test) for more platforms
 
 We want to verify that code is working for various versions.
 We can skip a version if it is
@@ -173,7 +180,7 @@ Document which versions are supported and which are not (and why)
 - CUDA: 12.8, 12.9, 13.0, 13.1
 - CXX11 ABI: TRUE/FALSE : what is it? is it important to support both?
 
-### 7. Update README
+### 8. Update README
 
 Document new stuff, including:
 - requirement: CUDA 12.8+ (was 12.3+). This eliminated 107 lines of nvcc/ptxas download logic.
@@ -182,7 +189,7 @@ Document new stuff, including:
 
 Also update CLAUDE.md
 
-### 8. cibuildwheel CI
+### 9. cibuildwheel CI
 
 Auto building wheels will improve the user ease of install.
 NOTE: after the build is working, fast, stable, tested.
