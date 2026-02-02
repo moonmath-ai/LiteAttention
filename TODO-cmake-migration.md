@@ -173,9 +173,14 @@ Document which versions are supported and which are not (and why)
 - CUDA: 12.8, 12.9, 13.0, 13.1
 - CXX11 ABI: TRUE/FALSE : what is it? is it important to support both?
 
-### 7. Update README (CUDA 12.8+)
+### 7. Update README
 
-Document new requirement: CUDA 12.8+ (was 12.3+). This eliminated 107 lines of nvcc/ptxas download logic.
+Document new stuff, including:
+- requirement: CUDA 12.8+ (was 12.3+). This eliminated 107 lines of nvcc/ptxas download logic.
+- new location
+- how to compile (can be in a separate file
+
+Also update CLAUDE.md
 
 ### 8. cibuildwheel CI
 
