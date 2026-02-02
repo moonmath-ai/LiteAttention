@@ -630,36 +630,6 @@ class LiteAttention:
 
         return merged + [s, e]
     
-    def _quantize_query_key(self, query: torch.Tensor, key: torch.Tensor, scale: Optional[float] = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
-        SageAttention-style quantization for Q and K:
-        - Q: per-block quantization (kBlockM tokens share a scale per head)
-        - K: smooth by subtracting channel-wise mean (per head_dim element), then per-block quantization
-        
-        The K smoothing reduces channel-wise outliers without affecting attention scores
-        (since softmax is shift-invariant along the K dimension).
-        """
-        if self.use_int8:
-            # Pre-compute K mean
-            # K shape: [batch, seqlen_k, num_heads, head_dim] -> mean: [batch, num_heads, head_dim]
-            k_mean = key.mean(dim=1).float().contiguous()
-
-            # Compute q_scale: log2(e) / sqrt(head_dim) = 1.44269504089 / sqrt(head_dim)
-            head_dim = query.shape[-1]
-
-            if scale is None:
-                q_scale = 1.44269504089 / math.sqrt(head_dim)
-            else:
-                q_scale = 1.44269504089 * scale
-
-            q_int8, k_int8, q_descale, k_descale = _lite_attention_ops.quantize_qk(
-                query, key, k_mean, False, self.enable_skipping, q_scale
-            )
-            
-            return q_int8, k_int8, q_descale, k_descale
-        else:
-            return query, key, None, None
-    
     def __call__(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, 
                  scale: Optional[float] = None, return_softmax_lse: bool = False, must_do_list: list = None, must_skip_list: list = None) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """
@@ -715,9 +685,6 @@ class LiteAttention:
         >>> output = lite_attn(q, k, v, must_do_list=[0, 128, 500, 640])
         """
 
-        # quantize the query, key if needed and get the dequantization scales
-        query, key, q_descale, k_descale = self._quantize_query_key(query, key, scale)
-
         # Get read and write lists (internal mask management)
         read_list, write_list = self._get_read_write_lists(query, value, must_skip_list)
 
@@ -727,14 +694,18 @@ class LiteAttention:
         else:
             must_do_list_expanded = None
 
-        # print("must_do_list_expanded", must_do_list_expanded.shape)
-        
-        # Perform flash attention 3 with skip lists
+
+        # softmax_scale: for INT8 use q_scale (1.44269504089 * scale or / sqrt(head_dim)); else use scale as-is
+        head_dim = query.shape[-1]
+        softmax_scale = (
+            (1.44269504089 / math.sqrt(head_dim)) if scale is None else (1.44269504089 * scale)
+        ) if self.use_int8 else scale
+
         output = flash_attn_func(
             q=query,
             k=key, 
             v=value,
-            softmax_scale=None if self.use_int8 else scale,
+            softmax_scale=softmax_scale,
             attn_read_list=read_list,
             attn_must_do_list=must_do_list_expanded,
             attn_write_list=write_list,
@@ -743,8 +714,7 @@ class LiteAttention:
             reverse_skip_list=self.reverse_skip_list,
             # self._phase == 1 because we changed it in _get_read_write_lists!
             phase=(self._phase == 1) if self.reverse_skip_list else False,
-            q_descale=q_descale,
-            k_descale=k_descale,
+            use_int8=self.use_int8,
         )
 
         # Calculate and store statistics if enabled
