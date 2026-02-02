@@ -761,6 +761,14 @@ def test_min_seq_len(head_dim, min_seq_len = 7600, use_int8=False):
     test_min_seq_len_helper(attn, min_seq_len // 4, head_dim)
 
     # second time with bigger seq_len but still < min_seq_len
+    attn.threshold = float('inf') # try to not get any new skips
+    test_min_seq_len_helper(attn, min_seq_len // 2, head_dim)
+    
+    # check that the skip list includes the new sequence length range
+    # TODO
+
+    # another run with skips
+    attn.threshold = float(0)
     test_min_seq_len_helper(attn, min_seq_len // 2, head_dim)
 
     # third time with seq_len == min_seq_len
