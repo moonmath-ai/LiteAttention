@@ -23,22 +23,24 @@ Key concepts:
 
 ### Build LiteAttention (the main package)
 ```bash
-cd hopper
+# From repo root (uses CMake via scikit-build-core)
 pip install .
-# Or with limited parallelism if low on RAM:
-MAX_JOBS=4 pip install .
-```
 
-### Build FlashAttention2 (base library, optional)
-```bash
-pip install .  # from repo root
+# Or using uv for faster builds:
+uv build
+
+# With ccache for incremental builds:
+# Install ccache, then rebuild - CMake auto-detects it
+
+# With higher parallelism for nvcc:
+NVCC_THREADS=4 pip install .
 ```
 
 ## Running Tests
 
-Tests for LiteAttention are in `hopper/tests/`:
+Tests for LiteAttention are in `lite_attention/tests/`:
 ```bash
-cd hopper/tests
+cd lite_attention/tests
 pytest test_flash_attn.py  # Main attention tests
 pytest test_flash_attn.py::test_lite_attn_output  # Run specific test
 pytest test_flash_attn.py -k "seqlen_q=1024"  # Filter by parameter
@@ -50,11 +52,11 @@ Tests use pytest with many parameterized configurations (dtype, sequence lengths
 
 ### Core Components
 
-**`hopper/` - LiteAttention Package (main focus)**
+**`lite_attention/` - LiteAttention Package (main focus)**
 - `lite_attention.py` - Main `LiteAttention` and `SeqParallelLiteAttention` classes
 - `_internal/flash_attn_interface.py` - Python bindings to CUDA kernels
 - `_internal/cpp/` - CUDA/C++ kernel implementations
-- `instantiations/` - Generated kernel instantiations for different configurations
+- `instantiations/` - Generated kernel instantiations (auto-generated at build time)
 
 **`flash_attn/` - FlashAttention2 Base**
 - `flash_attn_interface.py` - FlashAttention2 Python interface
@@ -68,20 +70,20 @@ Tests use pytest with many parameterized configurations (dtype, sequence lengths
 
 ### Key Classes
 
-**`LiteAttention`** (`hopper/lite_attention.py`)
+**`LiteAttention`** (`lite_attention/lite_attention.py`)
 - Main attention class with skip list optimization
 - Manages double-buffered skip lists internally
 - Key methods: `__call__()`, `reset_skip_state()`, `set_threshold()`, `enable_skip_optimization()`
-- Tile sizes determined by `get_MN()` - must stay synchronized with C++ `tile_size.h`
+- Tile sizes determined by `get_MN()` - must stay synchronized with C++ `_internal/cpp/tile_size.h`
 
-**`SeqParallelLiteAttention`** (`hopper/lite_attention.py`)
+**`SeqParallelLiteAttention`** (`lite_attention/lite_attention.py`)
 - Wrapper for multi-GPU sequence parallelism
 - Manages separate `LiteAttention` instances per node
 
 ## Important Implementation Details
 
 ### Tile Size Synchronization
-The Python `LiteAttention.get_MN()` method must mirror the C++ `tile_size_fwd_sm90()` in `tile_size.h`. If kernel tile sizes change, update both locations.
+The Python `LiteAttention.get_MN()` method must mirror the C++ `tile_size_fwd_sm90()` in `lite_attention/_internal/cpp/tile_size.h`. If kernel tile sizes change, update both locations.
 
 ### Skip List Format
 Shape: `[2, batch, heads, qtiles, ktiles + 1]`
@@ -92,6 +94,7 @@ Shape: `[2, batch, heads, qtiles, ktiles + 1]`
 ### Environment Variables
 - `LITE_ATTENTION_VERBOSE` - Enable debug logging
 - `LITE_ATTENTION_DEBUG` - Allow positive thresholds for testing
+- `NVCC_THREADS` - Number of parallel nvcc threads during build (default: 2)
 - `FLASH_ATTENTION_DISABLE_*` - Feature flags for build configuration
 
 ## Code Style
@@ -103,3 +106,20 @@ Shape: `[2, batch, heads, qtiles, ktiles + 1]`
 ## Debugging
 
 Set `LITE_ATTENTION_VERBOSE` to anything other than "FALSE" for debug logs. Use `visualize_skips()` method to create attention pattern visualizations showing which tiles are computed vs skipped.
+
+### Working with Remote Servers
+The code is developed locally but must run on GPU servers:
+- the code on the remote is at `~/code/LiteAttention`
+
+Sync changes and run remotely:
+```bash
+# Sync entire directory to remote (include .git for submodules)
+rsync -av --exclude='__pycache__' --exclude='*.egg-info' \
+    ./ <hostname>:~/code/LiteAttention/
+
+# Sync specific files to remote
+rsync -av pyproject.toml CMakeLists.txt <hostname>:~/code/LiteAttention/
+
+# Run setup on remote
+ssh <hostname> "cd ~/code/LiteAttention && uv build/run/sync/..."
+```
