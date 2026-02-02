@@ -533,6 +533,12 @@ class LiteAttention:
         # if the sequence length changed but we expected it to happend (do to min_seq_len)
         elif (current_seq_len < self.min_seq_len and self._last_seq_len != current_seq_len):
             extra_range = [min(self._last_seq_len, current_seq_len), max(self._last_seq_len, current_seq_len)]
+            _, k_tile_size = LiteAttention.get_MN(head_dim, dtype, v_colmajor)
+            def ceil_div(x, y):
+                return (x + y - 1) // y
+            extra_range = (extra_range[0] // k_tile_size, ceil_div(extra_range[1], k_tile_size))
+            if self.reverse_skip_list and self._phase:
+                extra_range = (extra_range[1], extra_range[0])
             # update the last attributes to the current values
             self._last_seq_len = current_seq_len
             self._last_head_dim = current_head_dim

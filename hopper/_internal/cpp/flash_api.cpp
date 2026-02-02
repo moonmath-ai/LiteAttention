@@ -1935,7 +1935,10 @@
          "Tensor? attn_write_list = None,"
          "float thr = -3.0,"
          "bool reverse_skip_list = False,"
-         "bool phase = False) -> (Tensor(out!), Tensor, Tensor, Tensor)"
+         "bool phase = False,
+         "int extra_range_start = 0,"
+         "int extra_range_end = 0,"
+         ) -> (Tensor(out!), Tensor, Tensor, Tensor)"
      );
      m.def("bwd("
          "Tensor dout,"
