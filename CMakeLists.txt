@@ -6,10 +6,9 @@ if(CMAKE_CUDA_COMPILER_VERSION VERSION_LESS "12.8")
     message(FATAL_ERROR "CUDA 12.8+ required for optimal performance. Found: ${CMAKE_CUDA_COMPILER_VERSION}")
 endif()
 
-# Default to SM90 (Hopper)
-if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
-    set(CMAKE_CUDA_ARCHITECTURES "90a")
-endif()
+# Use C++20 for CUDA (set before find_package to avoid redefinition warning)
+set(CMAKE_CUDA_STANDARD 20)
+set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 
 find_package(Python REQUIRED COMPONENTS Interpreter Development.Module)
 find_package(Torch REQUIRED)
@@ -234,7 +233,6 @@ endif()
 target_compile_options(_C PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:
         -O3
-        -std=c++20
         --threads=${NVCC_THREADS}
         --ftemplate-backtrace-limit=0
         --use_fast_math

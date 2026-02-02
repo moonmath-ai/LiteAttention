@@ -120,6 +120,6 @@ rsync -av --exclude='__pycache__' --exclude='*.egg-info' \
 # Sync specific files to remote
 rsync -av pyproject.toml CMakeLists.txt <hostname>:~/code/LiteAttention/
 
-# Run setup on remote
-ssh <hostname> "cd ~/code/LiteAttention && uv build/run/sync/..."
+# Build on remote (only needs nvcc in PATH, CUDA_HOME not required)
+ssh <hostname> "export PATH=/usr/local/cuda-12.8/bin:\$PATH && cd ~/code/LiteAttention && uv build"
 ```

@@ -32,23 +32,26 @@ Possible causes:
 - Variance in measurements
 (look for more ideas)
 
-### 2. Test build with minimal environment variables
+### 2. Test build with minimal environment variables ✅
 
-Test what happens when envvars are unset to understand actual requirements:
-- Build without `CUDA_HOME` set
-- Build without adding cuda to `PATH`
-- Document which envvars are actually required vs auto-detected
+**Tested.** Results:
+- `CUDA_HOME` - **NOT required**. CMake finds CUDA toolkit from nvcc location.
+- `nvcc` in PATH - **Required**. Build fails without it.
+
+Only requirement: `export PATH=/usr/local/cuda-12.8/bin:$PATH`
 
 ### 3. Speed optimizations
 
 Any way to improve the build time is welcome.
-Some ideas:
+
+Tried, not helping:
 - **3a. Try NVCC_THREADS=4** - currently default is 2, matching old setup.py
 - **3b. Try `--split-compile`** - commented out in old setup.py as "faster", worth testing
   ```
   # f"--split-compile={os.getenv('NVCC_THREADS', '4')}",  # split-compile is faster
   ```
-(look for more ideas)
+Ideas to try:
+- (look for more ideas)
 
 ### 4. Handle all build warnings
 
