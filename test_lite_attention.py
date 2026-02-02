@@ -745,6 +745,34 @@ def test_int8_with_skipping(q, k, v, head_dim, tolerance_max_abs=0.15, tolerance
     # If tile sizes don't match, always return True (don't fail)
     return overall_passed if tile_sizes_match else True
 
+def test_min_seq_len_helper(attn, seq_len, head_dim):
+    q, k, v = generate_test_tensors(batch=2, seq_len=seq_len, heads=12, head_dim=head_dim)
+    torch.cuda.synchronize()
+    output = attn(q, k, v)
+    torch.cuda.synchronize()
+    return output
+
+def test_min_seq_len(head_dim, min_seq_len = 7600, use_int8=False):
+    attn = LiteAttention(use_int8=use_int8)
+    attn.threshold = float(0.0)
+
+    # first time with seq_len < min_seq_len
+    # q, k, v = generate_test_tensors(batch=2, seq_len=min_seq_len // 4, heads=12, head_dim=head_dim)
+    test_min_seq_len_helper(attn, min_seq_len // 4, head_dim)
+
+    # second time with bigger seq_len but still < min_seq_len
+    test_min_seq_len_helper(attn, min_seq_len // 2, head_dim)
+
+    # third time with seq_len == min_seq_len
+    test_min_seq_len_helper(attn, min_seq_len, head_dim)
+
+    # fourth time with seq_len > min_seq_len
+    test_min_seq_len_helper(attn, min_seq_len + 1, head_dim)
+
+    # fifth time with seq_len < min_seq_len
+    test_min_seq_len_helper(attn, min_seq_len // 4, head_dim)
+    
+
 def run_tests_for_head_dim(head_dim, batch=2, seq_len=18200, heads=32):
     """Run all tests for a specific head dimension."""
     print(f"\n{'='*60}")
