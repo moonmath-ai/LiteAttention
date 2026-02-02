@@ -391,7 +391,7 @@ class LiteAttention:
         
         return skip_list
 
-    def _init_skip_list(self, query: torch.Tensor, value: torch.Tensor, must_skip_list: list = None, min_seq_len: int = 0) -> torch.Tensor:
+    def _init_skip_list(self, query: torch.Tensor, value: torch.Tensor, must_skip_list: list = None) -> torch.Tensor:
         """
         Initialize skip list tensors based on query and value tensor shapes.
         
@@ -411,7 +411,7 @@ class LiteAttention:
         """
         # batch, seq_len, heads, head_dim = query.shape
         batch, seq_len, heads, head_dim = value.shape
-        seq_len = max(seq_len, min_seq_len)
+        seq_len = max(seq_len, self.min_seq_len)
         assert batch <= self.max_batch_size, "batch size must be less than or equal to max_batch_size (modify max_batch_size in LiteAttention constructor)"
         
         # Determine if value tensor is column-major (affects tile size selection)
@@ -489,7 +489,7 @@ class LiteAttention:
         # we always enter this in the first call
         if should_reinitialize:
             # initialize the skip list (actually allocate the memory)
-            self._skip_list = self._init_skip_list(query, value, must_skip_list, self.min_seq_len)
+            self._skip_list = self._init_skip_list(query, value, must_skip_list)
             # ditermines which part of self._skip_list to use for read_list and write_list
             self._phase = 0
 
@@ -508,6 +508,12 @@ class LiteAttention:
         # if the sequence length changed but we expected it to happend (do to min_seq_len)
         elif (current_seq_len < self.min_seq_len and self._last_seq_len != current_seq_len):
             extra_range = [min(self._last_seq_len, current_seq_len), max(self._last_seq_len, current_seq_len)]
+            _, k_tile_size = LiteAttention.get_MN(head_dim, dtype, v_colmajor)
+            def ceil_div(x, y):
+                return (x + y - 1) // y
+            extra_range = (extra_range[0] // k_tile_size, ceil_div(extra_range[1], k_tile_size))
+            if self.reverse_skip_list and self._phase:
+                extra_range = (extra_range[1], extra_range[0])
             # update the last attributes to the current values
             self._last_seq_len = current_seq_len
             self._last_head_dim = current_head_dim

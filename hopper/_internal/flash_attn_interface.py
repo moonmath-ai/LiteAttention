@@ -113,7 +113,8 @@ def _flash_attn_forward(
         thr=thr,
         reverse_skip_list=reverse_skip_list,
         phase=phase,
-        extra_range=extra_range,
+        extra_range_start= extra_range[0] if extra_range is not None else None,
+        extra_range_end=extra_range[1] if extra_range is not None else None,
     )
     return out, softmax_lse, *rest
 
