@@ -310,6 +310,7 @@ class FlashAttnFunc(torch.autograd.Function):
         reverse_skip_list=False,
         phase=False,
         extra_range=None,
+        num_blocks=None,
     ):
         if softmax_scale is None:
             softmax_scale = (q.shape[-1] + (qv.shape[-1] if qv is not None else 0)) ** (-0.5)
@@ -343,6 +344,7 @@ class FlashAttnFunc(torch.autograd.Function):
             reverse_skip_list=reverse_skip_list,
             phase=phase,
             extra_range=extra_range,
+            num_blocks=num_blocks,
         )
         # ctx.save_for_backward(q, k, v, out_padded, softmax_lse)
         ctx.save_for_backward(q, k, v, out, softmax_lse)

@@ -778,6 +778,7 @@ class LiteAttention:
             q_descale=q_descale,
             k_descale=k_descale,
             extra_range=extra_range, # TODO: should be rounded to tile indices (also take the reverse/phase into account)
+            num_blocks= self._skip_list.shape[-1] if self.enable_skipping is not None else None,
         )
 
         # Calculate and store statistics if enabled

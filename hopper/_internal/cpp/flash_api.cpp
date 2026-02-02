@@ -1020,6 +1020,10 @@
          params.qk_skip_mask_args.attn_must_do_list = nullptr;
          params.has_must_do_list = false;
      }
+     
+     if(params.is_skipable){
+        params.qk_skip_mask_args.num_blocks = num_blocks;
+     }
  
      params.total_q = total_q;
      params.total_k = total_k;
@@ -1969,6 +1973,7 @@ quantize_qk(
          "bool phase = False,
          "int extra_range_start = 0,"
          "int extra_range_end = 0,"
+         "int num_blocks = -1,"
          ) -> (Tensor(out!), Tensor, Tensor, Tensor)"
      );
      m.def("bwd("
