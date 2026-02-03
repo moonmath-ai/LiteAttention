@@ -60,6 +60,7 @@ def _flash_attn_forward(
         reverse_skip_list=False,
         phase=False,
         extra_range=None,
+        num_blocks=None,
     ):
     q, k, k_new, v_new = [maybe_contiguous(x) for x in (q, k, k_new, v_new)]
     v = v.contiguous() if v.stride(-1) != 1 and v.stride(-3) != 1 else v
@@ -117,6 +118,7 @@ def _flash_attn_forward(
         phase=phase,
         extra_range_start= extra_range[0] if extra_range is not None else None,
         extra_range_end=extra_range[1] if extra_range is not None else None,
+        num_blocks=num_blocks if num_blocks is not None else -1,
     )
     return out, softmax_lse, *rest
 
@@ -590,6 +592,7 @@ def flash_attn_func(
     reverse_skip_list=False,
     phase=False,
     extra_range=None,
+    num_blocks=None,
 ):
     """dropout_p should be set to 0.0 during evaluation
     Supports multi-query and grouped-query attention (MQA/GQA) by passing in KV with fewer heads
@@ -661,6 +664,7 @@ def flash_attn_func(
         reverse_skip_list,
         phase,
         extra_range,
+        num_blocks,
     )
 
 

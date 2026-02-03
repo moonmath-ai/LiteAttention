@@ -741,8 +741,9 @@
          double thr,
          bool reverse_skip_list = false,
          bool phase = false,
-         std::optional<int> extra_range_start_,
-         std::optional<int> extra_range_end_
+         std::optional<int64_t> extra_range_start_ = std::nullopt,
+         std::optional<int64_t> extra_range_end_ = std::nullopt,
+         int64_t num_blocks = -1
      ) {
  
      auto dprops = at::cuda::getCurrentDeviceProperties();
@@ -1033,8 +1034,8 @@
      params.has_extra_range = false;
      if (extra_range_start_.has_value() && extra_range_end_.has_value()) {
          params.has_extra_range = true;
-         params.qk_skip_mask_args.extra_range_start = extra_range_start_.value();
-         params.qk_skip_mask_args.extra_range_end = extra_range_end_.value();
+         params.qk_skip_mask_args.extra_range_start = static_cast<int>(extra_range_start_.value());
+         params.qk_skip_mask_args.extra_range_end = static_cast<int>(extra_range_end_.value());
      }
  
      // Convert skip mask tensors to QKSkipMaskArgs struct
@@ -1090,6 +1091,10 @@
      } else {
          params.qk_skip_mask_args.attn_must_do_list = nullptr;
          params.has_must_do_list = false;
+     }
+     
+     if(params.is_skipable){
+        params.qk_skip_mask_args.num_blocks = static_cast<int>(num_blocks);
      }
  
      params.total_q = total_q;
@@ -1935,10 +1940,10 @@
          "Tensor? attn_write_list = None,"
          "float thr = -3.0,"
          "bool reverse_skip_list = False,"
-         "bool phase = False,
-         "int extra_range_start = 0,"
-         "int extra_range_end = 0,"
-         ) -> (Tensor(out!), Tensor, Tensor, Tensor)"
+         "bool phase = False,"
+         "int? extra_range_start = None,"
+         "int? extra_range_end = None,"
+         "int num_blocks = -1) -> (Tensor(out!), Tensor, Tensor, Tensor)"
      );
      m.def("bwd("
          "Tensor dout,"
