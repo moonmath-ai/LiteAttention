@@ -150,6 +150,24 @@ pytest test_flash_attn.py::test_lite_attn_output -v
 WAN can use this as a requirement, we can generate a video and see that it works, and the speed.
 This is the practical usage, hence an important test.
 
+#### 5d. Fix test imports - remove PYTHONPATH requirement
+Currently tests require:
+```bash
+cd lite_attention/tests
+export PYTHONPATH=../utils:../_internal:$PYTHONPATH
+pytest ...
+```
+**Goal:** Restructure tests/package so `pytest lite_attention/tests/` works from repo root without env vars.
+Options:
+- Move `padding.py` and `test_util.py` into tests/ or make them proper package imports
+- Add conftest.py that sets up sys.path
+- Use relative imports within the package
+
+#### 5e. Test with all kernel variants enabled
+Current build disables some features (FP16, FP8, softcap, local, etc.) resulting in ~470 skipped tests.
+**Goal:** Run full test suite with all variants to verify complete functionality.
+Note: This will increase build time significantly.
+
 ### 6. ccache - added, not tested
 
 ccache might improve compile times.
