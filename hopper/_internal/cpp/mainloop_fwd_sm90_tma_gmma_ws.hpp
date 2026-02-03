@@ -750,7 +750,7 @@ namespace flash
             {
                 skip_reader.template init<TileShape_MNK>(params, bidb, bidh, m_block);
                 // very important!! this tells the consumer when to stop.
-                shared_storage.skip_list_storage.last_n_block[0] = HasExtraRange ? params.qk_skip_mask_args.extra_range_end : skip_reader.last_n_block();
+                shared_storage.skip_list_storage.last_n_block[0] = HasExtraRange ? (params.qk_skip_mask_args.extra_range_end - skip_reader.step) : skip_reader.last_n_block();
                 __threadfence_block();
                 // skip_writer.template init<TileShape_MNK>(params, bidb, bidh, m_block);
                 if constexpr (HasMustDoList)
@@ -1188,14 +1188,34 @@ namespace flash
                 }while(true);
 
                 if (HasExtraRange){
-                    for (n_block = skip_reader.start_idx; n_block < params.qk_skip_mask_args.extra_range_end; n_block += skip_reader.step)
-                    {
-                        PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
-                        ++smem_pipe_write;
-                        load_KV_for_block(n_block, n_block_prev, smem_pipe_write, smem_pipe_write_v, skip_writer);
-                        n_block_prev = n_block;
-                        if constexpr (Transpose_V){ copy_Vt_to_V(smem_pipe_write_v); }
+                    // for (n_block = skip_reader.start_idx; n_block < params.qk_skip_mask_args.extra_range_end; n_block++)
+                    // {
+                    //     PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
+                    //     ++smem_pipe_write;
+                    //     load_KV_for_block(n_block, n_block_prev, smem_pipe_write, smem_pipe_write_v, skip_writer);
+                    //     n_block_prev = n_block;
+                    //     if constexpr (Transpose_V){ copy_Vt_to_V(smem_pipe_write_v); }
+                    // }
+                    if constexpr (Phase){
+                        for (n_block = params.qk_skip_mask_args.extra_range_start; n_block < params.qk_skip_mask_args.extra_range_end; n_block += skip_reader.step)
+                        {
+                            PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
+                            ++smem_pipe_write;
+                            load_KV_for_block(n_block, n_block_prev, smem_pipe_write, smem_pipe_write_v, skip_writer);
+                            n_block_prev = n_block;
+                            if constexpr (Transpose_V){ copy_Vt_to_V(smem_pipe_write_v); }
+                        }
+                    }else{
+                        for (n_block = params.qk_skip_mask_args.extra_range_start; n_block > params.qk_skip_mask_args.extra_range_end; n_block += skip_reader.step)
+                        {
+                            PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
+                            ++smem_pipe_write;
+                            load_KV_for_block(n_block, n_block_prev, smem_pipe_write, smem_pipe_write_v, skip_writer);
+                            n_block_prev = n_block;
+                            if constexpr (Transpose_V){ copy_Vt_to_V(smem_pipe_write_v); }
+                        }
                     }
+                    if (should_load_KV){skip_writer.record_range_end(params.qk_skip_mask_args.extra_range_end);}
                 }
             }else{
                 --n_block;
