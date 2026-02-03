@@ -42,12 +42,15 @@ Tests for LiteAttention are in `lite_attention/tests/`:
 ```bash
 cd lite_attention/tests
 
+# Install test dependencies
+pip install einops pytest
+
 # PYTHONPATH must include utils/ and _internal/ for relative imports
 export PYTHONPATH=../utils:../_internal:$PYTHONPATH
 
 pytest test_flash_attn.py  # Main attention tests
 pytest test_flash_attn.py::test_lite_attn_output  # Run specific test
-pytest test_flash_attn.py -k "seqlen" -k "1024"  # Filter by parameter
+pytest test_flash_attn.py -k "seqlen_q=1024"  # Filter by parameter
 ```
 
 Tests use pytest with many parameterized configurations (dtype, sequence lengths, head dimensions, etc.).
