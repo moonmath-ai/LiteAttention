@@ -76,9 +76,43 @@ must_do_list = [0, 128, 500, 640]  # Compute sequence positions [0, 128) and [50
 """
 
 import torch
+import torch.nn as nn
 import os
 import math
+import typing
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional, Tuple, Union
+
+from .calibrated_module import (
+    CalibratedCalibConfig,
+    CalibratedRunConfig,
+    ConfigurableModule,
+)
+
+import structlog
+
+log = structlog.get_logger()
+
+
+@dataclass
+class LiteAttentionRunConfig(CalibratedRunConfig):
+    """Runtime configuration for LiteAttention threshold."""
+
+    threshold: float
+
+    @classmethod
+    def default(cls) -> typing.Self:
+        return cls(threshold=-10.0)
+
+
+@dataclass
+class LiteAttentionCalibConfig(CalibratedCalibConfig):
+    """Calibration configuration for finding optimal threshold."""
+
+    metric: typing.Literal["Cossim", "L1", "RMSE"] = "L1"
+    target_error: float = 0.01
+
 
 from ._internal.flash_attn_interface import flash_attn_func
 import torch.nn.functional as F
@@ -88,7 +122,7 @@ import lite_attention._C  # noqa: F401
 _lite_attention_ops = torch.ops.lite_attention
 
 
-class LiteAttention:
+class LiteAttention(nn.Module, ConfigurableModule):
     """
     A lightweight attention class that encapsulates Flash Attention 3 with optimized skip lists.
     
@@ -108,37 +142,43 @@ class LiteAttention:
     Args:
         enable_skipping (bool, optional): Whether to enable skip list optimizations. 
             Defaults to True. When False, performs standard Flash Attention.
-        threshold (float, optional): Log-space threshold for skipping tiles. Defaults to -10.0.
-            Tiles with max(log-attention-score) < threshold will be skipped.
-            Must be negative in non-debug mode. Lower values = more aggressive skipping.
         max_batch_size (int, optional): Maximum batch size to pre-allocate memory for.
             Defaults to 2. Actual batch size can be smaller but not larger.
         reverse_skip_list (bool, optional): Whether to use reversed skip list format.
             Defaults to True. Affects the ordering of ranges in skip lists.
+        config (LiteAttentionRunConfig | LiteAttentionCalibConfig, optional): Configuration
+            for threshold or calibration. Supports per-timestep configs via ConfigList.
+            If LiteAttentionCalibConfig, runs calibration to find optimal threshold.
     
     Attributes:
         enable_skipping (bool): Current state of skip optimization
-        threshold (float): Current threshold value
         read_list (torch.Tensor): Current read skip list (read-only property)
         write_list (torch.Tensor): Current write skip list (read-only property)
         
     Example:
-        >>> # Basic usage with skip optimization (default)
-        >>> lite_attn = LiteAttention(threshold=-5.0)
+        >>> # Basic usage with default config (threshold=-10.0)
+        >>> lite_attn = LiteAttention()
         >>> output = lite_attn(query, key, value)
-        
-        >>> # With must-do list to force certain sequence ranges
-        >>> lite_attn = LiteAttention(enable_skipping=True, threshold=-8.0)
-        >>> # Force computation of sequence positions [0, 128) and [500, 640) (exclusive end)
-        >>> must_do = [0, 128, 500, 640]
-        >>> output = lite_attn(query, key, value, must_do_list=must_do)
-        
-        >>> # Disable skipping for specific forward pass
-        >>> lite_attn.enable_skip_optimization(False)
+
+        >>> # With explicit config
+        >>> lite_attn = LiteAttention(config=LiteAttentionRunConfig(threshold=-8.0))
         >>> output = lite_attn(query, key, value)
+
+        >>> # Using ConfigurableModule pattern with ModuleRegistry
+        >>> from .calibrated_module import ModuleRegistry
+        >>> model = MyModel()  # contains LiteAttention modules
+        >>> registry = ModuleRegistry(model.named_modules())
+        >>> registry.set_bulk_config(LiteAttentionRunConfig(threshold=-8.0))
+
+        >>> # Calibration mode - find optimal threshold for target error
+        >>> registry.set_bulk_config(LiteAttentionCalibConfig(target_error=0.01, metric="L1"))
     """
-    
-    def __init__(self, enable_skipping: bool = True, threshold: float = -10.0, max_batch_size: int = 2, reverse_skip_list: bool = True, use_int8: bool = False, calibration_mode: bool = False, l1_calib_target: float = 0.1):
+
+    run_config_type = LiteAttentionRunConfig
+
+    def __init__(self, enable_skipping: bool = True, max_batch_size: int = 2, reverse_skip_list: bool = True, use_int8: bool = False, config: LiteAttentionRunConfig | LiteAttentionCalibConfig | None = None):
+        nn.Module.__init__(self)
+        ConfigurableModule.__init__(self, config)
         # Internal skip list management
         self._skip_list = None  # Shape: [2, max_batch_size, heads, qtiles, ktiles+1]
         self._phase = 0  # Alternates between 0 and 1 for double-buffering
@@ -159,13 +199,7 @@ class LiteAttention:
         
         # Public configuration
         self.enable_skipping = enable_skipping
-        self.set_threshold(threshold)
         self.max_batch_size = max_batch_size
-
-        self.calibration_mode = calibration_mode
-        if calibration_mode:
-            self.l1_calib_target = l1_calib_target
-            self.calibrated_th = 0
 
 
     @staticmethod
@@ -650,49 +684,6 @@ class LiteAttention:
             else: merged += [s, e]; s, e = a, b
 
         return merged + [s, e]
-
-
-    def inside_call(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, 
-                 scale: Optional[float] = None, return_softmax_lse: bool = False, must_do_list: list = None, must_skip_list: list = None) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        
-        # quantize the query, key if needed and get the dequantization scales
-        query, key, q_descale, k_descale = self._quantize_query_key(query, key, scale)
-
-        # Get read and write lists (internal mask management)
-        read_list, write_list = self._get_read_write_lists(query, value, must_skip_list) 
-
-        # TODO: this should happen only at the first call
-        if self.enable_skipping and (must_do_list is not None):
-            # handle must-do list - expand the 1d list to a list per head per batch per qi
-            must_do_list_expanded = self._expand_must_do_list(must_do_list, write_list.shape, query, value, self.use_int8)
-        else:
-            must_do_list_expanded = None
-
-        # Perform flash attention 3 with skip lists
-        output = flash_attn_func(
-            q=query,
-            k=key, 
-            v=value,
-            softmax_scale=None if self.use_int8 else scale,
-            attn_read_list=read_list,
-            attn_must_do_list=must_do_list_expanded,
-            attn_write_list=write_list,
-            thr=self.threshold,
-            return_softmax_lse=return_softmax_lse,
-            reverse_skip_list=self.reverse_skip_list,
-            # self._phase == 1 because we changed it in _get_read_write_lists!
-            phase=(self._phase == 1) if self.reverse_skip_list else False,
-            q_descale=q_descale,
-            k_descale=k_descale,
-        )
-
-        # Calculate and store statistics if enabled
-        if self.enable_skipping and os.getenv("LITE_ATTENTION_VERBOSE", "FALSE") != "FALSE":
-            real_batch_size = query.shape[0]
-            self._last_percentage = self.calc_percentage(read_list[:real_batch_size])
-            print(f"[Info]: Percentage of tiles skipped: {1.0 - self._last_percentage:.2%}")
-        
-        return output
     
     def _quantize_query_key(self, query: torch.Tensor, key: torch.Tensor, scale: Optional[float] = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
@@ -723,9 +714,17 @@ class LiteAttention:
             return q_int8, k_int8, q_descale, k_descale
         else:
             return query, key, None, None
-    
-    def __call__(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, 
-                 scale: Optional[float] = None, return_softmax_lse: bool = False, must_do_list: list = None, must_skip_list: list = None) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+
+    def forward(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        scale: Optional[float] = None,
+        return_softmax_lse: bool = False,
+        must_do_list: list = None,
+        must_skip_list: list = None,
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """
         Perform Flash Attention 3 computation with optional skip list optimization.
         
@@ -771,36 +770,38 @@ class LiteAttention:
         
         Example:
         -------
-        >>> lite_attn = LiteAttention(threshold=-8.0)
+        >>> lite_attn = LiteAttention(config=LiteAttentionRunConfig(threshold=-10.0))
         >>> output = lite_attn(q, k, v)
         >>> 
         >>> # With must-do list to force specific sequence ranges
         >>> # Force computation for positions [0, 128) and [500, 640) (exclusive end)
         >>> output = lite_attn(q, k, v, must_do_list=[0, 128, 500, 640])
         """
-        if not self.calibration_mode:
-            return self.inside_call(query, key, value, scale, return_softmax_lse, must_do_list, must_skip_list)
-        else:
-	    query, key, q_descale, k_descale = self._quantize_query_key(query, key, scale)
+        cfg = self.config
+        # quantize the query, key if needed and get the dequantization scales
+        query, key, q_descale, k_descale = self._quantize_query_key(query, key, scale)
 
-            read_list, write_list = self._get_read_write_lists(query, value, must_skip_list)
-            temp_list = read_list.clone() #fix
-            reached_calib_target = False
-            low = -20.0
-            high = 0.0
-            # curr_th = -1.0
-            while not reached_calib_target:
-                # read_list = temp_list #fix
-                curr_th = (low + high) / 2
-                # curr_th += 0.01
+        # Get read and write lists (internal mask management)
+        read_list, write_list = self._get_read_write_lists(query, value, must_skip_list)
+
+        if self.enable_skipping and (must_do_list is not None):
+            # handle must-do list - expand the 1d list to a list per head per batch per qi
+            must_do_list_expanded = self._expand_must_do_list(must_do_list, write_list.shape, query, value, self.use_int8)
+        else:
+            must_do_list_expanded = None
+
+        if isinstance(cfg, LiteAttentionCalibConfig):
+            temp_list = read_list.clone()
+
+            def calibration_step(curr_th):
                 print(f"testing th {curr_th}")
-                ref = flash_attn_func(
+                output_old_th = flash_attn_func(
                     q=query,
                     k=key,
                     v=value,
                     softmax_scale=None if self.use_int8 else scale,
                     attn_read_list=read_list,
-                    attn_must_do_list=None,
+                    attn_must_do_list=must_do_list_expanded,
                     attn_write_list=write_list,
                     thr=curr_th,
                     return_softmax_lse=return_softmax_lse,
@@ -810,100 +811,96 @@ class LiteAttention:
                     q_descale=q_descale,
                     k_descale=k_descale,
                 )
-                print(f"skip percentage {self.calc_percentage(write_list)}")
-                read_list, write_list = self._get_read_write_lists(query, value, must_skip_list)
-                output = flash_attn_func(
+                # we switch read <-> write manually; we remember to flip phase
+                self._phase = 1 - self._phase
+                output_new_th = flash_attn_func(
                     q=query,
                     k=key,
                     v=value,
                     softmax_scale=None if self.use_int8 else scale,
-                    attn_read_list=read_list,
-                    attn_must_do_list=None,
-                    attn_write_list=temp_list,
+                    attn_read_list=write_list,  # this injects the new threshold calculated before.
+                    attn_must_do_list=must_do_list_expanded,
+                    attn_write_list=temp_list,  # we will drop this result
                     thr=curr_th,
                     return_softmax_lse=return_softmax_lse,
                     reverse_skip_list=self.reverse_skip_list,
                     # self._phase == 1 because we changed it in _get_read_write_lists!
                     phase=(self._phase == 1) if self.reverse_skip_list else False,
-           	    q_descale=q_descale,
+                    q_descale=q_descale,
                     k_descale=k_descale,
                 )
-                curr_error = self.calc_error(output, ref)["L1"]
-                error_diff = self.l1_calib_target - curr_error
-                if curr_error < 1.1* self.l1_calib_target and curr_error > 0.9* self.l1_calib_target:
-                    reached_calib_target = True
-                elif error_diff < 0:
-                    high = curr_th
-                else:
-                    low = curr_th
-            self.calibrated_th = curr_th
-            print(f"found calibrated threshold: {self.calibrated_th}")
-            return output            
+                # and we must flip back
+                self._phase = 1 - self._phase
+                # calc error
+                curr_error = self.calc_error(output_new_th, output_old_th)[cfg.metric]
+                print(
+                    f"{curr_th=}, {curr_error=}, skip percentage={self.calc_percentage(write_list[: query.shape[0]])}"
+                )
+                return curr_error
 
-     
-        # if self.calibration_mode:
-        #     ref = flash_attn_func(
-        #             q=query,
-        #             k=key, 
-        #             v=value,
-        #             softmax_scale=scale,
-        #             attn_read_list=read_list,
-        #             attn_must_do_list=must_do_list_expanded,
-        #             attn_write_list=write_list,
-        #             thr=float('-inf'),
-        #             return_softmax_lse=return_softmax_lse,
-        #             reverse_skip_list=self.reverse_skip_list,
-        #             # self._phase == 1 because we changed it in _get_read_write_lists!
-        #             phase=(self._phase == 1) if self.reverse_skip_list else False,
-        #     )
-        #     temp_list = write_list.clone()
-        #     reached_calib_target = False
-        #     low = -20.0
-        #     high = 0.0
-        #     while not reached_calib_target:
-        #         curr_th = (low + high) / 2
-        #         print(f"testing th {curr_th}")
-        #         # Perform flash attention 3 with skip lists
-        #         output = flash_attn_func(
-        #             q=query,
-        #             k=key, 
-        #             v=value,
-        #             softmax_scale=scale,
-        #             attn_read_list=read_list,
-        #             attn_must_do_list=must_do_list_expanded,
-        #             attn_write_list=write_list,
-        #             thr=curr_th,
-        #             return_softmax_lse=return_softmax_lse,
-        #             reverse_skip_list=self.reverse_skip_list,
-        #             # self._phase == 1 because we changed it in _get_read_write_lists!
-        #             phase=(self._phase == 1) if self.reverse_skip_list else False,
-        #         )
-        #         print(f"skip percentage {self.calc_percentage(write_list)}")
-        #         output = flash_attn_func(
-        #             q=query,
-        #             k=key, 
-        #             v=value,
-        #             softmax_scale=scale,
-        #             attn_read_list=write_list,
-        #             attn_must_do_list=must_do_list_expanded,
-        #             attn_write_list=temp_list,
-        #             thr=curr_th,
-        #             return_softmax_lse=return_softmax_lse,
-        #             reverse_skip_list=self.reverse_skip_list,
-        #             # self._phase == 1 because we changed it in _get_read_write_lists!
-        #             phase=(self._phase == 1) if self.reverse_skip_list else False,
-        #         )
-        #         curr_error = self.calc_error(output, ref)["L1"]
-        #         error_diff = self.l1_calib_target - curr_error
-        #         if error_diff < 0.01 and error_diff > -0.01:
-        #             reached_calib_target = True
-        #         elif error_diff < 0:
-        #             high = curr_th
-        #         else:
-        #             low = curr_th
-        #     self.calibrated_th = curr_th
-        #     print(f"found calibrated threshold: {self.calibrated_th}")
-        # else:
+            def find_threshold(low, high):
+                curr_error = calibration_step(high)
+                error_diff = curr_error - cfg.target_error
+                if error_diff <= 0:
+                    print(
+                        f"Warning: error at th={high} ({curr_error:.4f}) is below target ({cfg.target_error}). Using th={high}"
+                    )
+                    return high
+
+                curr_error = calibration_step(low)
+                error_diff = curr_error - cfg.target_error
+                if error_diff >= 0:
+                    print(
+                        f"Warning: error at th={low} ({curr_error:.4f}) is above target ({cfg.target_error}). Using th={low}"
+                    )
+                    return low
+
+                # binary search between high (error > target) and low (error <= target)
+                while True:
+                    curr_th = (low + high) / 2
+                    curr_error = calibration_step(curr_th)
+                    error_diff = curr_error - cfg.target_error
+                    if abs(error_diff / cfg.target_error) < 0.1:
+                        print(f"found calibrated threshold: {curr_th}")
+                        return curr_th
+                    elif error_diff > 0:
+                        high = curr_th
+                    else:
+                        low = curr_th
+
+            threshold = find_threshold(low=-20.0, high=0.0)
+        else:
+            assert isinstance(cfg, LiteAttentionRunConfig)
+            threshold = cfg.threshold
+
+        # Perform flash attention 3 with skip lists
+        output = flash_attn_func(
+            q=query,
+            k=key, 
+            v=value,
+            softmax_scale=None if self.use_int8 else scale,
+            attn_read_list=read_list,
+            attn_must_do_list=must_do_list_expanded,
+            attn_write_list=write_list,
+            thr=threshold,
+            return_softmax_lse=return_softmax_lse,
+            reverse_skip_list=self.reverse_skip_list,
+            # self._phase == 1 because we changed it in _get_read_write_lists!
+            phase=(self._phase == 1) if self.reverse_skip_list else False,
+            q_descale=q_descale,
+            k_descale=k_descale,
+        )
+
+        # Record calibration results and advance timestep
+        self.add_calibration_results(LiteAttentionRunConfig(threshold=threshold))
+
+        # Calculate and store statistics if enabled
+        if self.enable_skipping and os.getenv("LITE_ATTENTION_VERBOSE", "FALSE") != "FALSE":
+            real_batch_size = query.shape[0]
+            self._last_percentage = self.calc_percentage(read_list[:real_batch_size])
+            print(f"[Info]: Percentage of tiles skipped: {1.0 - self._last_percentage:.2%}")
+        
+        return output
     
     def reset_skip_state(self):
         """
@@ -955,7 +952,7 @@ class LiteAttention:
         
         Examples:
         --------
-        >>> lite_attn = LiteAttention(threshold=-10.0)
+        >>> lite_attn = LiteAttention(config=LiteAttentionRunConfig(threshold=-10.0))
         >>> lite_attn.set_threshold(-5.0)   # More aggressive skipping
         >>> lite_attn.set_threshold(-15.0)  # Less aggressive skipping
         
@@ -967,7 +964,7 @@ class LiteAttention:
         if threshold >= 0 and os.getenv("LITE_ATTENTION_DEBUG", "FALSE") == "FALSE":
             raise ValueError("threshold must be negative when debug mode is not enabled")
 
-        self.threshold = threshold
+        self._instance_config = LiteAttentionRunConfig(threshold=threshold)
     
     def enable_skip_optimization(self, enable: bool = True):
         """
@@ -1211,9 +1208,9 @@ class SeqParallelLiteAttention:
         num_nodes (int): Number of nodes in the sequence-parallel setup
         enable_skipping (bool, optional): Whether to enable skip list optimizations.
             Defaults to True.
-        threshold (float, optional): Log-space threshold for skipping tiles.
-            Defaults to -10.0.
         max_batch_size (int, optional): Maximum batch size. Defaults to 2.
+        config (LiteAttentionRunConfig | LiteAttentionCalibConfig, optional): Configuration
+            for threshold or calibration. Applied to all LiteAttention instances.
     
     Attributes:
         num_nodes (int): Number of nodes
@@ -1222,20 +1219,20 @@ class SeqParallelLiteAttention:
     
     Example:
     -------
-    >>> # Setup for 4-way sequence parallelism
-    >>> seq_parallel_attn = SeqParallelLiteAttention(num_nodes=4, threshold=-8.0)
-    >>> 
+    >>> # Setup for 4-way sequence parallelism with explicit threshold
+    >>> config = LiteAttentionRunConfig(threshold=-8.0)
+    >>> seq_parallel_attn = SeqParallelLiteAttention(num_nodes=4, config=config)
+    >>>
     >>> # Node 0 processes its portion
     >>> output_0 = seq_parallel_attn(q_0, k_0, v_0, split_idx=0)
     >>> 
     >>> # Node 1 processes its portion
     >>> output_1 = seq_parallel_attn(q_1, k_1, v_1, split_idx=1)
     """
-    def __init__(self, num_nodes: int, enable_skipping: bool = True, threshold: float = -10.0, max_batch_size: int = 2, use_int8: bool = False):
+    def __init__(self, num_nodes: int, enable_skipping: bool = True, max_batch_size: int = 2, use_int8: bool = False, config: LiteAttentionRunConfig | LiteAttentionCalibConfig | None = None):
         self.num_nodes = num_nodes
         # Create separate LiteAttention instance for each node
-        self.lite_attention = [LiteAttention(enable_skipping, threshold, max_batch_size, use_int8) for _ in range(num_nodes)]
-        self.set_threshold(threshold)
+        self.lite_attention = [LiteAttention(enable_skipping, max_batch_size, use_int8=use_int8, config=config) for _ in range(num_nodes)]
 
     def __call__(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, split_idx: int,
                  scale: Optional[float] = None, return_softmax_lse: bool = False, must_do_list: list = None) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
@@ -1281,7 +1278,8 @@ class SeqParallelLiteAttention:
         Set threshold for all nodes.
         
         Args:
-            threshold (float): Threshold value to apply to all nodes
+            threshold (float): Threshold value to apply to all nodes.
+                Updates the config for each LiteAttention instance.
         """
         for lite_attention in self.lite_attention:
             lite_attention.set_threshold(threshold)
