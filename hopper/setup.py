@@ -677,6 +677,8 @@ setup(
         "einops",
         "packaging",
         "ninja",
+        "structlog",
+        "tomli-w",
     ],
     options={"bdist_wheel": {"py_limited_api": "cp39"}},
 )
