@@ -322,13 +322,15 @@ def test_rectangular_attention_skipping_twice(head_dim, batch=1, q_len=240, k_le
     # We align the K layout to tile boundaries to make the effect stable across runs.
     tile_dtype = torch.int8 if use_int8 else torch.bfloat16
     kBlockM, kBlockN = LiteAttention.get_MN(head_dim, tile_dtype, v_colmajor=False)
-    q_len = 2 * kBlockM + 1  # ensure multiple q-tiles, keep Lq != Lk
-    # Use >= 4 key tiles so the skip-list representation (which can require 4 entries for 2 ranges)
-    # always fits within the allocated [ktiles + 1] buffer.
-    k_len = 4 * kBlockN      # 4 key tiles: [+Q, -Q, -Q, +Q] (direction-independent)
 
     device = "cuda"
     dtype = torch.bfloat16
+
+    # Base (existing) structured construction.
+    q_base_len = 2 * kBlockM + 1  # ensure multiple q-tiles, keep Lq != Lk
+    k_base_len = 4 * kBlockN      # 4 key tiles: [+Q, -Q, -Q, +Q]
+    assert q_len > q_base_len, f"q_len must be > {q_base_len} (got {q_len})"
+    assert k_len > k_base_len, f"k_len must be > {k_base_len} (got {k_len})"
 
     # Per-head unit vectors (deterministic, avoids randomness in skip behavior).
     base = torch.zeros(heads, head_dim, device=device, dtype=torch.float32)
@@ -338,16 +340,25 @@ def test_rectangular_attention_skipping_twice(head_dim, batch=1, q_len=240, k_le
 
     alpha = 4.0
     q_vec = (alpha * base).view(1, 1, heads, head_dim)
-    q = q_vec.repeat(batch, q_len, 1, 1).contiguous()
+    q_base = q_vec.repeat(batch, q_base_len, 1, 1).contiguous()
 
-    k = torch.empty(batch, k_len, heads, head_dim, device=device, dtype=dtype)
-    k[:, 0:kBlockN] = q_vec
-    k[:, kBlockN:2 * kBlockN] = -q_vec
-    k[:, 2 * kBlockN:3 * kBlockN] = -q_vec
-    k[:, 3 * kBlockN:4 * kBlockN] = q_vec
+    k_base = torch.empty(batch, k_base_len, heads, head_dim, device=device, dtype=dtype)
+    k_base[:, 0:kBlockN] = q_vec
+    k_base[:, kBlockN:2 * kBlockN] = -q_vec
+    k_base[:, 2 * kBlockN:3 * kBlockN] = -q_vec
+    k_base[:, 3 * kBlockN:4 * kBlockN] = q_vec
 
     # Values don't affect the skip decision; keep them small-ish for numerical comfort.
-    v = (0.1 * torch.randn(batch, k_len, heads, head_dim, device=device, dtype=dtype)).contiguous()
+    v_base = (0.1 * torch.randn(batch, k_base_len, heads, head_dim, device=device, dtype=dtype)).contiguous()
+
+    # Expand with additional random vectors until (q_len, k_len).
+    q_extra = (0.1 * torch.randn(batch, q_len - q_base_len, heads, head_dim, device=device, dtype=dtype)).contiguous()
+    k_extra = (0.1 * torch.randn(batch, k_len - k_base_len, heads, head_dim, device=device, dtype=dtype)).contiguous()
+    v_extra = (0.1 * torch.randn(batch, k_len - k_base_len, heads, head_dim, device=device, dtype=dtype)).contiguous()
+
+    q = torch.cat([q_base, q_extra], dim=1).contiguous()
+    k = torch.cat([k_base, k_extra], dim=1).contiguous()
+    v = torch.cat([v_base, v_extra], dim=1).contiguous()
 
     scale = 1.0 / (head_dim ** 0.5)
 
@@ -756,7 +767,8 @@ def run_tests_for_head_dim(head_dim, batch=2, seq_len=18200, heads=32):
     q_short, k_short, v_short = generate_test_tensors(batch=batch, seq_len=min(6143, seq_len), heads=heads, head_dim=head_dim)
     bf16_results.append(test_softmax_lse_correctness(q_short, k_short, v_short, head_dim, use_int8=False))
     bf16_results.append(test_rectangular_attention_correctness(head_dim))
-    bf16_results.append(test_rectangular_attention_skipping_twice(head_dim))
+    bf16_results.append(test_rectangular_attention_skipping_twice(head_dim, q_len = 4096, k_len = 1024, use_int8=False))
+    bf16_results.append(test_rectangular_attention_skipping_twice(head_dim, q_len = 1024, k_len = 4096, use_int8=False))
 
     # consistency_test(q, k, v, head_dim)
     
@@ -772,7 +784,8 @@ def run_tests_for_head_dim(head_dim, batch=2, seq_len=18200, heads=32):
     int8_results.append(test_must_do_list(q, k, v, head_dim, use_int8=True))
     int8_results.append(test_softmax_lse_correctness(q_short, k_short, v_short, head_dim, tolerance=0.01, use_int8=True))
     int8_results.append(test_rectangular_attention_correctness(head_dim, tolerance_max_abs=0.1, tolerance_cosine=0.99, use_int8=True))
-    int8_results.append(test_rectangular_attention_skipping_twice(head_dim, use_int8=True))
+    int8_results.append(test_rectangular_attention_skipping_twice(head_dim, q_len = 4096, k_len = 1024, use_int8=True))
+    int8_results.append(test_rectangular_attention_skipping_twice(head_dim, q_len = 1024, k_len = 4096, use_int8=True))
 
     torch.cuda.synchronize()
     
