@@ -12,7 +12,7 @@ Migrated LiteAttention build from 682-line setup.py to scikit-build-core + CMake
 - Removed 531 instantiation files from git (generated at build time)
 - Deleted `hopper/setup.py`
 - Added ccache support
-- Reduced kernels from 18 to 10 (removed batch files, disabled-by-default variants)
+- Reduced kernels from 18 to 14 (removed batch files; hdim64_256/512 and hdim192_128 required by linker)
 - Added `--threads` flag for nvcc intra-file parallelism
 
 ---
@@ -139,12 +139,14 @@ UserWarning: Failed to initialize NumPy: No module named 'numpy'
 - Add to optional-dependencies
 - Ignore (it's just a warning)
 
-#### 5b. Run pytest
+#### 5b. Run pytest ✅ Done
 ```bash
 cd lite_attention/tests
+export PYTHONPATH=../utils:../_internal:$PYTHONPATH
 pip install einops pytest
 pytest test_flash_attn.py::test_lite_attn_output -v
 ```
+**Result:** 730 passed, 470 skipped (skipped due to disabled kernel variants)
 
 #### 5c. Run in WAN2.2
 WAN can use this as a requirement, we can generate a video and see that it works, and the speed.
@@ -167,6 +169,14 @@ Options:
 Current build disables some features (FP16, FP8, softcap, local, etc.) resulting in ~470 skipped tests.
 **Goal:** Run full test suite with all variants to verify complete functionality.
 Note: This will increase build time significantly.
+
+#### 5f. Add test dependencies to pyproject.toml
+Currently need `uv pip install einops pytest` before running tests.
+**Goal:** Add test dependencies to `[project.optional-dependencies]` so `uv sync --extra test` works.
+```toml
+[project.optional-dependencies]
+test = ["pytest", "einops"]
+```
 
 ### 6. ccache - added, not tested
 
@@ -232,9 +242,8 @@ Investigate for flash-attn to understand.
 ## Build Commands
 
 ```bash
-# On remote H100
+# On remote H100 (only nvcc in PATH required, CUDA_HOME not needed)
 export PATH=/usr/local/cuda-12.8/bin:$PATH
-export CUDA_HOME=/usr/local/cuda-12.8
 
 # Clean build
 rm -rf build .venv dist
@@ -243,11 +252,11 @@ uv build
 # With higher parallelism
 NVCC_THREADS=4 uv build
 
-# Install and test
-uv pip install numpy einops pytest
-uv run pytest lite_attention/tests/test_flash_attn.py::test_lite_attn_output -v
+# Install and test (see 5d for PYTHONPATH requirement)
+uv pip install einops pytest
+cd lite_attention/tests
+PYTHONPATH=../utils:../_internal uv run pytest test_flash_attn.py -v
 ```
-Why `uv pip install` and not `uv sync` ?
 
 ---
 
