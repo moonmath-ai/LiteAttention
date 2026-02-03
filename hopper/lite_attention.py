@@ -11,7 +11,7 @@ during computation. It uses a compact representation to store ranges of tiles to
 
 Format:
 -------
-Shape: [2, batch, heads, qtiles, ktiles + 1]
+Shape: [2, batch, heads, qtiles, ktiles + 2]
 - Dimension 0 (size 2): Alternates between read_list and write_list based on phase
 - Dimension 1: Batch dimension
 - Dimension 2: Attention heads
@@ -149,7 +149,7 @@ class LiteAttention:
     
     def __init__(self, enable_skipping: bool = True, threshold: float = -10.0, max_batch_size: int = 2, min_seq_len: int = 0, reverse_skip_list: bool = True, use_int8: bool = False):
         # Internal skip list management
-        self._skip_list = None  # Shape: [2, max_batch_size, heads, qtiles, ktiles+1]
+        self._skip_list = None  # Shape: [2, max_batch_size, heads, qtiles, ktiles+2]
         self._phase = 0  # Alternates between 0 and 1 for double-buffering
         self.reverse_skip_list = reverse_skip_list  # Controls skip list format
         self.use_int8 = use_int8  # Whether using int8 quantization
@@ -188,7 +188,7 @@ class LiteAttention:
         and this function calculates the total number of tiles covered by those ranges.
         
         Args:
-            read_list (torch.Tensor): Skip list of shape [batch, heads, qtiles, ktiles + 1]
+            read_list (torch.Tensor): Skip list of shape [batch, heads, qtiles, ktiles + 2]
                 Each entry: [length, start_0, end_0, start_1, end_1, ...]
         
         Returns:
@@ -207,7 +207,7 @@ class LiteAttention:
 
         read_list = read_list.to(torch.int64)
         # Remove the first element (the length of the skip list)
-        # [batch, heads, qtiles, ktiles + 1] -> [batch, heads, qtiles, ktiles]
+        # [batch, heads, qtiles, ktiles + 2] -> [batch, heads, qtiles, ktiles]
         reshaped_read_list = read_list[..., 1:] # [batch, heads, qtiles, ktiles]
 
         # Pad last dimension to be even (required for pairing start/end indices)
@@ -256,7 +256,7 @@ class LiteAttention:
         Calculate the average percentage of non-skipped attention computations.
         
         Args:
-            read_list (torch.Tensor): Skip list of shape [batch, heads, qtiles, ktiles + 1]
+            read_list (torch.Tensor): Skip list of shape [batch, heads, qtiles, ktiles + 2]
         
         Returns:
             float: Average percentage across all query tiles, heads, and batches.
@@ -334,7 +334,7 @@ class LiteAttention:
             device (torch.device): Device to allocate tensors on
             must_skip_list (list, optional): List of sequence ranges to always skip.
         Returns:
-            torch.Tensor: Initialized skip list of shape [2, batch, heads, qtiles, ktiles + 1]
+            torch.Tensor: Initialized skip list of shape [2, batch, heads, qtiles, ktiles + 2]
                 where qtiles and ktiles are the number of tiles along query and key dimensions.
                 Dtype: torch.int16
         
@@ -369,8 +369,8 @@ class LiteAttention:
         #   [1]: Batch dimension
         #   [2]: Head dimension  
         #   [3]: Query tiles dimension
-        #   [4]: ktiles + 1 (the +1 stores the list length at index 0)
-        skip_list = torch.empty(2, batch, heads, qtiles, ktiles + 1, dtype=torch.int16, device=device)
+        #   [4]: ktiles + 2 (the +2 stores the list length at index 0)
+        skip_list = torch.empty(2, batch, heads, qtiles, ktiles + 2, dtype=torch.int16, device=device)
 
         if must_skip_list is not None:
             tile_indices = LiteAttention.convert_sequence_indices_to_tile_indices("must_skip_list", must_skip_list, kBlockN, seq_len)
@@ -1050,7 +1050,7 @@ class LiteAttention:
         forward pass. This can be used to analyze which tiles were skipped.
         
         Returns:
-            Optional[torch.Tensor]: Skip list tensor of shape [batch, heads, qtiles, ktiles+1]
+            Optional[torch.Tensor]: Skip list tensor of shape [batch, heads, qtiles, ktiles+2]
                 Returns None if skip list hasn't been initialized yet.
         
         Note:
@@ -1071,7 +1071,7 @@ class LiteAttention:
         become the read list for the next forward pass.
         
         Returns:
-            Optional[torch.Tensor]: Skip list tensor of shape [batch, heads, qtiles, ktiles+1]
+            Optional[torch.Tensor]: Skip list tensor of shape [batch, heads, qtiles, ktiles+2]
                 Returns None if skip list hasn't been initialized yet.
         
         Note:
