@@ -455,10 +455,11 @@ class LiteAttention:
             value (torch.Tensor): Value tensor (used for layout detection)
             must_skip_list (list, optional): List of sequence ranges to always skip.
         Returns:
-            tuple[Optional[torch.Tensor], Optional[torch.Tensor]]: 
+            tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[Tuple[int, int]]]: 
                 - read_list: Skip list from previous pass (what to compute this pass)
                 - write_list: Skip list to write to (for next pass)
-                Returns (None, None) if skipping is disabled.
+                - extra_range: Optional tuple of (start, end) tile indices for extra range, or None
+                Returns (None, None, None) if skipping is disabled.
         
         Double-Buffering Mechanism:
         --------------------------
@@ -479,7 +480,7 @@ class LiteAttention:
 
         # If skipping disabled, return None (standard Flash Attention)
         if not self.enable_skipping:
-            return None, None
+            return None, None, None
 
         # Backward-compat: older callers pass (query, value) only.
         # In that case `key` is actually the value tensor, and key/value lengths match.
@@ -772,6 +773,8 @@ class LiteAttention:
             phase=(self._phase == 1) if self.reverse_skip_list else False,
             use_int8=self.use_int8,
             extra_range=extra_range, # TODO: should be rounded to tile indices (also take the reverse/phase into account)
+            num_k_blocks= self._skip_list.shape[-1] if self.enable_skipping is not None else None,
+            num_q_blocks= self._skip_list.shape[-2] if self.enable_skipping is not None else None,
         )
 
         # Calculate and store statistics if enabled

@@ -19,6 +19,10 @@ struct QKSkipMaskArgs
     float thr;
     int extra_range_start;
     int extra_range_end;
+    // int num_q_blocks;
+    // int num_k_blocks;
+    int num_q_blocks;
+    int num_k_blocks;
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////

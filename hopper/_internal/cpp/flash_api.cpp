@@ -743,7 +743,8 @@
          bool phase = false,
          std::optional<int64_t> extra_range_start_ = std::nullopt,
          std::optional<int64_t> extra_range_end_ = std::nullopt,
-         int64_t num_blocks = -1
+         int64_t num_q_blocks = -1,
+         int64_t num_k_blocks = -1
      ) {
  
      auto dprops = at::cuda::getCurrentDeviceProperties();
@@ -1094,7 +1095,8 @@
      }
      
      if(params.is_skipable){
-        params.qk_skip_mask_args.num_blocks = static_cast<int>(num_blocks);
+        params.qk_skip_mask_args.num_q_blocks = static_cast<int>(num_q_blocks);
+        params.qk_skip_mask_args.num_k_blocks = static_cast<int>(num_k_blocks);
      }
  
      params.total_q = total_q;
@@ -1943,7 +1945,8 @@
          "bool phase = False,"
          "int? extra_range_start = None,"
          "int? extra_range_end = None,"
-         "int num_blocks = -1) -> (Tensor(out!), Tensor, Tensor, Tensor)"
+         "int num_q_blocks = -1,"
+         "int num_k_blocks = -1) -> (Tensor(out!), Tensor, Tensor, Tensor)"
      );
      m.def("bwd("
          "Tensor dout,"
