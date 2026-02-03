@@ -715,6 +715,7 @@ def test_min_seq_len(head_dim, min_seq_len = 7600, use_int8=False):
     attn.threshold = float('-inf')
     test_min_seq_len_helper(attn, min_seq_len // 2, head_dim)
     
+    print("here!")
     # Verify that the skip list includes the new sequence length range
     # extra_range is calculated during _get_read_write_lists using the phase BEFORE alternation
     # After the forward pass, _phase has been alternated, so we use 1 - _phase
