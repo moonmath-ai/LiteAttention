@@ -124,12 +124,8 @@ endif()
 list(FILTER FWD_SM90_SOURCES EXCLUDE REGEX "hdimall_")
 list(FILTER FWD_SM90_SOURCES EXCLUDE REGEX "hdimdiff_")
 
-# Filter out different head_dim_v variants (disabled by default in original setup.py)
-# hdim192_128 = head_dim=192, head_dim_v=128
-# hdim64_256/512 = head_dim=64, head_dim_v=256/512
-list(FILTER FWD_SM90_SOURCES EXCLUDE REGEX "hdim192_128_")
-list(FILTER FWD_SM90_SOURCES EXCLUDE REGEX "hdim64_256_")
-list(FILTER FWD_SM90_SOURCES EXCLUDE REGEX "hdim64_512_")
+# Note: hdim64_256/512 and hdim192_128 variants are required by flash_api.cpp
+# even if not used at runtime (linker needs symbols). Cannot disable without C++ changes.
 
 # Filter by head dimensions
 if(FLASH_ATTENTION_DISABLE_HDIM64)
