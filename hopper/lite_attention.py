@@ -473,7 +473,7 @@ class LiteAttention:
         device = query.device
 
         should_reinitialize = (self._skip_list is None or 
-            (self._last_seq_len != current_seq_len and current_seq_len < self.min_seq_len) or 
+            (self._last_seq_len != current_seq_len and current_seq_len > self.min_seq_len) or 
             self._skip_list.device != query.device or
             self._last_head_dim != current_head_dim or
             self._last_v_colmajor != v_colmajor or
@@ -507,7 +507,7 @@ class LiteAttention:
             if os.getenv("LITE_ATTENTION_VERBOSE", "FALSE") != "FALSE":
                 print(f"[Warning]: reinitialized skip list during the forward pass")
         # if the sequence length changed but we expected it to happend (do to min_seq_len)
-        elif (current_seq_len < self.min_seq_len and self._last_seq_len != current_seq_len):
+        elif (current_seq_len <= self.min_seq_len and self._last_seq_len != current_seq_len):
             extra_range = [min(self._last_seq_len, current_seq_len), max(self._last_seq_len, current_seq_len)]
             _, k_tile_size = LiteAttention.get_MN(head_dim, dtype, v_colmajor)
             def ceil_div(x, y):

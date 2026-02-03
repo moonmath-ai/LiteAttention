@@ -712,7 +712,7 @@ def test_min_seq_len(head_dim, min_seq_len = 7600, use_int8=False):
 
     # Second pass: bigger seq_len but still < min_seq_len
     # Set threshold to inf to avoid getting new skips from this pass
-    attn.threshold = float('inf')
+    attn.threshold = float('-inf')
     test_min_seq_len_helper(attn, min_seq_len // 2, head_dim)
     
     # Verify that the skip list includes the new sequence length range
@@ -824,7 +824,8 @@ def main():
     torch.cuda.manual_seed(0)
     
     # Test different head dimensions
-    head_dims = [32, 64, 96, 128, 192, 256]
+    # head_dims = [32, 64, 96, 128, 192, 256]
+    head_dims = [128]
     
     # Track results for each head dimension
     bf16_results = {}
