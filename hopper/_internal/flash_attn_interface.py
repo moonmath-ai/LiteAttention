@@ -59,7 +59,8 @@ def _flash_attn_forward(
         reverse_skip_list=False,
         phase=False,
         extra_range=None,
-        num_blocks=None,
+        num_q_blocks=None,
+        num_k_blocks=None,
     ):
     q, k, k_new, v_new = [maybe_contiguous(x) for x in (q, k, k_new, v_new)]
     v = v.contiguous() if v.stride(-1) != 1 and v.stride(-3) != 1 else v
@@ -116,7 +117,8 @@ def _flash_attn_forward(
         phase=phase,
         extra_range_start= extra_range[0] if extra_range is not None else None,
         extra_range_end=extra_range[1] if extra_range is not None else None,
-        num_blocks=num_blocks if num_blocks is not None else -1,
+        num_q_blocks=num_q_blocks if num_q_blocks is not None else -1,
+        num_k_blocks=num_k_blocks if num_k_blocks is not None else -1,
     )
     return out, softmax_lse, *rest
 
@@ -312,7 +314,8 @@ class FlashAttnFunc(torch.autograd.Function):
         reverse_skip_list=False,
         phase=False,
         extra_range=None,
-        num_blocks=None,
+        num_q_blocks=None,
+        num_k_blocks=None,
     ):
         if softmax_scale is None:
             softmax_scale = (q.shape[-1] + (qv.shape[-1] if qv is not None else 0)) ** (-0.5)
@@ -346,7 +349,8 @@ class FlashAttnFunc(torch.autograd.Function):
             reverse_skip_list=reverse_skip_list,
             phase=phase,
             extra_range=extra_range,
-            num_blocks=num_blocks,
+            num_q_blocks=num_q_blocks,
+            num_k_blocks=num_k_blocks,
         )
         # ctx.save_for_backward(q, k, v, out_padded, softmax_lse)
         ctx.save_for_backward(q, k, v, out, softmax_lse)
@@ -589,7 +593,8 @@ def flash_attn_func(
     reverse_skip_list=False,
     phase=False,
     extra_range=None,
-    num_blocks=None,
+    num_q_blocks=None,
+    num_k_blocks=None,
 ):
     """dropout_p should be set to 0.0 during evaluation
     Supports multi-query and grouped-query attention (MQA/GQA) by passing in KV with fewer heads
@@ -660,7 +665,8 @@ def flash_attn_func(
         reverse_skip_list,
         phase,
         extra_range,
-        num_blocks,
+        num_q_blocks,
+        num_k_blocks,
     )
 
 

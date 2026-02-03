@@ -423,7 +423,7 @@ class LiteAttention:
         return LiteAttention.init_skip_list(self.max_batch_size, seq_len, heads, head_dim, v_colmajor, dtype, device, must_skip_list, self.reverse_skip_list)
     
     
-    def _get_read_write_lists(self, query: torch.Tensor, value: torch.Tensor, must_skip_list: list = None) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+    def _get_read_write_lists(self, query: torch.Tensor, value: torch.Tensor, must_skip_list: list = None) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[Tuple[int, int]]]:
         """
         Get the current read and write skip lists for this attention forward pass.
         
@@ -436,10 +436,11 @@ class LiteAttention:
             value (torch.Tensor): Value tensor (used for layout detection)
             must_skip_list (list, optional): List of sequence ranges to always skip.
         Returns:
-            tuple[Optional[torch.Tensor], Optional[torch.Tensor]]: 
+            tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[Tuple[int, int]]]: 
                 - read_list: Skip list from previous pass (what to compute this pass)
                 - write_list: Skip list to write to (for next pass)
-                Returns (None, None) if skipping is disabled.
+                - extra_range: Optional tuple of (start, end) tile indices for extra range, or None
+                Returns (None, None, None) if skipping is disabled.
         
         Double-Buffering Mechanism:
         --------------------------
@@ -460,7 +461,7 @@ class LiteAttention:
 
         # If skipping disabled, return None (standard Flash Attention)
         if not self.enable_skipping:
-            return None, None
+            return None, None, None
             
         # attributes we check in the decision to REINITIALIZE the skip list
         current_seq_len = query.shape[1]
@@ -778,7 +779,8 @@ class LiteAttention:
             q_descale=q_descale,
             k_descale=k_descale,
             extra_range=extra_range, # TODO: should be rounded to tile indices (also take the reverse/phase into account)
-            num_blocks= self._skip_list.shape[-1] if self.enable_skipping is not None else None,
+            num_k_blocks= self._skip_list.shape[-1] if self.enable_skipping is not None else None,
+            num_q_blocks= self._skip_list.shape[-2] if self.enable_skipping is not None else None,
         )
 
         # Calculate and store statistics if enabled

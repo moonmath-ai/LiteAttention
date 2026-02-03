@@ -21,7 +21,8 @@ struct QKSkipMaskArgs
     int extra_range_end;
     // int num_q_blocks;
     // int num_k_blocks;
-    int num_blocks;
+    int num_q_blocks;
+    int num_k_blocks;
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////

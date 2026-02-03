@@ -134,7 +134,7 @@ def test_skip_nothing(q, k, v, head_dim, use_int8=False):
     """
     attn = LiteAttention(use_int8=use_int8)
     attn.threshold = float('-inf')
-    read_list_original, _ = attn._get_read_write_lists(q, v)
+    read_list_original, _, _ = attn._get_read_write_lists(q, v)
     read_list_original = read_list_original.clone()
     attn._phase = 0
     
@@ -704,7 +704,7 @@ def calculate_extra_range_tiles(seq_start, seq_end, head_dim, use_int8, reverse_
 
 
 def test_min_seq_len(head_dim, min_seq_len = 7600, use_int8=False):
-    attn = LiteAttention(use_int8=use_int8)
+    attn = LiteAttention(use_int8=use_int8, min_seq_len=min_seq_len)
     attn.threshold = float(0.0)
 
     # First pass: seq_len < min_seq_len
