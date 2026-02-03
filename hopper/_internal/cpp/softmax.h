@@ -103,40 +103,17 @@ namespace flash
 #pragma unroll
         for (int mi = 0; mi < size<0>(tensor); mi++)
         {
-            if (mi % 2 == 1) {
-                // Odd rows: convert int to float in-place and do max on floats
-                float float_val = static_cast<float>(tensor(mi, 0));
-                tensor(mi, 0) = reinterpret_bits_as_int32(float_val);
-                float row_max_float = float_val;
-#pragma unroll
-                for (int ni = 1; ni < size<1>(tensor); ni++)
-                {
-                    float_val = static_cast<float>(tensor(mi, ni));
-                    tensor(mi, ni) = reinterpret_bits_as_int32(float_val);
-                    row_max_float = max_op_float(row_max_float, float_val);
-                }
-                max_float(mi) = row_max_float;
-            } else {
+            if (mi % 2 == 0) {
                 // Even rows: do max on ints (original behavior)
                 int32_t row_max_int = tensor(mi, 0);
+                // tensor(mi, 0) += magic_int32;
 #pragma unroll
                 for (int ni = 1; ni < size<1>(tensor); ni++)
                 {
                     row_max_int = max_op_int(row_max_int, tensor(mi, ni));
+                    // tensor(mi, ni) += magic_int32;
                 }
                 max_converted(mi) = row_max_int;
-            }
-        }
-        
-        // // Reduce across threads
-        // quad_allreduce_(max_converted, max_converted, max_op_int);
-        // quad_allreduce_(max_float, max_float, max_op_float);
-        
-        // Dequantize: for even rows use int max, for odd rows use float max
-#pragma unroll
-        for (int mi = 0; mi < size(max); mi++)
-        {
-            if (mi % 2 == 0) {
                 max_converted(mi) = Allreduce<4>::run(max_converted(mi), max_op_int);
                 // Even rows: dequantize int max
                 float value = max_converted(mi) * dequan_s;
@@ -147,10 +124,35 @@ namespace flash
                     max(mi) = max_op_float(max(mi), value);
                 }
 
-                // // reduce max across threads
-                // max(mi) = Allreduce<4>::run(max(mi), max_op_int);
+                for (int ni = 0; ni < size<1>(tensor); ni++)
+                {
+                    tensor(mi, ni) += magic_int32;
+                }
             } else {
-                // Odd rows: max is already a float, just multiply by dequan_s
+                int int_val = tensor(mi, 0);
+                float float_val = static_cast<float>(tensor(mi, 0));
+                tensor(mi, 0) = reinterpret_bits_as_int32(float_val);
+#pragma unroll
+                for (int ni = 1; ni < 12; ni++)
+                {
+                    int_val = max_op_int(int_val, tensor(mi, ni));
+                    float_val = static_cast<float>(tensor(mi, ni));
+                    tensor(mi, ni) = reinterpret_bits_as_int32(float_val);
+                }
+                // Odd rows: convert int to float in-place and do max on floats
+                // float float_val = static_cast<float>(tensor(mi, 0));
+                // tensor(mi, 0) = reinterpret_bits_as_int32(float_val);
+                // float row_max_float = float_val;
+                float row_max_float = static_cast<float>(int_val);
+#pragma unroll
+                // for (int ni = 1; ni < size<1>(tensor); ni++)
+                for (int ni = 12; ni < size<1>(tensor); ni++)
+                {
+                    float_val = static_cast<float>(tensor(mi, ni));
+                    tensor(mi, ni) = reinterpret_bits_as_int32(float_val);
+                    row_max_float = max_op_float(row_max_float, float_val);
+                }
+                max_float(mi) = row_max_float;
                 float value = max_float(mi) * dequan_s;
                 value = Allreduce<4>::run(value, max_op_float);
                 if constexpr (zero_init) {
@@ -158,10 +160,44 @@ namespace flash
                 } else {
                     max(mi) = max_op_float(max(mi), value);
                 }
-                // reduce max across threads
-                // max(mi) = Allreduce<4>::run(max(mi), max_op_float);
             }
         }
+        
+        // // Reduce across threads
+        // quad_allreduce_(max_converted, max_converted, max_op_int);
+        // quad_allreduce_(max_float, max_float, max_op_float);
+        
+        // Dequantize: for even rows use int max, for odd rows use float max
+// #pragma unroll
+//         for (int mi = 0; mi < size(max); mi++)
+//         {
+//             if (mi % 2 == 0) {
+//                 max_converted(mi) = Allreduce<4>::run(max_converted(mi), max_op_int);
+//                 // Even rows: dequantize int max
+//                 float value = max_converted(mi) * dequan_s;
+//                 // const float value = max_int * dequan_s;
+//                 if constexpr (zero_init) {
+//                     max(mi) = value;
+//                 } else {
+//                     max(mi) = max_op_float(max(mi), value);
+//                 }
+
+//                 for (int ni = 0; ni < size<1>(tensor); ni++)
+//                 {
+//                     tensor(mi, ni) += magic_int32;
+//                 }
+
+//             } else {
+//                 // Odd rows: max is already a float, just multiply by dequan_s
+//                 float value = max_float(mi) * dequan_s;
+//                 value = Allreduce<4>::run(value, max_op_float);
+//                 if constexpr (zero_init) {
+//                     max(mi) = value;
+//                 } else {
+//                     max(mi) = max_op_float(max(mi), value);
+//                 }
+//             }
+        // }
     }
 
     template <bool const zero_init = true, bool warp_reduce = true, typename Engine0, typename Layout0, typename Engine1, typename Layout1>
@@ -261,8 +297,8 @@ namespace flash
             float dequantized_value;
             if (mi % 2 == 0){
                 union { float f; int32_t i; } result_union;
-                result_union.i = tensor(mi, ni) + magic_int32;
-
+                // result_union.i = tensor(mi, ni) + magic_int32;
+                result_union.i = tensor(mi, ni);
                 // const float dequantized_value = result_union.f * dequan_s - max_scaled;
                 dequantized_value = result_union.f * dequan_s - max_scaled;
             }else{
