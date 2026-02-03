@@ -41,12 +41,18 @@ NVCC_THREADS=4 pip install .
 Tests for LiteAttention are in `lite_attention/tests/`:
 ```bash
 cd lite_attention/tests
+
+# PYTHONPATH must include utils/ and _internal/ for relative imports
+export PYTHONPATH=../utils:../_internal:$PYTHONPATH
+
 pytest test_flash_attn.py  # Main attention tests
 pytest test_flash_attn.py::test_lite_attn_output  # Run specific test
-pytest test_flash_attn.py -k "seqlen_q=1024"  # Filter by parameter
+pytest test_flash_attn.py -k "seqlen" -k "1024"  # Filter by parameter
 ```
 
 Tests use pytest with many parameterized configurations (dtype, sequence lengths, head dimensions, etc.).
+
+**Note:** Many tests are skipped by default due to disabled kernel variants (FP16, FP8, softcap). With default build config, expect ~730 passed, ~470 skipped.
 
 ## Code Architecture
 
