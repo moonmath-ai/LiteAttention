@@ -524,7 +524,7 @@ class LiteAttention:
             tile_end = ceil_div(seq_end, k_tile_size)
             
             extra_range = (tile_start, tile_end)
-            if self.reverse_skip_list and self._phase == 0:
+            if self.reverse_skip_list and self._phase == 1:
                 extra_range = (tile_end - 1, tile_start - 1)
 
             # update the last attributes to the current values
