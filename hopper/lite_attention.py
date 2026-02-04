@@ -510,9 +510,13 @@ class LiteAttention:
         elif (current_seq_len <= self.min_seq_len and self._last_seq_len != current_seq_len):
             # Calculate the range of NEW sequence indices that need to be processed
             # This represents the difference between old and new sequence lengths
-            seq_start = min(self._last_seq_len - 1, current_seq_len)
-            seq_end = max(self._last_seq_len - 1, current_seq_len)
-            
+            seq_start = min(self._last_seq_len, current_seq_len)
+            seq_end = max(self._last_seq_len, current_seq_len)
+
+            if self.reverse_skip_list and self._phase == 1:
+                temp = (seq_start, seq_end)
+                seq_start, seq_end = temp[1], temp[0]
+
             # Convert sequence indices to tile indices
             # Start is inclusive: use floor division  
             # End is exclusive: use ceiling division to get the first tile beyond the sequence
@@ -524,8 +528,9 @@ class LiteAttention:
             tile_end = ceil_div(seq_end, k_tile_size)
             
             extra_range = (tile_start, tile_end)
-            if self.reverse_skip_list and self._phase == 1:
-                extra_range = (tile_end - 1, tile_start - 1)
+            # if self.reverse_skip_list and self._phase == 1:
+            #     # extra_range = (tile_end - 1, tile_start - 1)
+            #     extra_range = (extra_range[0] - 1, extra_range[1])
 
             # update the last attributes to the current values
             self._last_seq_len = current_seq_len
