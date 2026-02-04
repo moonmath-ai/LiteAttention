@@ -793,8 +793,8 @@ class LiteAttention:
             phase=(self._phase == 1) if self.reverse_skip_list else False,
             use_int8=self.use_int8,
             extra_range=extra_range, # TODO: should be rounded to tile indices (also take the reverse/phase into account)
-            num_k_blocks= self._skip_list.shape[-1] if self.enable_skipping is not None else None,
-            num_q_blocks= self._skip_list.shape[-2] if self.enable_skipping is not None else None,
+            num_k_blocks= self._skip_list.shape[-1] if self.enable_skipping == True else None,
+            num_q_blocks= self._skip_list.shape[-2] if self.enable_skipping == True else None,
         )
 
         # Calculate and store statistics if enabled
