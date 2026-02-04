@@ -992,8 +992,8 @@ def main():
     torch.cuda.manual_seed(0)
     
     # Test different head dimensions
-    # head_dims = [32, 64, 96, 128, 192, 256]
-    head_dims = [128]
+    head_dims = [32, 64, 96, 128, 192, 256]
+    # head_dims = [128]
     
     # Track results for each head dimension
     bf16_results = {}
