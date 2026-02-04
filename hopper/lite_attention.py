@@ -302,7 +302,7 @@ class LiteAttention:
         return kBlockM, kBlockN
 
     @staticmethod
-    def init_skip_list(batch, seq_len, heads, head_dim, v_colmajor, dtype, device, must_skip_list: list = None, reverse_skip_list: bool = True) -> torch.Tensor:
+    def init_skip_list(batch, seq_len, heads, head_dim, v_colmajor, dtype, device, must_skip_list: list = None, reverse_skip_list: bool = True, min_seq_len: int = 0) -> torch.Tensor:
         """
         Initialize skip list tensors with default "compute all tiles" configuration.
         
@@ -354,16 +354,19 @@ class LiteAttention:
         # - For standard self-attention, `seq_len` is an int.
         # - For rectangular attention, pass `seq_len=(q_len, k_len)`.
         if isinstance(seq_len, (tuple, list)):
-            q_len, k_len = int(seq_len[0]), int(seq_len[1])
+            q_len, k_len, min_seq_len = int(seq_len[0]), int(seq_len[1]), int(seq_len[2])
         else:
             q_len = k_len = int(seq_len)
 
         # Calculate number of tiles needed to cover the attention matrix
         # qtiles: number of tiles along query dimension (rows of Q@K^T)
-        qtiles = LiteAttention.ceil_div(q_len, kBlockM)
+        qtiles = LiteAttention.ceil_div(max(q_len, min_seq_len), kBlockM)
         # ktiles: number of tiles along key dimension (columns of Q@K^T)
-        ktiles = LiteAttention.ceil_div(k_len, kBlockN)
+        ktiles = LiteAttention.ceil_div(max(k_len, min_seq_len), kBlockN)
         
+
+        last_practical_k_tile_index = LiteAttention.ceil_div(k_len, kBlockN) - 1
+
         # Allocate memory for skip list data structure
         # Shape explained:
         #   [0]: Size 2 for double-buffering (alternates between read_list and write_list)
@@ -390,7 +393,7 @@ class LiteAttention:
         else:
             # Initialize first buffer with "compute all tiles" configuration
             # [2, ktiles-1, -1] means: length=2, one range from ktiles-1 down to 0 (via -1)
-            skip_list[0, :, :, :, 0:3] = torch.tensor([2, ktiles - 1, -1], dtype=torch.int16, device=device) 
+            skip_list[0, :, :, :, 0:3] = torch.tensor([2, last_practical_k_tile_index, -1], dtype=torch.int16, device=device) 
 
             # Note: Second buffer (skip_list[1]) is left uninitialized and will be populated
             # during the first forward pass
@@ -538,7 +541,7 @@ class LiteAttention:
             seq_start = min(self._last_seq_len, current_seq_len)
             seq_end = max(self._last_seq_len, current_seq_len)
 
-            if self.reverse_skip_list and self._phase == 1:
+            if self.reverse_skip_list and self._phase == 0:
                 temp = (seq_start, seq_end)
                 seq_start, seq_end = temp[1], temp[0]
 
