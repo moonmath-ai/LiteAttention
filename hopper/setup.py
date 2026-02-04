@@ -56,11 +56,11 @@ DISABLE_FP8 = os.getenv("FLASH_ATTENTION_DISABLE_FP8", "TRUE") == "TRUE"
 DISABLE_INT8 = os.getenv("FLASH_ATTENTION_DISABLE_INT8", "FALSE") == "TRUE"
 DISABLE_VARLEN = os.getenv("FLASH_ATTENTION_DISABLE_VARLEN", "TRUE") == "TRUE"
 DISABLE_CLUSTER = os.getenv("FLASH_ATTENTION_DISABLE_CLUSTER", "TRUE") == "TRUE"
-DISABLE_HDIM64 = os.getenv("FLASH_ATTENTION_DISABLE_HDIM64", "TRUE") == "TRUE"
-DISABLE_HDIM96 = os.getenv("FLASH_ATTENTION_DISABLE_HDIM96", "TRUE") == "TRUE"
+DISABLE_HDIM64 = os.getenv("FLASH_ATTENTION_DISABLE_HDIM64", "FALSE") == "TRUE"
+DISABLE_HDIM96 = os.getenv("FLASH_ATTENTION_DISABLE_HDIM96", "FALSE") == "TRUE"
 DISABLE_HDIM128 = os.getenv("FLASH_ATTENTION_DISABLE_HDIM128", "FALSE") == "TRUE"
-DISABLE_HDIM192 = os.getenv("FLASH_ATTENTION_DISABLE_HDIM192", "TRUE") == "TRUE"
-DISABLE_HDIM256 = os.getenv("FLASH_ATTENTION_DISABLE_HDIM256", "TRUE") == "TRUE"
+DISABLE_HDIM192 = os.getenv("FLASH_ATTENTION_DISABLE_HDIM192", "FALSE") == "TRUE"
+DISABLE_HDIM256 = os.getenv("FLASH_ATTENTION_DISABLE_HDIM256", "FALSE") == "TRUE"
 DISABLE_SM8x = os.getenv("FLASH_ATTENTION_DISABLE_SM80", "TRUE") == "TRUE"
 
 ENABLE_VCOLMAJOR = os.getenv("FLASH_ATTENTION_ENABLE_VCOLMAJOR", "FALSE") == "TRUE"
@@ -547,7 +547,7 @@ if not SKIP_CUDA_BUILD:
         "-std=c++20",
         "--ftemplate-backtrace-limit=0",  # To debug template code
         "--use_fast_math",
-        # "--keep",
+        "--keep",
         # "--ptxas-options=--verbose,--register-usage-level=5,--warn-on-local-memory-usage",  # printing out number of registers
         "--resource-usage",  # printing out number of registers
         # f"--split-compile={os.getenv('NVCC_THREADS', '4')}",  # split-compile is faster
