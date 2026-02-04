@@ -613,19 +613,19 @@ def check_range_in_skip_list(skip_list, target_start, target_end, reverse_skip_l
     
     # Get the length of each skip list entry
     list_lengths = skip_list[..., 0]  # [batch, heads, qtiles]
-    num_ranges = (list_lengths - 1) // 2  # Number of (start, end) pairs
     
+    # --- FIX: Correct Range Count Calculation ---
+    # A list [2, End, Start] has length 2 and contains 1 range.
+    # 2 // 2 = 1.
+    num_ranges = list_lengths // 2  
     # Extract all range pairs using vectorized operations
     ranges_data = skip_list[..., 1:]  # [batch, heads, qtiles, ktiles+1]
     
     # Pad to make even if needed
     if ranges_data.shape[-1] % 2 != 0:
-        padding_shape = list(ranges_data.shape)
-        padding_shape[-1] = 1
-        padding = torch.zeros(padding_shape, dtype=ranges_data.dtype, device=ranges_data.device)
+        padding = torch.zeros((*ranges_data.shape[:-1], 1), dtype=ranges_data.dtype, device=ranges_data.device)
         ranges_data = torch.cat([ranges_data, padding], dim=-1)
     
-    # Reshape to pair up (start, end) indices
     max_num_ranges = ranges_data.shape[-1] // 2
     ranges_paired = ranges_data.view(batch, heads, qtiles, max_num_ranges, 2)
     
@@ -641,9 +641,11 @@ def check_range_in_skip_list(skip_list, target_start, target_end, reverse_skip_l
         range_starts = ranges_paired[..., 0]
         range_ends = ranges_paired[..., 1]
     
-    # Determine step direction and actual range bounds
+    # Correct Phase Mapping
+    # Phase 0 maps to Ascending (step=1)
+    # Phase 1 maps to Descending (step=-1)
     if reverse_skip_list:
-        step = 1 if phase else -1
+        step = 1 if phase == 0 else -1
     else:
         step = -1
     
