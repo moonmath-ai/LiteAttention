@@ -407,15 +407,16 @@ void run_mha_fwd_(Flash_fwd_params &params, cudaStream_t stream)
                                     static constexpr bool HasMustDoList = false;
                                     static constexpr bool ReverseSkipList = false;
                                     static constexpr bool Phase = true;
-                                    BOOL_SWITCH(params.has_extra_range, HasExtraRange, [&] {
-                                        run_flash_fwd<Arch, kHeadDim, kHeadDimV, ClusterM, T, T_out, Is_causal, Is_local, Has_softcap, Varlen, PagedKVNonTMA, AppendKV && Varlen, HasQv, PackGQA, Split, V_colmajor, Is_skipable, ReverseSkipList, Phase, HasMustDoList, HasExtraRange>(params, stream);
-                                    });
+                                    static constexpr bool HasExtraRange = false;
+                                    run_flash_fwd<Arch, kHeadDim, kHeadDimV, ClusterM, T, T_out, Is_causal, Is_local, Has_softcap, Varlen, PagedKVNonTMA, AppendKV && Varlen, HasQv, PackGQA, Split, V_colmajor, Is_skipable, ReverseSkipList, Phase, HasMustDoList, HasExtraRange>(params, stream);
                                 } else {
                                     // When Is_skipable is enabled, check HasMustDoList, ReverseSkipList, and Phase
                                     BOOL_SWITCH(params.has_must_do_list, HasMustDoList, [&] {
                                         BOOL_SWITCH(params.reverse_skip_list, ReverseSkipList, [&] {
                                             BOOL_SWITCH(params.phase, Phase, [&] {
-                                                run_flash_fwd<Arch, kHeadDim, kHeadDimV, ClusterM, T, T_out, Is_causal, Is_local, Has_softcap, Varlen, PagedKVNonTMA, AppendKV && Varlen, HasQv, PackGQA, Split, V_colmajor, Is_skipable, ReverseSkipList, Phase, HasMustDoList>(params, stream);
+                                                BOOL_SWITCH(params.has_extra_range, HasExtraRange, [&] {
+                                                    run_flash_fwd<Arch, kHeadDim, kHeadDimV, ClusterM, T, T_out, Is_causal, Is_local, Has_softcap, Varlen, PagedKVNonTMA, AppendKV && Varlen, HasQv, PackGQA, Split, V_colmajor, Is_skipable, ReverseSkipList, Phase, HasMustDoList, HasExtraRange>(params, stream);
+                                                });
                                             });
                                         });
                                     });
