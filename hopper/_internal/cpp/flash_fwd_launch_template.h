@@ -51,7 +51,7 @@ using namespace cute; // Import CuTe namespace for tensor operations and layout 
  */
 template <int Arch, int kHeadDim, int kHeadDimV, int ClusterM, typename Element, typename ElementOut,
           bool Is_causal, bool Is_local, bool Has_softcap, bool Varlen, bool PagedKVNonTMA, bool AppendKV, bool HasQv,
-          bool PackGQA, bool Split, bool V_colmajor, bool Is_skipable, bool ReverseSkipList=false, bool Phase=true, bool HasMustDoList=false>
+          bool PackGQA, bool Split, bool V_colmajor, bool Is_skipable, bool ReverseSkipList=false, bool Phase=true, bool HasMustDoList=false, bool HasExtraRange=false>
 void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream)
 {
     // Compile-time validation of template parameter combinations
@@ -131,7 +131,8 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream)
             Is_skipable,         // 0
             ReverseSkipList,     // 0
             Phase,               // 0
-            HasMustDoList>,      // 0
+            HasMustDoList,       // 0
+            HasExtraRange>,      // 0
         // SM80-89 mainloop: Traditional warp-level cooperation with manual shared memory management
         flash::CollectiveMainloopFwdSm80<kNWarps, kStages, Q_in_regs, TileShape_MNK, kHeadDimV, Element, float, cutlass::arch::Sm80,
                                          Is_causal, Is_local, Has_softcap, Varlen, PagedKVNonTMA, AppendKV, PackGQA, Split>>;
@@ -406,13 +407,16 @@ void run_mha_fwd_(Flash_fwd_params &params, cudaStream_t stream)
                                     static constexpr bool HasMustDoList = false;
                                     static constexpr bool ReverseSkipList = false;
                                     static constexpr bool Phase = true;
-                                    run_flash_fwd<Arch, kHeadDim, kHeadDimV, ClusterM, T, T_out, Is_causal, Is_local, Has_softcap, Varlen, PagedKVNonTMA, AppendKV && Varlen, HasQv, PackGQA, Split, V_colmajor, Is_skipable, ReverseSkipList, Phase, HasMustDoList>(params, stream);
+                                    static constexpr bool HasExtraRange = false;
+                                    run_flash_fwd<Arch, kHeadDim, kHeadDimV, ClusterM, T, T_out, Is_causal, Is_local, Has_softcap, Varlen, PagedKVNonTMA, AppendKV && Varlen, HasQv, PackGQA, Split, V_colmajor, Is_skipable, ReverseSkipList, Phase, HasMustDoList, HasExtraRange>(params, stream);
                                 } else {
                                     // When Is_skipable is enabled, check HasMustDoList, ReverseSkipList, and Phase
                                     BOOL_SWITCH(params.has_must_do_list, HasMustDoList, [&] {
                                         BOOL_SWITCH(params.reverse_skip_list, ReverseSkipList, [&] {
                                             BOOL_SWITCH(params.phase, Phase, [&] {
-                                                run_flash_fwd<Arch, kHeadDim, kHeadDimV, ClusterM, T, T_out, Is_causal, Is_local, Has_softcap, Varlen, PagedKVNonTMA, AppendKV && Varlen, HasQv, PackGQA, Split, V_colmajor, Is_skipable, ReverseSkipList, Phase, HasMustDoList>(params, stream);
+                                                BOOL_SWITCH(params.has_extra_range, HasExtraRange, [&] {
+                                                    run_flash_fwd<Arch, kHeadDim, kHeadDimV, ClusterM, T, T_out, Is_causal, Is_local, Has_softcap, Varlen, PagedKVNonTMA, AppendKV && Varlen, HasQv, PackGQA, Split, V_colmajor, Is_skipable, ReverseSkipList, Phase, HasMustDoList, HasExtraRange>(params, stream);
+                                                });
                                             });
                                         });
                                     });

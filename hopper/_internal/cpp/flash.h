@@ -17,6 +17,12 @@ struct QKSkipMaskArgs
     int16_t *attn_write_list;
     int16_t *attn_must_do_list;
     float thr;
+    int extra_range_start;
+    int extra_range_end;
+    // int num_q_blocks;
+    // int num_k_blocks;
+    int num_q_blocks;
+    int num_k_blocks;
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -184,11 +190,14 @@ struct Flash_fwd_params : public Qkv_params
     int num_sm;
 
     // lite attention related
+    // dynamic arguments passed in qk_skip_mask_args
     QKSkipMaskArgs qk_skip_mask_args;
+    // compile time arguments
     bool is_skipable;
     bool reverse_skip_list = false;
     bool phase = false;
     bool has_must_do_list = false;
+    bool has_extra_range = false;
     // ~~~~~~~~~~~~~~~~
 };
 

@@ -30,3 +30,4 @@ var/
 # Dev
 venv
 compile_err.txt
+.vscode/launch.json

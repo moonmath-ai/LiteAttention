@@ -142,7 +142,7 @@ def test_skip_nothing(q, k, v, head_dim, use_int8=False):
     """
     attn = LiteAttention(use_int8=use_int8)
     attn.threshold = float('-inf')
-    read_list_original, _ = attn._get_read_write_lists(q, v)
+    read_list_original, _, _ = attn._get_read_write_lists(q, v)
     read_list_original = read_list_original.clone()
     attn._phase = 0
     
@@ -745,6 +745,199 @@ def test_int8_with_skipping(q, k, v, head_dim, tolerance_max_abs=0.15, tolerance
     # If tile sizes don't match, always return True (don't fail)
     return overall_passed if tile_sizes_match else True
 
+def test_min_seq_len_helper(attn, seq_len, head_dim):
+    q, k, v = generate_test_tensors(batch=2, seq_len=seq_len, heads=12, head_dim=head_dim)
+    torch.cuda.synchronize()
+    output = attn(q, k, v)
+    torch.cuda.synchronize()
+    return output
+
+
+def check_range_in_skip_list(skip_list, target_start, target_end, reverse_skip_list, phase):
+    """
+    Check if a target tile range [target_start, target_end) is covered by the skip list.
+    
+    Uses vectorized operations to check all entries simultaneously.
+    
+    Args:
+        skip_list: Skip list tensor of shape [batch, heads, qtiles, ktiles + 2]
+        target_start: Start tile index (inclusive)
+        target_end: End tile index (exclusive)
+        reverse_skip_list: Whether skip list uses reversed format
+        phase: Phase value (0 or 1) that determines step direction
+    
+    Returns:
+        torch.Tensor: Boolean tensor of shape [batch, heads, qtiles] indicating 
+                     if the range is covered in each skip list entry
+    """
+    skip_list = skip_list.to(torch.int64)
+    batch, heads, qtiles, ktiles_plus = skip_list.shape
+    
+    # Get the length of each skip list entry
+    list_lengths = skip_list[..., 0]  # [batch, heads, qtiles]
+    num_ranges = list_lengths // 2  # Number of (start, end) pairs
+    
+    # Extract all range pairs using vectorized operations
+    ranges_data = skip_list[..., 1:]  # [batch, heads, qtiles, ktiles+1]
+    
+    # Pad to make even if needed
+    if ranges_data.shape[-1] % 2 != 0:
+        padding_shape = list(ranges_data.shape)
+        padding_shape[-1] = 1
+        padding = torch.zeros(padding_shape, dtype=ranges_data.dtype, device=ranges_data.device)
+        ranges_data = torch.cat([ranges_data, padding], dim=-1)
+    
+    # Reshape to pair up (start, end) indices
+    max_num_ranges = ranges_data.shape[-1] // 2
+    ranges_paired = ranges_data.view(batch, heads, qtiles, max_num_ranges, 2)
+    
+    # Extract range pairs based on format
+    if reverse_skip_list:
+        # Format: [length, end_n, start_n, ..., end_0, start_0]
+        # Pairs are (end, start) - first element is end, second is start
+        range_ends = ranges_paired[..., 0]
+        range_starts = ranges_paired[..., 1]
+    else:
+        # Format: [length, start_0, end_0, ..., start_n, end_n]
+        # Pairs are (start, end) - first element is start, second is end
+        range_starts = ranges_paired[..., 0]
+        range_ends = ranges_paired[..., 1]
+    
+    # Determine step direction and actual range bounds
+    if reverse_skip_list:
+        step = 1 if phase else -1
+    else:
+        step = -1
+    
+    # Calculate actual tile ranges covered by each skip list range
+    # When step=1: range is [start+1, end+1) → tiles from start+1 to end (inclusive)
+    # When step=-1: range is [end+1, start+1) → tiles from end+1 to start (inclusive)
+    if step == 1:
+        range_mins = range_starts + 1
+        range_maxs = range_ends
+    else:
+        range_mins = range_ends
+        range_maxs = range_starts - 1
+    
+    # Check if target range [target_start, target_end) overlaps with any skip list range
+    # Two ranges overlap if: target_start < range_max AND target_end > range_min
+    overlaps = (target_start < range_maxs) & (target_end > range_mins)
+    
+    # Only consider ranges that are actually used (within list_lengths)
+    valid_mask = torch.arange(max_num_ranges, device=skip_list.device).view(1, 1, 1, -1) < num_ranges.unsqueeze(-1)
+    valid_overlaps = overlaps & valid_mask
+    
+    # Check if target range is covered by at least one valid range
+    covered = valid_overlaps.any(dim=-1)  # [batch, heads, qtiles]
+    
+    return covered
+
+
+def calculate_extra_range_tiles(seq_start, seq_end, head_dim, use_int8, reverse_skip_list, phase, v_colmajor=False):
+    """
+    Calculate extra range in tile indices, matching the logic in _get_read_write_lists.
+    
+    Args:
+        seq_start: Start sequence index
+        seq_end: End sequence index
+        head_dim: Head dimension
+        use_int8: Whether using int8 quantization
+        reverse_skip_list: Whether skip list uses reversed format
+        phase: Phase value (0 or 1) that determines transformation
+        v_colmajor: Whether value tensor is column-major (defaults to False for standard tensors)
+    
+    Returns:
+        tuple: (start_tile, end_tile) in tile indices
+    """
+    def ceil_div(x, y):
+        return (x + y - 1) // y
+    
+    # Convert sequence indices to tile indices
+    # Match the exact logic from _get_read_write_lists:
+    # dtype = torch.int8 if self.use_int8 else query.dtype
+    # For test tensors, query.dtype is torch.bfloat16
+    dtype = torch.int8 if use_int8 else torch.bfloat16
+    
+    # Match the exact call: LiteAttention.get_MN(head_dim, dtype, v_colmajor)
+    _, k_tile_size = LiteAttention.get_MN(head_dim, dtype, v_colmajor, is_skipable=True)
+    
+    # Match the exact calculation from _get_read_write_lists:
+    # tile_start = seq_start // k_tile_size
+    # tile_end = ceil_div(seq_end, k_tile_size)
+    # extra_range = (tile_start, tile_end)
+    start_tile = seq_start // k_tile_size
+    end_tile = ceil_div(seq_end, k_tile_size)
+    
+    # Note: The actual implementation in lite_attention.py doesn't apply any transformation
+    # (the transformation code is commented out), so we match that behavior here
+    # if reverse_skip_list and phase:
+    #     start_tile, end_tile = end_tile, start_tile
+    
+    return start_tile, end_tile
+
+
+def test_min_seq_len(head_dim, min_seq_len = 7600, use_int8=False):
+    attn = LiteAttention(use_int8=use_int8, min_seq_len=min_seq_len)
+    attn.threshold = float(0.0)
+
+    # First pass: seq_len < min_seq_len
+    test_min_seq_len_helper(attn, min_seq_len // 4, head_dim)
+
+    # Second pass: bigger seq_len but still < min_seq_len
+    # Set threshold to inf to avoid getting new skips from this pass
+    attn.threshold = float('-inf')
+    test_min_seq_len_helper(attn, min_seq_len // 2, head_dim)
+    
+    # Verify that the skip list includes the new sequence length range
+    # extra_range is calculated during _get_read_write_lists using the phase BEFORE alternation
+    # After the forward pass, _phase has been alternated, so we use 1 - _phase
+    phase_when_calculated = 1 - attn._phase
+    # phase_when_calculated = 1 - attn._phase
+    
+    # Calculate extra_range in tile indices (matching _get_read_write_lists logic)
+    seq_start, seq_end = min_seq_len // 4, min_seq_len // 2
+    target_start, target_end = calculate_extra_range_tiles(
+        seq_start, seq_end, head_dim, use_int8, 
+        attn.reverse_skip_list, phase_when_calculated
+    )
+    
+    # extra_range is added during the forward pass, so it should be in the write_list
+    # (which will become the read_list for the next pass)
+    # write_list = attn.write_list
+    # assert write_list is not None, "write_list should not be None"
+    read_list = attn.read_list
+    
+    # Vectorized check: verify that extra_range_tiles is covered by the skip list ranges
+    covered = check_range_in_skip_list(
+        # write_list, target_start, target_end,
+        read_list, target_start, target_end,
+        attn.reverse_skip_list, phase_when_calculated
+    )
+    
+    # Check that the extra range is covered in all skip lists
+    all_covered = covered.all()
+    prefix = "INT8 " if use_int8 else ""
+    if not all_covered:
+        print(f"  {prefix}Min seq len test (extra range check): ❌ FAILED")
+        print(f"    ⚠️  Extra range ({target_start}, {target_end}) not covered in all skip lists")
+        print(f"    Coverage: {covered.sum().item()}/{covered.numel()} entries covered")
+        print(f"    Uncovered entries: {~covered}")
+        return False
+
+
+    # Continue testing with various sequence lengths
+    attn.threshold = float(0)
+    test_min_seq_len_helper(attn, min_seq_len // 2, head_dim)  # With skips enabled
+    test_min_seq_len_helper(attn, min_seq_len, head_dim)      # seq_len == min_seq_len
+    test_min_seq_len_helper(attn, min_seq_len + 1, head_dim)  # seq_len > min_seq_len
+    test_min_seq_len_helper(attn, min_seq_len * 2, head_dim)  # seq_len >> min_seq_len
+    test_min_seq_len_helper(attn, min_seq_len // 4, head_dim)  # Back to seq_len < min_seq_len
+    
+    # Test completed successfully
+    prefix = "INT8 " if use_int8 else ""
+    print(f"  {prefix}Min seq len test: ✅ PASSED")
+    return True
+
 def run_tests_for_head_dim(head_dim, batch=2, seq_len=18200, heads=32):
     """Run all tests for a specific head dimension."""
     print(f"\n{'='*60}")
@@ -764,6 +957,7 @@ def run_tests_for_head_dim(head_dim, batch=2, seq_len=18200, heads=32):
     bf16_results.append(test_skip_nothing(q, k, v, head_dim, use_int8=False))
     bf16_results.append(test_must_skip_list(q, k, v, head_dim, use_int8=False))
     bf16_results.append(test_must_do_list(q, k, v, head_dim, use_int8=False))
+    bf16_results.append(test_min_seq_len(head_dim, use_int8=False))
     q_short, k_short, v_short = generate_test_tensors(batch=batch, seq_len=min(6143, seq_len), heads=heads, head_dim=head_dim)
     bf16_results.append(test_softmax_lse_correctness(q_short, k_short, v_short, head_dim, use_int8=False))
     bf16_results.append(test_rectangular_attention_correctness(head_dim))
@@ -782,6 +976,7 @@ def run_tests_for_head_dim(head_dim, batch=2, seq_len=18200, heads=32):
     int8_results.append(test_skip_nothing(q, k, v, head_dim, use_int8=True))
     int8_results.append(test_must_skip_list(q, k, v, head_dim, use_int8=True))
     int8_results.append(test_must_do_list(q, k, v, head_dim, use_int8=True))
+    int8_results.append(test_min_seq_len(head_dim, use_int8=True))
     int8_results.append(test_softmax_lse_correctness(q_short, k_short, v_short, head_dim, tolerance=0.01, use_int8=True))
     int8_results.append(test_rectangular_attention_correctness(head_dim, tolerance_max_abs=0.1, tolerance_cosine=0.99, use_int8=True))
     int8_results.append(test_rectangular_attention_skipping_twice(head_dim, q_len = 4096, k_len = 1024, use_int8=True))
@@ -813,6 +1008,7 @@ def main():
     
     # Test different head dimensions
     head_dims = [32, 64, 96, 128, 192, 256]
+    # head_dims = [128]
     
     # Track results for each head dimension
     bf16_results = {}

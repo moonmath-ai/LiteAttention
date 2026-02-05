@@ -64,7 +64,7 @@ namespace flash
     // - V_colmajor_: Whether V matrix is stored in column-major layout
     template <int Stages, class ClusterShape_, class TileShape_MNK_, int kHeadDimV, class Element_, class ElementAccum_, class ArchTag_,
               bool Is_causal_, bool Is_local_, bool Has_softcap_, bool Varlen_, bool PagedKVNonTMA_, bool AppendKV_, bool HasQv_,
-              bool MmaPV_is_RS, bool IntraWGOverlap, bool PackGQA_, bool Split_, bool V_colmajor_, bool Is_skipable_, bool ReverseSkipList_=false, bool Phase_= true, bool HasMustDoList_=false>
+              bool MmaPV_is_RS, bool IntraWGOverlap, bool PackGQA_, bool Split_, bool V_colmajor_, bool Is_skipable_, bool ReverseSkipList_=false, bool Phase_= true, bool HasMustDoList_=false, bool HasExtraRange_=false>
     struct CollectiveMainloopFwdSm90
     {
 
@@ -84,6 +84,10 @@ namespace flash
         static constexpr bool Is_INT8 = cute::is_same_v<Element, int8_t>;
         // Combined check for any 8-bit type
         static constexpr bool Is_8Bit = Is_FP8 || Is_INT8;
+
+        static constexpr bool ReInt8 = Is_INT8 && (get<0>(TileShape_MNK{}) == 256);
+
+        static constexpr bool HasExtraRange = HasExtraRange_;
         
         // For INT8, V uses bfloat16 (not int8) to maintain precision
         using ElementV = std::conditional_t<Is_INT8, cute::bfloat16_t, Element>;
@@ -734,7 +738,7 @@ namespace flash
             {
                 skip_reader.template init<TileShape_MNK>(params, bidb, bidh, m_block);
                 // very important!! this tells the consumer when to stop.
-                shared_storage.skip_list_storage.last_n_block[0] = skip_reader.last_n_block();
+                shared_storage.skip_list_storage.last_n_block[0] = HasExtraRange ? (params.qk_skip_mask_args.extra_range_end - skip_reader.step) : skip_reader.last_n_block();
                 __threadfence_block();
                 // skip_writer.template init<TileShape_MNK>(params, bidb, bidh, m_block);
                 if constexpr (HasMustDoList)
@@ -1137,6 +1141,37 @@ namespace flash
                     n_block = skip_reader.start_idx;
                     skip_reader.advance();
                 }while(true);
+
+                if (HasExtraRange){
+                    // for (n_block = skip_reader.start_idx; n_block < params.qk_skip_mask_args.extra_range_end; n_block++)
+                    // {
+                    //     PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
+                    //     ++smem_pipe_write;
+                    //     load_KV_for_block(n_block, n_block_prev, smem_pipe_write, smem_pipe_write_v, skip_writer);
+                    //     n_block_prev = n_block;
+                    //     if constexpr (Transpose_V){ copy_Vt_to_V(smem_pipe_write_v); }
+                    // }
+                    if constexpr (Phase){
+                        for (n_block = params.qk_skip_mask_args.extra_range_start; n_block < params.qk_skip_mask_args.extra_range_end; n_block += skip_reader.step)
+                        {
+                            PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
+                            ++smem_pipe_write;
+                            load_KV_for_block(n_block, n_block_prev, smem_pipe_write, smem_pipe_write_v, skip_writer);
+                            n_block_prev = n_block;
+                            if constexpr (Transpose_V){ copy_Vt_to_V(smem_pipe_write_v); }
+                        }
+                    }else{
+                        for (n_block = params.qk_skip_mask_args.extra_range_start; n_block > params.qk_skip_mask_args.extra_range_end; n_block += skip_reader.step)
+                        {
+                            PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
+                            ++smem_pipe_write;
+                            load_KV_for_block(n_block, n_block_prev, smem_pipe_write, smem_pipe_write_v, skip_writer);
+                            n_block_prev = n_block;
+                            if constexpr (Transpose_V){ copy_Vt_to_V(smem_pipe_write_v); }
+                        }
+                    }
+                    if (should_load_KV){skip_writer.record_range_end(params.qk_skip_mask_args.extra_range_end);}
+                }
             }else{
                 --n_block;
                 #pragma unroll (!Transpose_V && Use_TMA_KV ? 2 : 1)

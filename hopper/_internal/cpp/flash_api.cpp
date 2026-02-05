@@ -740,10 +740,12 @@
          std::optional<at::Tensor> attn_write_list_,
          double thr,
          bool reverse_skip_list = false,
-         bool phase = false
+         bool phase = false,
+         std::optional<int64_t> extra_range_start_ = std::nullopt,
+         std::optional<int64_t> extra_range_end_ = std::nullopt,
+         int64_t num_q_blocks = -1,
+         int64_t num_k_blocks = -1
      ) {
-     // params.reverse_skip_list = reverse_skip_list;
-     // params.phase = phase;
  
      auto dprops = at::cuda::getCurrentDeviceProperties();
      bool is_sm8x = dprops->major >= 8;
@@ -881,11 +883,14 @@
      int const seqlen_k = !is_varlen_k ? (!paged_KV ? k.size(1) : max_num_pages_per_seq * page_size) : max_seqlen_k_.value();
      int const total_k = !is_varlen_k ? batch_size * k.size(1) : k.size(0);
      int const num_heads_k = k.size(-2);
-     int const batch_size_k = !paged_KV ? (!is_varlen_k ? k.size(0) : cu_seqlens_k.size(0) - 1) : page_table.size(0);
-     double softmax_scale = 1.0 / sqrt(double(head_size));
-     if (softmax_scale_.has_value()) {
-         softmax_scale = softmax_scale_.value();
-     }
+    int const batch_size_k = !paged_KV ? (!is_varlen_k ? k.size(0) : cu_seqlens_k.size(0) - 1) : page_table.size(0);
+    // double softmax_scale = 1.0 / sqrt(double(head_size));
+    // if (softmax_scale_.has_value()) {
+    //     softmax_scale = softmax_scale_.value();
+    // }
+    // double softmax_scale = softmax_scale_.value_or(1.0 / sqrt(double(head_size)));
+    const double default_softmax_scale = 1.0 / sqrt(double(head_size));
+    double softmax_scale = softmax_scale_.has_value() ? softmax_scale_.value() : default_softmax_scale;
      if (!kv_batch_idx_.has_value()) {
          TORCH_CHECK(batch_size == batch_size_k, "batch_size must be equal to batch_size_k");
      }
@@ -1029,6 +1034,13 @@
  
      params.reverse_skip_list = reverse_skip_list;
      params.phase = phase;
+
+     params.has_extra_range = false;
+     if (extra_range_start_.has_value() && extra_range_end_.has_value()) {
+         params.has_extra_range = true;
+         params.qk_skip_mask_args.extra_range_start = static_cast<int>(extra_range_start_.value());
+         params.qk_skip_mask_args.extra_range_end = static_cast<int>(extra_range_end_.value());
+     }
  
      // Convert skip mask tensors to QKSkipMaskArgs struct
      // Expected shape: [batch, heads, limbs] where limbs = ceil_div(q_tiles * k_tiles, 64)
@@ -1083,6 +1095,11 @@
      } else {
          params.qk_skip_mask_args.attn_must_do_list = nullptr;
          params.has_must_do_list = false;
+     }
+     
+     if(params.is_skipable){
+        params.qk_skip_mask_args.num_q_blocks = static_cast<int>(num_q_blocks);
+        params.qk_skip_mask_args.num_k_blocks = static_cast<int>(num_k_blocks);
      }
  
      params.total_q = total_q;
@@ -1554,12 +1571,15 @@
      TORCH_CHECK(head_size % 8 == 0, "head_size should be a multiple of 8");
      TORCH_CHECK(head_size_v % 8 == 0, "head_size_v should be a multiple of 8");
      int const max_headdim = get_max_headdim();
-     TORCH_CHECK(std::max(head_size, head_size_v) <= max_headdim, "FlashAttention forward only supports head dimension at most " + std::to_string(max_headdim));
-     TORCH_CHECK(num_heads % num_heads_k == 0, "Number of heads in key/value must divide number of heads in query");
-     double softmax_scale = 1.0 / sqrt(double(head_size));
-     if (softmax_scale_.has_value()) {
-         softmax_scale = softmax_scale_.value();
-     }
+    TORCH_CHECK(std::max(head_size, head_size_v) <= max_headdim, "FlashAttention forward only supports head dimension at most " + std::to_string(max_headdim));
+    TORCH_CHECK(num_heads % num_heads_k == 0, "Number of heads in key/value must divide number of heads in query");
+    // double softmax_scale = 1.0 / sqrt(double(head_size));
+    // if (softmax_scale_.has_value()) {
+    //     softmax_scale = softmax_scale_.value();
+    // }
+    // double softmax_scale = softmax_scale_.value_or(1.0 / sqrt(double(head_size)));
+    const double default_softmax_scale = 1.0 / sqrt(double(head_size));
+    double softmax_scale = softmax_scale_.has_value() ? softmax_scale_.value() : default_softmax_scale;
  
      // This needs to go before kBlockM & kBlockN since we rely on the correct window_size and is_causal to set kBlockM
      if (window_size_left >= seqlen_k - 1) { window_size_left = -1; }
@@ -1928,7 +1948,11 @@
          "Tensor? attn_write_list = None,"
          "float thr = -3.0,"
          "bool reverse_skip_list = False,"
-         "bool phase = False) -> (Tensor(out!), Tensor, Tensor, Tensor)"
+         "bool phase = False,"
+         "int? extra_range_start = None,"
+         "int? extra_range_end = None,"
+         "int num_q_blocks = -1,"
+         "int num_k_blocks = -1) -> (Tensor(out!), Tensor, Tensor, Tensor)"
      );
      m.def("bwd("
          "Tensor dout,"
