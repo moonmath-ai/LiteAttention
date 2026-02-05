@@ -302,7 +302,7 @@ class LiteAttention:
         return kBlockM, kBlockN
 
     @staticmethod
-    def init_skip_list(batch, seq_len, heads, head_dim, v_colmajor, dtype, device, must_skip_list: list = None, reverse_skip_list: bool = True, min_seq_len: int = 0) -> torch.Tensor:
+    def init_skip_list(batch, seq_len, heads, head_dim, v_colmajor, dtype, device, must_skip_list: list = None, reverse_skip_list: bool = True) -> torch.Tensor:
         """
         Initialize skip list tensors with default "compute all tiles" configuration.
         
