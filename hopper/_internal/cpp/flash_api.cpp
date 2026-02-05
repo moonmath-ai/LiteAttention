@@ -883,11 +883,14 @@
      int const seqlen_k = !is_varlen_k ? (!paged_KV ? k.size(1) : max_num_pages_per_seq * page_size) : max_seqlen_k_.value();
      int const total_k = !is_varlen_k ? batch_size * k.size(1) : k.size(0);
      int const num_heads_k = k.size(-2);
-     int const batch_size_k = !paged_KV ? (!is_varlen_k ? k.size(0) : cu_seqlens_k.size(0) - 1) : page_table.size(0);
-     double softmax_scale = 1.0 / sqrt(double(head_size));
-     if (softmax_scale_.has_value()) {
-         softmax_scale = softmax_scale_.value();
-     }
+    int const batch_size_k = !paged_KV ? (!is_varlen_k ? k.size(0) : cu_seqlens_k.size(0) - 1) : page_table.size(0);
+    // double softmax_scale = 1.0 / sqrt(double(head_size));
+    // if (softmax_scale_.has_value()) {
+    //     softmax_scale = softmax_scale_.value();
+    // }
+    // double softmax_scale = softmax_scale_.value_or(1.0 / sqrt(double(head_size)));
+    const double default_softmax_scale = 1.0 / sqrt(double(head_size));
+    double softmax_scale = softmax_scale_.has_value() ? softmax_scale_.value() : default_softmax_scale;
      if (!kv_batch_idx_.has_value()) {
          TORCH_CHECK(batch_size == batch_size_k, "batch_size must be equal to batch_size_k");
      }
@@ -1568,12 +1571,15 @@
      TORCH_CHECK(head_size % 8 == 0, "head_size should be a multiple of 8");
      TORCH_CHECK(head_size_v % 8 == 0, "head_size_v should be a multiple of 8");
      int const max_headdim = get_max_headdim();
-     TORCH_CHECK(std::max(head_size, head_size_v) <= max_headdim, "FlashAttention forward only supports head dimension at most " + std::to_string(max_headdim));
-     TORCH_CHECK(num_heads % num_heads_k == 0, "Number of heads in key/value must divide number of heads in query");
-     double softmax_scale = 1.0 / sqrt(double(head_size));
-     if (softmax_scale_.has_value()) {
-         softmax_scale = softmax_scale_.value();
-     }
+    TORCH_CHECK(std::max(head_size, head_size_v) <= max_headdim, "FlashAttention forward only supports head dimension at most " + std::to_string(max_headdim));
+    TORCH_CHECK(num_heads % num_heads_k == 0, "Number of heads in key/value must divide number of heads in query");
+    // double softmax_scale = 1.0 / sqrt(double(head_size));
+    // if (softmax_scale_.has_value()) {
+    //     softmax_scale = softmax_scale_.value();
+    // }
+    // double softmax_scale = softmax_scale_.value_or(1.0 / sqrt(double(head_size)));
+    const double default_softmax_scale = 1.0 / sqrt(double(head_size));
+    double softmax_scale = softmax_scale_.has_value() ? softmax_scale_.value() : default_softmax_scale;
  
      // This needs to go before kBlockM & kBlockN since we rely on the correct window_size and is_causal to set kBlockM
      if (window_size_left >= seqlen_k - 1) { window_size_left = -1; }

@@ -500,8 +500,23 @@ class LiteAttention:
         dtype = torch.int8 if self.use_int8 else query.dtype
         device = query.device
 
+        # 1. Determine Next Phase (Predict Kernel Direction)
+        #    If skip list exists, next phase is toggle of current. If None, it starts at 0.
+        next_phase_val = 1 - self._phase if self._skip_list is not None else 0
+        will_be_descending = (self.reverse_skip_list and next_phase_val == 0) or (not self.reverse_skip_list)
+
+        # 2. Check for Growth
+        #    For tuples, check if key dimension is growing (used for extra_range calculation)
+        #    and both dimensions are within min_seq_len
+        is_growing = (self._last_seq_len is not None) and \
+                     (current_seq_len[1] > self._last_seq_len[1]) and \
+                     (current_seq_len[0] <= self.min_seq_len and current_seq_len[1] <= self.min_seq_len)
+
+        # 3. Force Re-init if growing in Descending Phase (Prevents Deadlock)
+        force_reinit = is_growing and will_be_descending
+
         should_reinitialize = (self._skip_list is None or 
-            (self._last_seq_len != current_seq_len and current_seq_len > self.min_seq_len) or 
+            (self._last_seq_len is not None and self._last_seq_len != current_seq_len and ((current_seq_len[0] > self.min_seq_len and current_seq_len[1] > self.min_seq_len) or force_reinit)) or 
             self._skip_list.device != query.device or
             self._last_head_dim != current_head_dim or
             self._last_v_colmajor != v_colmajor or
@@ -534,23 +549,17 @@ class LiteAttention:
 
             if os.getenv("LITE_ATTENTION_VERBOSE", "FALSE") != "FALSE":
                 print(f"[Warning]: reinitialized skip list during the forward pass")
-        # if the sequence length changed but we expected it to happend (do to min_seq_len)
-        elif (current_seq_len <= self.min_seq_len and self._last_seq_len != current_seq_len):
-            # Calculate the range of NEW sequence indices that need to be processed
-            # This represents the difference between old and new sequence lengths
-            seq_start = min(self._last_seq_len, current_seq_len)
-            seq_end = max(self._last_seq_len, current_seq_len)
 
-            if self.reverse_skip_list and self._phase == 0:
-                temp = (seq_start, seq_end)
-                seq_start, seq_end = temp[1], temp[0]
-
-            # Convert sequence indices to tile indices
-            # Start is inclusive: use floor division  
-            # End is exclusive: use ceiling division to get the first tile beyond the sequence
+        elif is_growing:
+            # We are Ascending (Checked by force_reinit logic)
+            # Extract key sequence lengths (second element of tuple) since we're working with k_tile_size
+            last_k_len = self._last_seq_len[1]
+            current_k_len = current_seq_len[1]
+            seq_start = min(last_k_len, current_k_len)
+            seq_end = max(last_k_len, current_k_len)
+            
             _, k_tile_size = LiteAttention.get_MN(head_dim, dtype, v_colmajor)
-            def ceil_div(x, y):
-                return (x + y - 1) // y
+            def ceil_div(x, y): return (x + y - 1) // y
             
             tile_start = seq_start // k_tile_size
             tile_end = ceil_div(seq_end, k_tile_size)
