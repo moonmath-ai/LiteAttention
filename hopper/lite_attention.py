@@ -16,7 +16,7 @@ Shape: [2, batch, heads, qtiles, ktiles + 2]
 - Dimension 1: Batch dimension
 - Dimension 2: Attention heads
 - Dimension 3: Query tiles (rows of the attention matrix)
-- Dimension 4: Key tiles + 1 (the +1 is for storing the list length)
+- Dimension 4: Key tiles + 2 (the +2 stores the list length at index 0, plus extra space)
 
 The format depends on the `reverse_skip_list` flag:
 
@@ -200,8 +200,8 @@ class LiteAttention:
 
         read_list = read_list.to(torch.int64)
         # Remove the first element (the length of the skip list)
-        # [batch, heads, qtiles, ktiles + 2] -> [batch, heads, qtiles, ktiles]
-        reshaped_read_list = read_list[..., 1:] # [batch, heads, qtiles, ktiles]
+        # [batch, heads, qtiles, ktiles + 2] -> [batch, heads, qtiles, ktiles + 1]
+        reshaped_read_list = read_list[..., 1:] # [batch, heads, qtiles, ktiles + 1]
 
         # Pad last dimension to be even (required for pairing start/end indices)
         # [batch, heads, qtiles, ktiles] -> [batch, heads, qtiles, ktiles + (ktiles % 2)]
@@ -240,7 +240,10 @@ class LiteAttention:
         real_not_skipped_per_head = torch.gather(not_skipped_per_head, dim=-1, index=skip_list_sizes.unsqueeze(-1)).squeeze(-1)
         
         # Calculate percentage: (tiles computed) / (total tiles)
-        num_of_k_tiles = read_list.shape[-1] - 1
+        # read_list.shape[-1] = ktiles + 2 (1 for length field, ktiles+1 for data)
+        # After removing length field: reshaped_read_list.shape[-1] = ktiles + 1
+        # But actual number of k-tiles is ktiles, so we subtract 2 from original shape
+        num_of_k_tiles = read_list.shape[-1] - 2
         return real_not_skipped_per_head / num_of_k_tiles
 
     @staticmethod
