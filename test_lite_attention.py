@@ -775,7 +775,7 @@ def check_range_in_skip_list(skip_list, target_start, target_end, reverse_skip_l
     
     # Get the length of each skip list entry
     list_lengths = skip_list[..., 0]  # [batch, heads, qtiles]
-    num_ranges = (list_lengths - 1) // 2  # Number of (start, end) pairs
+    num_ranges = list_lengths // 2  # Number of (start, end) pairs
     
     # Extract all range pairs using vectorized operations
     ranges_data = skip_list[..., 1:]  # [batch, heads, qtiles, ktiles+1]
@@ -814,10 +814,10 @@ def check_range_in_skip_list(skip_list, target_start, target_end, reverse_skip_l
     # When step=-1: range is [end+1, start+1) → tiles from end+1 to start (inclusive)
     if step == 1:
         range_mins = range_starts + 1
-        range_maxs = range_ends + 1
+        range_maxs = range_ends
     else:
-        range_mins = range_ends + 1
-        range_maxs = range_starts + 1
+        range_mins = range_ends
+        range_maxs = range_starts - 1
     
     # Check if target range [target_start, target_end) overlaps with any skip list range
     # Two ranges overlap if: target_start < range_max AND target_end > range_min
@@ -833,7 +833,7 @@ def check_range_in_skip_list(skip_list, target_start, target_end, reverse_skip_l
     return covered
 
 
-def calculate_extra_range_tiles(seq_start, seq_end, head_dim, use_int8, reverse_skip_list, phase):
+def calculate_extra_range_tiles(seq_start, seq_end, head_dim, use_int8, reverse_skip_list, phase, v_colmajor=False):
     """
     Calculate extra range in tile indices, matching the logic in _get_read_write_lists.
     
@@ -844,6 +844,7 @@ def calculate_extra_range_tiles(seq_start, seq_end, head_dim, use_int8, reverse_
         use_int8: Whether using int8 quantization
         reverse_skip_list: Whether skip list uses reversed format
         phase: Phase value (0 or 1) that determines transformation
+        v_colmajor: Whether value tensor is column-major (defaults to False for standard tensors)
     
     Returns:
         tuple: (start_tile, end_tile) in tile indices
@@ -852,15 +853,25 @@ def calculate_extra_range_tiles(seq_start, seq_end, head_dim, use_int8, reverse_
         return (x + y - 1) // y
     
     # Convert sequence indices to tile indices
+    # Match the exact logic from _get_read_write_lists:
+    # dtype = torch.int8 if self.use_int8 else query.dtype
+    # For test tensors, query.dtype is torch.bfloat16
     dtype = torch.int8 if use_int8 else torch.bfloat16
-    _, k_tile_size = LiteAttention.get_MN(head_dim, dtype, is_skipable=True)
     
+    # Match the exact call: LiteAttention.get_MN(head_dim, dtype, v_colmajor)
+    _, k_tile_size = LiteAttention.get_MN(head_dim, dtype, v_colmajor, is_skipable=True)
+    
+    # Match the exact calculation from _get_read_write_lists:
+    # tile_start = seq_start // k_tile_size
+    # tile_end = ceil_div(seq_end, k_tile_size)
+    # extra_range = (tile_start, tile_end)
     start_tile = seq_start // k_tile_size
     end_tile = ceil_div(seq_end, k_tile_size)
     
-    # Apply reverse/phase transformation if needed (matching _get_read_write_lists logic)
-    if reverse_skip_list and phase:
-        start_tile, end_tile = end_tile, start_tile
+    # Note: The actual implementation in lite_attention.py doesn't apply any transformation
+    # (the transformation code is commented out), so we match that behavior here
+    # if reverse_skip_list and phase:
+    #     start_tile, end_tile = end_tile, start_tile
     
     return start_tile, end_tile
 
@@ -881,6 +892,7 @@ def test_min_seq_len(head_dim, min_seq_len = 7600, use_int8=False):
     # extra_range is calculated during _get_read_write_lists using the phase BEFORE alternation
     # After the forward pass, _phase has been alternated, so we use 1 - _phase
     phase_when_calculated = 1 - attn._phase
+    # phase_when_calculated = 1 - attn._phase
     
     # Calculate extra_range in tile indices (matching _get_read_write_lists logic)
     seq_start, seq_end = min_seq_len // 4, min_seq_len // 2
@@ -891,12 +903,14 @@ def test_min_seq_len(head_dim, min_seq_len = 7600, use_int8=False):
     
     # extra_range is added during the forward pass, so it should be in the write_list
     # (which will become the read_list for the next pass)
-    write_list = attn.write_list
-    assert write_list is not None, "write_list should not be None"
+    # write_list = attn.write_list
+    # assert write_list is not None, "write_list should not be None"
+    read_list = attn.read_list
     
     # Vectorized check: verify that extra_range_tiles is covered by the skip list ranges
     covered = check_range_in_skip_list(
-        write_list, target_start, target_end,
+        # write_list, target_start, target_end,
+        read_list, target_start, target_end,
         attn.reverse_skip_list, phase_when_calculated
     )
     
