@@ -136,6 +136,7 @@ def LiteAttention(
     enable_skipping: bool = True, 
     threshold: float = -10.0, 
     max_batch_size: int = 2, 
+    min_seq_len: int = 0,
     reverse_skip_list: bool = True, 
     use_int8: bool = False
 )
@@ -145,6 +146,7 @@ def LiteAttention(
 - `enable_skipping` (bool): Whether to enable skip list optimizations. Defaults to `True`. When `False`, performs standard Flash Attention.
 - `threshold` (float): Log-space threshold for skipping tiles. Defaults to `-10.0`. Tiles with `max(log-attention-score) < threshold` will be skipped. Must be negative in non-debug mode. Lower values generally mean more aggressive skipping.
 - `max_batch_size` (int): Maximum batch size to pre-allocate memory for. Defaults to `2`. The actual batch size used during inference can be smaller than this value, but not larger.
+- `min_seq_len` (int): Minimum sequence length threshold for skip state management. Defaults to `0`. When set, skip state is not reset when sequence length increases as long as it remains below this threshold. See the [Min Sequence Length](#min-sequence-length) section for details.
 - `reverse_skip_list` (bool): Whether to use the reversed skip list format (internal optimization). Defaults to `True`.
 - `use_int8` (bool): Whether to use Int8 quantization for Q and K. Defaults to `False`. Enables per-block quantization for Q and channel-smoothed per-block quantization for K.
 
@@ -209,6 +211,58 @@ The must_skip_list defines ranges that can always be skipped according to the sa
 must_skip_list = [40, 80]
 ```
 then all the tokens between 40 and 80 can always be skipped.
+
+### Min Sequence Length
+
+The `min_seq_len` parameter allows you to control when skip state resets occur during progressive sequence length growth. This is particularly useful for scenarios like autoregressive generation or progressive video generation where sequence length increases gradually over multiple forward passes.
+
+**How it works:**
+- When sequence length increases but remains **below** `min_seq_len`, the skip state is **NOT reset**. Instead, the skip list is extended to cover the new sequence range, preserving previously learned skip patterns.
+- When sequence length **exceeds** `min_seq_len`, a reset occurs and skip state is reinitialized.
+
+**Example scenarios:**
+
+```python
+# Initialize with min_seq_len = 8000
+self.attn = LiteAttention(threshold=-6.0, min_seq_len=8000)
+
+# Scenario 1: Sequence length grows but stays below min_seq_len
+# Forward pass 1: seq_len = 2000 (< 8000)
+output1 = self.attn(query_2000, key_2000, value_2000)
+# Skip state is initialized and patterns are learned
+
+# Forward pass 2: seq_len = 4000 (< 8000, increased from 2000)
+output2 = self.attn(query_4000, key_4000, value_4000)
+# ✅ NO RESET: Skip state is extended to cover [2000, 4000) range
+# Previous skip patterns for [0, 2000) are preserved
+
+# Forward pass 3: seq_len = 6000 (< 8000, increased from 4000)
+output3 = self.attn(query_6000, key_6000, value_6000)
+# ✅ NO RESET: Skip state is extended to cover [4000, 6000) range
+# Previous skip patterns for [0, 4000) are preserved
+
+# Scenario 2: Sequence length exceeds min_seq_len
+# Forward pass 4: seq_len = 10000 (> 8000)
+output4 = self.attn(query_10000, key_10000, value_10000)
+# 🔄 RESET: Skip state is reinitialized because seq_len > min_seq_len
+# All previous skip patterns are cleared
+
+# Scenario 3: Sequence length decreases after exceeding min_seq_len
+# Forward pass 5: seq_len = 3000 (< 8000, decreased from 10000)
+output5 = self.attn(query_3000, key_3000, value_3000)
+# 🔄 RESET: Skip state is reinitialized because sequence length changed
+# (Note: Reset occurs when sequence length changes and current length > min_seq_len,
+#  or when other tensor properties change)
+```
+
+**When to use `min_seq_len`:**
+- **Progressive generation**: When generating sequences that grow over time (e.g., autoregressive text/video generation)
+- **Memory efficiency**: Avoids unnecessary resets during early stages of generation when sequence length is still growing
+- **Performance optimization**: Preserves learned skip patterns during the growth phase, reducing redundant computation
+
+**When NOT to use `min_seq_len`:**
+- **Fixed sequence length**: If your model always uses the same sequence length, set `min_seq_len=0` (default)
+- **Variable but unpredictable lengths**: If sequence lengths vary unpredictably, the default behavior (reset on change) is more appropriate
 
 ### Multi-GPU Usage (Sequence Parallelism)
 
