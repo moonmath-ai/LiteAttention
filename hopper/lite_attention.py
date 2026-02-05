@@ -964,7 +964,8 @@ class LiteAttention:
         batch = query.shape[0]
         seq_len_q = query.shape[1]
         seq_len_k = key.shape[1]
-        skip_list = self._skip_list[self._phase]
+        # skip_list = self._skip_list[self._phase]
+        skip_list = self.read_list
 
         # find out if the skip list is reversed or not
         r1, r2 = skip_list[0, 0, 0, 1:3]
@@ -1082,10 +1083,20 @@ class LiteAttention:
         ----
         Only includes data for the actual batch size used (not max_batch_size).
         The skip list format depends on the reverse_skip_list flag.
+        qtiles and ktiles are calculated based on self._last_seq_len (not min_seq_len).
         """
-        if self._skip_list is None:
+        if self._skip_list is None or self._last_seq_len is None:
             return None
-        return self._skip_list[self._phase, :self._last_batch_size]
+        
+        # Calculate actual qtiles and ktiles based on last_seq_len (not min_seq_len)
+        q_len, k_len = self._last_seq_len
+        dtype = torch.int8 if self.use_int8 else self._last_dtype
+        kBlockM, kBlockN = LiteAttention.get_MN(self._last_head_dim, dtype, self._last_v_colmajor, is_skipable=True)
+        actual_qtiles = LiteAttention.ceil_div(q_len, kBlockM)
+        actual_ktiles = LiteAttention.ceil_div(k_len, kBlockN)
+        
+        # Slice to return only the portion corresponding to actual sequence lengths
+        return self._skip_list[self._phase, :self._last_batch_size, :, :actual_qtiles, :actual_ktiles + 2]
     
     @property
     def write_list(self) -> Optional[torch.Tensor]:
@@ -1103,10 +1114,20 @@ class LiteAttention:
         ----
         Only includes data for the actual batch size used (not max_batch_size).
         The skip list format depends on the reverse_skip_list flag.
+        qtiles and ktiles are calculated based on self._last_seq_len (not min_seq_len).
         """
-        if self._skip_list is None:
+        if self._skip_list is None or self._last_seq_len is None:
             return None
-        return self._skip_list[1 - self._phase, :self._last_batch_size]
+        
+        # Calculate actual qtiles and ktiles based on last_seq_len (not min_seq_len)
+        q_len, k_len = self._last_seq_len
+        dtype = torch.int8 if self.use_int8 else self._last_dtype
+        kBlockM, kBlockN = LiteAttention.get_MN(self._last_head_dim, dtype, self._last_v_colmajor, is_skipable=True)
+        actual_qtiles = LiteAttention.ceil_div(q_len, kBlockM)
+        actual_ktiles = LiteAttention.ceil_div(k_len, kBlockN)
+        
+        # Slice to return only the portion corresponding to actual sequence lengths
+        return self._skip_list[1 - self._phase, :self._last_batch_size, :, :actual_qtiles, :actual_ktiles + 2]
 
 class SeqParallelLiteAttention:
     """
