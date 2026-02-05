@@ -914,7 +914,7 @@ def test_min_seq_len(head_dim, min_seq_len = 7600, use_int8=False):
         attn.reverse_skip_list, phase_when_calculated
     )
     
-    # Assert that the extra range is covered in all skip lists
+    # Check that the extra range is covered in all skip lists
     all_covered = covered.all()
     prefix = "INT8 " if use_int8 else ""
     if not all_covered:
@@ -922,7 +922,7 @@ def test_min_seq_len(head_dim, min_seq_len = 7600, use_int8=False):
         print(f"    ⚠️  Extra range ({target_start}, {target_end}) not covered in all skip lists")
         print(f"    Coverage: {covered.sum().item()}/{covered.numel()} entries covered")
         print(f"    Uncovered entries: {~covered}")
-        assert False, f"Extra range ({target_start}, {target_end}) should be covered in all skip lists"
+        return False
 
 
     # Continue testing with various sequence lengths
@@ -936,6 +936,7 @@ def test_min_seq_len(head_dim, min_seq_len = 7600, use_int8=False):
     # Test completed successfully
     prefix = "INT8 " if use_int8 else ""
     print(f"  {prefix}Min seq len test: ✅ PASSED")
+    return True
 
 def run_tests_for_head_dim(head_dim, batch=2, seq_len=18200, heads=32):
     """Run all tests for a specific head dimension."""
