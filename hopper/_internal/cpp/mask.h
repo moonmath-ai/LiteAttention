@@ -72,10 +72,24 @@ struct Mask {
             if constexpr (Seqlenk_mask) {  // Just masking based on col
                 #pragma unroll
                 for (int n = 0; n < size<1>(tSrS_rowcol); ++n) {
-                    if (int(get<Col>(t0ScS_rowcol(_0{}, n))) >= seqlenk_col_limit) {
+
+                    if constexpr (std::is_floating_point_v<ElementType>) {
+                        // dirty trick to avoid FSEL. the idea is to cause an overflow only when the condition is true.
+                        // and by doing so get -INFINITY only when the condition is true.
+                        // but instead of using usint FSEL we use FMUL.
+                        ElementType col_value = (int(get<Col>(t0ScS_rowcol(_0{}, n))) >= seqlenk_col_limit) * 2.0f;
                         #pragma unroll
-                        for (int m = 0; m < size<0>(tSrS_rowcol); ++m) { tSrS_rowcol(m, n) = mask_value; }
+                        for (int m = 0; m < size<0>(tSrS_rowcol); ++m) { tSrS_rowcol(m, n) += mask_value * col_value; }
+                    }else{
+                        if (int(get<Col>(t0ScS_rowcol(_0{}, n))) >= seqlenk_col_limit) {
+                            #pragma unroll
+                            for (int m = 0; m < size<0>(tSrS_rowcol); ++m) { tSrS_rowcol(m, n) = mask_value; }
+                        }
                     }
+                    // if (int(get<Col>(t0ScS_rowcol(_0{}, n))) >= seqlenk_col_limit) {
+                    //     #pragma unroll
+                    //     for (int m = 0; m < size<0>(tSrS_rowcol); ++m) { tSrS_rowcol(m, n) = mask_value; }
+                    // }
                 }
             }
         } else {  // mask based on both row and col

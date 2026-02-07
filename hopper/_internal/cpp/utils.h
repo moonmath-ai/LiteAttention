@@ -107,11 +107,12 @@ CUTLASS_DEVICE constexpr auto make_reint8_warp_group_thread_layout() {
 // For integer types: most negative value (e.g., INT32_MIN for int32_t)
 template <typename T>
 CUTLASS_HOST_DEVICE constexpr T get_mask_value() {
-    if constexpr (std::is_floating_point_v<T>) {
-        return -INFINITY;
-    } else {
-        return std::numeric_limits<T>::lowest();
-    }
+    return std::numeric_limits<T>::lowest();
+    // if constexpr (std::is_floating_point_v<T>) {
+    //     return -INFINITY;
+    // } else {
+    //     return std::numeric_limits<T>::lowest();
+    // }
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
