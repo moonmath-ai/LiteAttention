@@ -20,6 +20,7 @@ Key concepts:
 - C++ 20
 - PyTorch 2.2+
 - Linux only
+- Python dependencies: `structlog`, `tomli-w` (for calibration config serialization)
 
 ### Build LiteAttention (the main package)
 ```bash
@@ -51,7 +52,8 @@ Tests use pytest with many parameterized configurations (dtype, sequence lengths
 ### Core Components
 
 **`hopper/` - LiteAttention Package (main focus)**
-- `lite_attention.py` - Main `LiteAttention` and `SeqParallelLiteAttention` classes
+- `lite_attention.py` - Main `LiteAttention`, `SeqParallelLiteAttention`, `LiteAttentionRegistry`, and config classes
+- `calibrated_module.py` - Generic calibration framework (`ConfigurableModule`, `ModuleRegistry`, config base classes)
 - `_internal/flash_attn_interface.py` - Python bindings to CUDA kernels
 - `_internal/cpp/` - CUDA/C++ kernel implementations
 - `instantiations/` - Generated kernel instantiations for different configurations
@@ -69,14 +71,50 @@ Tests use pytest with many parameterized configurations (dtype, sequence lengths
 ### Key Classes
 
 **`LiteAttention`** (`hopper/lite_attention.py`)
-- Main attention class with skip list optimization
+- Main attention class with skip list optimization, inherits from `nn.Module` and `ConfigurableModule`
 - Manages double-buffered skip lists internally
-- Key methods: `__call__()`, `reset_skip_state()`, `set_threshold()`, `enable_skip_optimization()`
+- Key methods: `forward()`, `reset_skip_state()`, `set_threshold()`, `enable_skip_optimization()`
 - Tile sizes determined by `get_MN()` - must stay synchronized with C++ `tile_size.h`
+- Threshold is managed via the config system (`LiteAttentionRunConfig`), though `set_threshold()` and `threshold=` constructor arg still work
 
 **`SeqParallelLiteAttention`** (`hopper/lite_attention.py`)
 - Wrapper for multi-GPU sequence parallelism
 - Manages separate `LiteAttention` instances per node
+
+**`LiteAttentionRegistry`** (`hopper/lite_attention.py`)
+- Subclass of `ModuleRegistry` with `from_model()` classmethod
+- Creates a registry from a model and configures all its `LiteAttention` modules
+- Three modes: `"const"` (fixed threshold), `"load"` (from TOML file), `"calib"` (binary-search calibration)
+- Call `save_if_calib()` after inference to persist calibration results
+
+### Calibration Framework (`hopper/calibrated_module.py`)
+
+A generic configuration and calibration system for PyTorch modules:
+
+- **`ConfigurableModule`** - Mixin that adds per-timestep config resolution to any `nn.Module`. Config resolution order: instance config > registry config > default config
+- **`ModuleRegistry`** - Central registry managing configs across all `ConfigurableModule` instances in a model. Supports bulk/per-module config, TOML load/save
+- **`CalibratedRunConfig`** / **`CalibratedCalibConfig`** - Base dataclasses for runtime vs calibration configs
+- **`ConfigList`** - List of configs (one per timestep) with `collect()`/`explode()` for TOML serialization
+- **`CalibratedConfigDict`** - Dict mapping module names to configs, with `.load()` and `.save()` for TOML files
+
+LiteAttention-specific configs:
+- **`LiteAttentionRunConfig`** - holds `threshold: float` (default: -10.0)
+- **`LiteAttentionCalibConfig`** - holds `metric` ("Cossim"/"L1"/"RMSE") and `target_error` for calibration
+
+Typical calibration workflow:
+```python
+registry = LiteAttentionRegistry.from_model(
+    model, mode="calib", filename="calibrated.toml",
+    calib_config={"target_error": 0.01, "metric": "L1"},
+)
+# run inference...
+registry.save_if_calib()
+
+# later, load calibrated thresholds:
+registry = LiteAttentionRegistry.from_model(
+    model, mode="load", filename="calibrated.toml",
+)
+```
 
 ## Important Implementation Details
 
