@@ -143,6 +143,9 @@ class LiteAttention(nn.Module, ConfigurableModule):
     Args:
         enable_skipping (bool, optional): Whether to enable skip list optimizations. 
             Defaults to True. When False, performs standard Flash Attention.
+        threshold (float, optional): Log-space threshold for skipping tiles. Defaults to -10.0.
+            Tiles with max(log-attention-score) < threshold will be skipped.
+            Must be negative in non-debug mode. Lower values = more aggressive skipping.
         max_batch_size (int, optional): Maximum batch size to pre-allocate memory for.
             Defaults to 2. Actual batch size can be smaller but not larger.
         reverse_skip_list (bool, optional): Whether to use reversed skip list format.
@@ -153,32 +156,45 @@ class LiteAttention(nn.Module, ConfigurableModule):
     
     Attributes:
         enable_skipping (bool): Current state of skip optimization
+        threshold (float): Current threshold value
         read_list (torch.Tensor): Current read skip list (read-only property)
         write_list (torch.Tensor): Current write skip list (read-only property)
         
     Example:
-        >>> # Basic usage with default config (threshold=-10.0)
+        >>> # in the common case, the config is managed with the LiteAttentionRegistry
         >>> lite_attn = LiteAttention()
+
+        >>> # In case you want to run with a specific threshold
+        >>> lite_attn = LiteAttention(threshold=-5.0)
         >>> output = lite_attn(query, key, value)
-
-        >>> # With explicit config
-        >>> lite_attn = LiteAttention(config=LiteAttentionRunConfig(threshold=-8.0))
+        
+        >>> # With must-do list to force certain sequence ranges
+        >>> lite_attn = LiteAttention(enable_skipping=True, threshold=-8.0)
+        >>> # Force computation of sequence positions [0, 128) and [500, 640) (exclusive end)
+        >>> must_do = [0, 128, 500, 640]
+        >>> output = lite_attn(query, key, value, must_do_list=must_do)
+        
+        >>> # Disable skipping for specific forward pass
+        >>> lite_attn.enable_skip_optimization(False)
         >>> output = lite_attn(query, key, value)
-
-        >>> # Using ConfigurableModule pattern with ModuleRegistry
-        >>> from .calibrated_module import ModuleRegistry
-        >>> model = MyModel()  # contains LiteAttention modules
-        >>> registry = ModuleRegistry(model.named_modules())
-        >>> registry.set_bulk_config(LiteAttentionRunConfig(threshold=-8.0))
-
-        >>> # Calibration mode - find optimal threshold for target error
-        >>> registry.set_bulk_config(LiteAttentionCalibConfig(target_error=0.01, metric="L1"))
     """
 
     run_config_type = LiteAttentionRunConfig
 
-    def __init__(self, enable_skipping: bool = True, max_batch_size: int = 2, reverse_skip_list: bool = True, use_int8: bool = False, config: LiteAttentionRunConfig | LiteAttentionCalibConfig | None = None):
+    def __init__(
+        self,
+        enable_skipping: bool = True,
+        threshold: float | None = None,
+        max_batch_size: int = 2,
+        reverse_skip_list: bool = True,
+        use_int8: bool = False,
+        config: LiteAttentionRunConfig | LiteAttentionCalibConfig | None = None,
+    ):
         nn.Module.__init__(self)
+        if threshold is not None and config is not None:
+            raise ValueError("Cannot specify both 'threshold' and 'config'")
+        if threshold is not None:
+            config = LiteAttentionRunConfig(threshold=threshold)
         ConfigurableModule.__init__(self, config)
         # Internal skip list management
         self._skip_list = None  # Shape: [2, max_batch_size, heads, qtiles, ktiles+1]
@@ -771,7 +787,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
         
         Example:
         -------
-        >>> lite_attn = LiteAttention(config=LiteAttentionRunConfig(threshold=-10.0))
+        >>> lite_attn = LiteAttention(threshold=-8.0)
         >>> output = lite_attn(q, k, v)
         >>> 
         >>> # With must-do list to force specific sequence ranges
@@ -953,7 +969,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
         
         Examples:
         --------
-        >>> lite_attn = LiteAttention(config=LiteAttentionRunConfig(threshold=-10.0))
+        >>> lite_attn = LiteAttention(threshold=-10.0)
         >>> lite_attn.set_threshold(-5.0)   # More aggressive skipping
         >>> lite_attn.set_threshold(-15.0)  # Less aggressive skipping
         
@@ -1209,6 +1225,8 @@ class SeqParallelLiteAttention:
         num_nodes (int): Number of nodes in the sequence-parallel setup
         enable_skipping (bool, optional): Whether to enable skip list optimizations.
             Defaults to True.
+        threshold (float, optional): Log-space threshold for skipping tiles.
+            Defaults to -10.0.
         max_batch_size (int, optional): Maximum batch size. Defaults to 2.
         config (LiteAttentionRunConfig | LiteAttentionCalibConfig, optional): Configuration
             for threshold or calibration. Applied to all LiteAttention instances.
@@ -1220,20 +1238,19 @@ class SeqParallelLiteAttention:
     
     Example:
     -------
-    >>> # Setup for 4-way sequence parallelism with explicit threshold
-    >>> config = LiteAttentionRunConfig(threshold=-8.0)
-    >>> seq_parallel_attn = SeqParallelLiteAttention(num_nodes=4, config=config)
-    >>>
+    >>> # Setup for 4-way sequence parallelism
+    >>> seq_parallel_attn = SeqParallelLiteAttention(num_nodes=4)
+    >>> 
     >>> # Node 0 processes its portion
     >>> output_0 = seq_parallel_attn(q_0, k_0, v_0, split_idx=0)
     >>> 
     >>> # Node 1 processes its portion
     >>> output_1 = seq_parallel_attn(q_1, k_1, v_1, split_idx=1)
     """
-    def __init__(self, num_nodes: int, enable_skipping: bool = True, max_batch_size: int = 2, use_int8: bool = False, config: LiteAttentionRunConfig | LiteAttentionCalibConfig | None = None):
+    def __init__(self, num_nodes: int, enable_skipping: bool = True, threshold: float | None = None, max_batch_size: int = 2, use_int8: bool = False, config: LiteAttentionRunConfig | LiteAttentionCalibConfig | None = None):
         self.num_nodes = num_nodes
         # Create separate LiteAttention instance for each node
-        self.lite_attention = [LiteAttention(enable_skipping, max_batch_size, use_int8=use_int8, config=config) for _ in range(num_nodes)]
+        self.lite_attention = [LiteAttention(enable_skipping, threshold=threshold, max_batch_size=max_batch_size, use_int8=use_int8, config=config) for _ in range(num_nodes)]
 
     def __call__(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, split_idx: int,
                  scale: Optional[float] = None, return_softmax_lse: bool = False, must_do_list: list = None) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
@@ -1279,8 +1296,7 @@ class SeqParallelLiteAttention:
         Set threshold for all nodes.
         
         Args:
-            threshold (float): Threshold value to apply to all nodes.
-                Updates the config for each LiteAttention instance.
+            threshold (float): Threshold value to apply to all nodes
         """
         for lite_attention in self.lite_attention:
             lite_attention.set_threshold(threshold)
