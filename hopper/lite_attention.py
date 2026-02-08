@@ -88,6 +88,7 @@ from .calibrated_module import (
     CalibratedCalibConfig,
     CalibratedRunConfig,
     ConfigurableModule,
+    ModuleRegistry,
 )
 
 import structlog
@@ -1293,3 +1294,87 @@ class SeqParallelLiteAttention:
         """
         for lite_attention in self.lite_attention:
             lite_attention.enable_skip_optimization(enable)
+
+
+class LiteAttentionRegistry(ModuleRegistry):
+    """
+    LiteAttention-specific registry with convenience classmethods for
+    creating configured registries from a model.
+    """
+
+    @classmethod
+    def from_model(
+        cls,
+        model,
+        mode: str,
+        threshold: float | None = None,
+        filename: str | Path | None = None,
+        calib_config: dict | None = None,
+        force: bool = False,
+    ) -> typing.Self:
+        """
+        Create a registry from a model and configure all its LiteAttention modules.
+
+        Args:
+            model: A PyTorch model containing LiteAttention modules.
+            mode: Configuration mode - 'const', 'load', or 'calib'.
+            threshold: Threshold value for mode='const'.
+            filename: Path to config file for mode='load' (input) or
+                mode='calib' (output via save_if_calib). Cast to Path internally.
+            calib_config: Dict of calibration params for mode='calib',
+                passed as kwargs to LiteAttentionCalibConfig
+                (e.g. {"target_error": 0.001, "metric": "L1"}).
+            force: If True, override instance-level configs on modules.
+                If False (default), warn when a module has an instance config
+                that will take precedence over the registry config.
+
+        """
+        if filename is not None:
+            filename = Path(filename)
+
+        registry = cls(model.named_modules())
+        registry._mode = mode
+        registry._filename = filename
+
+        for name, module in registry.named_modules.items():
+            if module._instance_config is not None:
+                if force:
+                    module._instance_config = None
+                else:
+                    log.warning(
+                        "Module has instance config that will override registry config. "
+                        "Use force=True to override.",
+                        module_name=name,
+                    )
+
+        if mode == "const":
+            if threshold is None:
+                raise ValueError("threshold is required for mode='const'")
+            registry.set_bulk_config(LiteAttentionRunConfig(threshold=threshold))
+        elif mode == "load":
+            if filename is None:
+                raise ValueError("filename is required for mode='load'")
+            registry.load_config(
+                filename,
+                config_types=[LiteAttentionRunConfig, LiteAttentionCalibConfig],
+            )
+        elif mode == "calib":
+            if filename is None:
+                raise ValueError("filename is required for mode='calib'")
+            if calib_config is None:
+                raise ValueError("calib_config is required for mode='calib'")
+            registry.set_bulk_config(LiteAttentionCalibConfig(**calib_config))
+        else:
+            raise ValueError(
+                f"Unknown mode: {mode!r}. Must be 'const', 'load', or 'calib'."
+            )
+
+        return registry
+
+    def save_if_calib(self) -> None:
+        """Save calibration results to file if in calibration mode."""
+        if self._mode != "calib":
+            return
+        if self._filename is None:
+            raise ValueError("Cannot save calibration results: no filename specified")
+        self.config_output.save(self._filename)

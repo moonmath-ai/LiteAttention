@@ -6,13 +6,13 @@ from .lite_attention import (
     SeqParallelLiteAttention,
     LiteAttentionRunConfig,
     LiteAttentionCalibConfig,
+    LiteAttentionRegistry,
 )
-from .calibrated_module import ModuleRegistry
 
 __all__ = [
     "LiteAttention",
     "SeqParallelLiteAttention",
     "LiteAttentionRunConfig",
     "LiteAttentionCalibConfig",
-    "ModuleRegistry",
+    "LiteAttentionRegistry",
 ]
