@@ -260,17 +260,18 @@ class LiteAttention:
         return LiteAttention.calc_percentage_per_head(read_list).mean()
 
     @staticmethod
-    def calc_error(quant_o, fa2_o, verbose=True, round_num=4): 
+    def calc_error(quant_o, fa2_o, verbose=True, round_num=4):
         if quant_o.shape[-2] > 200000:
             quant_o, fa2_o = quant_o.cpu(), fa2_o.cpu()
-        x, xx = quant_o.float(), fa2_o.float() 
+        x, xx = quant_o.float(), fa2_o.float()
         sim = F.cosine_similarity(x.reshape(1, -1), xx.reshape(1, -1)).item()
-        l1 =   ( (x - xx).abs().sum() / xx.abs().sum() ).item()
-        rmse = torch.sqrt(torch.mean((x -xx) ** 2)).item()
+        l1 = ((x - xx).abs().sum() / xx.abs().sum()).item()
+        rmse = torch.sqrt(torch.mean((x - xx) ** 2)).item()
         sim = round(sim, round_num)
         l1 = round(l1, round_num)
         rmse = round(rmse, round_num)
-        if verbose: print(f'Cossim: {sim:.6f}, L1: {l1:.6f}, RMSE:{rmse:.6f}')
+        if verbose:
+            print(f"Cossim: {sim:.6f}, L1: {l1:.6f}, RMSE:{rmse:.6f}")
         return {"Cossim": sim, "L1": l1, "RMSE": rmse}
 
     @staticmethod
@@ -795,7 +796,7 @@ class LiteAttention:
                 print(f"testing th {curr_th}")
                 ref = flash_attn_func(
                     q=query,
-                    k=key, 
+                    k=key,
                     v=value,
                     softmax_scale=None if self.use_int8 else scale,
                     attn_read_list=read_list,
@@ -813,7 +814,7 @@ class LiteAttention:
                 read_list, write_list = self._get_read_write_lists(query, value, must_skip_list)
                 output = flash_attn_func(
                     q=query,
-                    k=key, 
+                    k=key,
                     v=value,
                     softmax_scale=None if self.use_int8 else scale,
                     attn_read_list=read_list,
