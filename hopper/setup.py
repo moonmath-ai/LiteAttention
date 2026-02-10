@@ -48,6 +48,7 @@ DISABLE_SOFTCAP = os.getenv("FLASH_ATTENTION_DISABLE_SOFTCAP", "TRUE") == "TRUE"
 DISABLE_PACKGQA = os.getenv("FLASH_ATTENTION_DISABLE_PACKGQA", "TRUE") == "TRUE"
 DISABLE_FP16 = os.getenv("FLASH_ATTENTION_DISABLE_FP16", "TRUE") == "TRUE"
 DISABLE_FP8 = os.getenv("FLASH_ATTENTION_DISABLE_FP8", "TRUE") == "TRUE"
+DISABLE_INT8 = os.getenv("FLASH_ATTENTION_DISABLE_INT8", "FALSE") == "TRUE"
 DISABLE_VARLEN = os.getenv("FLASH_ATTENTION_DISABLE_VARLEN", "TRUE") == "TRUE"
 DISABLE_CLUSTER = os.getenv("FLASH_ATTENTION_DISABLE_CLUSTER", "TRUE") == "TRUE"
 DISABLE_HDIM64 = os.getenv("FLASH_ATTENTION_DISABLE_HDIM64", "FALSE") == "TRUE"
@@ -457,6 +458,7 @@ if not SKIP_CUDA_BUILD:
         + (["-DFLASHATTENTION_DISABLE_PACKGQA"] if DISABLE_PACKGQA else [])
         + (["-DFLASHATTENTION_DISABLE_FP16"] if DISABLE_FP16 else [])
         + (["-DFLASHATTENTION_DISABLE_FP8"] if DISABLE_FP8 else [])
+        + (["-DFLASHATTENTION_DISABLE_INT8"] if DISABLE_INT8 else [])
         + (["-DFLASHATTENTION_DISABLE_VARLEN"] if DISABLE_VARLEN else [])
         + (["-DFLASHATTENTION_DISABLE_CLUSTER"] if DISABLE_CLUSTER else [])
         + (["-DFLASHATTENTION_DISABLE_HDIM64"] if DISABLE_HDIM64 else [])
@@ -471,7 +473,7 @@ if not SKIP_CUDA_BUILD:
     )
 
     DTYPE_FWD_SM80 = ["bf16"] + (["fp16"] if not DISABLE_FP16 else [])
-    DTYPE_FWD_SM90 = ["bf16"] + (["fp16"] if not DISABLE_FP16 else []) + (["e4m3"] if not DISABLE_FP8 else [])
+    DTYPE_FWD_SM90 = ["bf16"] + (["fp16"] if not DISABLE_FP16 else []) + (["e4m3"] if not DISABLE_FP8 else []) + (["int8"] if not DISABLE_INT8 else [])
     HALF_DTYPE_FWD_SM90 = ["bf16"] + (["fp16"] if not DISABLE_FP16 else [])
     DTYPE_BWD = ["bf16"] + (["fp16"] if not DISABLE_FP16 else [])
     HEAD_DIMENSIONS_BWD = (
@@ -530,6 +532,9 @@ if not SKIP_CUDA_BUILD:
     if not DISABLE_SPLIT:
         sources += ["_internal/cpp/flash_fwd_combine.cu"]
     sources += ["_internal/cpp/flash_prepare_scheduler.cu"]
+    # Add quantization kernels for INT8 support
+    if not DISABLE_INT8:
+        sources += ["_internal/cpp/quant.cu"]
     nvcc_flags = [
         "-O3",
         # "-g",

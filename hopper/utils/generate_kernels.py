@@ -16,6 +16,7 @@ DTYPE_MAP = {
     "fp16": "cutlass::half_t",
     "bf16": "cutlass::bfloat16_t",
     "e4m3": "cutlass::float_e4m3_t",
+    "int8": "int8_t",
 }
 
 DTYPE_MAP_FWD_SM8x = {
