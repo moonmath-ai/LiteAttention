@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 Configuration and calibration framework for PyTorch modules.
 
@@ -61,7 +59,8 @@ Quick Start
     registry.config_output.save(Path("calibrated.toml"))
 """
 
-import tomllib
+from __future__ import annotations
+
 import typing
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -69,6 +68,7 @@ from pathlib import Path
 
 import structlog
 import tomli_w
+import tomllib
 
 logger = structlog.get_logger()
 
