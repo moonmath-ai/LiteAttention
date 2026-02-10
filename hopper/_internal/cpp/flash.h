@@ -64,14 +64,16 @@ struct Flash_fwd_params : public Qkv_params
     void *__restrict__ softmax_lse_ptr;
     void *__restrict__ softmax_lseaccum_ptr;
 
-    // For FP8 scaling
+    // For FP8 scaling or INT8 scaling
     float *__restrict__ q_descale_ptr;
     float *__restrict__ k_descale_ptr;
     float *__restrict__ v_descale_ptr;
     index_t q_descale_batch_stride;
     index_t q_descale_head_stride;
+    index_t q_descale_block_stride;  // Only used for INT8 (per m_block descaling)
     index_t k_descale_batch_stride;
     index_t k_descale_head_stride;
+    index_t k_descale_block_stride;  // Only used for INT8 (per n_block descaling)
     index_t v_descale_batch_stride;
     index_t v_descale_head_stride;
 
@@ -157,6 +159,7 @@ struct Flash_fwd_params : public Qkv_params
     bool is_bf16;
     bool is_fp32;
     bool is_e4m3;
+    bool is_int8;
     bool is_causal;
     bool is_local;
 

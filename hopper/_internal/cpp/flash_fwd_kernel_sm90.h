@@ -52,6 +52,8 @@ namespace flash
         static constexpr bool Varlen = CollectiveMainloop::Varlen;
         static constexpr bool Split = CollectiveMainloop::Split;
         static constexpr bool Is_FP8 = CollectiveMainloop::Is_FP8;
+        static constexpr bool Is_INT8 = CollectiveMainloop::Is_INT8;
+        static constexpr bool Is_8Bit = CollectiveMainloop::Is_8Bit;
         static constexpr bool Transpose_V = CollectiveMainloop::Transpose_V;
         static constexpr bool AppendKV = CollectiveMainloop::AppendKV;
         static constexpr bool HasQv = CollectiveMainloop::HasQv;
@@ -96,12 +98,16 @@ namespace flash
         static_assert(NumMmaWarpGroups == 1 || NumMmaWarpGroups == 2 || NumMmaWarpGroups == 3);
 
         // when using skip optimizations we need 16 registers for the producer
-        static constexpr uint32_t SkipOptimizationRegisterRequirement = (Is_skipable && (NumMmaWarpGroups < 3)) ? 8 : 0;
+        static constexpr uint32_t SkipOptimizationRegisterRequirement = 0;
 
-        /// Register requirement for Load and Math WGs
+        static constexpr uint32_t constexpr_max(uint32_t a, uint32_t b) { return (a > b) ? a : b; }
+        static constexpr uint32_t constexpr_min(uint32_t a, uint32_t b) { return (a < b) ? a : b; }
+
+        // Register requirement for Load and Math WGs
         // If we use cp.async to load K and V, we need more registers for the producer WG.
-        static constexpr uint32_t LoadRegisterRequirement = (NumMmaWarpGroups == 1 ? 56 : (NumMmaWarpGroups == 2 ? (Use_TMA_KV ? 24 : 40) : 32)) + SkipOptimizationRegisterRequirement;
-        static constexpr uint32_t MmaRegisterRequirement = (NumMmaWarpGroups == 1 ? 256 : (NumMmaWarpGroups == 2 ? (Use_TMA_KV ? 240 : 232) : 160)) - SkipOptimizationRegisterRequirement;
+        static constexpr uint32_t LoadRegisterRequirement = constexpr_max((NumMmaWarpGroups == 1 ? 56 : (NumMmaWarpGroups == 2 ? (Use_TMA_KV ? 24 : 40) : 32)) - SkipOptimizationRegisterRequirement, 24);
+        static constexpr uint32_t MmaRegisterRequirement = (NumMmaWarpGroups == 1 ? 256 : (NumMmaWarpGroups == 2 ? (Use_TMA_KV ? 240 : 232) : 160));
+
         // If you want to print from the producer warp, you'd need to increase the number of registers
         // Otherwise you'll get CUDA error.
         // static constexpr uint32_t LoadRegisterRequirement = 40;
@@ -121,7 +127,7 @@ namespace flash
         static constexpr int mainloop_smem_padding_ = int(sizeof(typename CollectiveEpilogue::TensorStorage)) - int(sizeof(decltype((typename CollectiveMainloop::TensorStorage{}).smem_v)));
         static constexpr int mainloop_smem_padding = mainloop_smem_padding_ < 0 ? 0 : mainloop_smem_padding_;
 
-        static constexpr int BufferSize = CollectiveMainloop::kStages * 2;
+        static constexpr int BufferSize = CollectiveMainloop::kStagesForSkips * 2;
         struct SharedStorage
         {
             struct TensorStorage : cute::aligned_struct<128, _1>
@@ -152,7 +158,7 @@ namespace flash
             } pipelines;
 
             // SkipListStorage<BufferSize> skip_list_storage;
-            SkipListStorage<BufferSize, ReverseSkipList, Phase> skip_list_storage;
+            SkipListStorage<BufferSize, ReverseSkipList, Phase, HasMustDoList> skip_list_storage;
         };
 
         static constexpr int SharedStorageSize = sizeof(SharedStorage);
@@ -284,10 +290,10 @@ namespace flash
 
             static_assert(is_same_v<PipelineParamsK, PipelineParamsVt>);
             PipelineParamsVt pipeline_params_vt = pipeline_params_k;
-            if constexpr (Use_TMA_KV && !SameHeadDim)
+            if constexpr (Use_TMA_KV && (!SameHeadDim || Is_INT8))
             {
                 pipeline_params_vt.transaction_bytes = CollectiveMainloop::TmaTransactionBytesV;
-                if constexpr (LargeHeadDimV)
+                if constexpr (LargeHeadDimV && !SameHeadDim)
                 {
                     pipeline_params_vt.num_consumers = NumMmaThreads;
                 }
@@ -416,14 +422,14 @@ namespace flash
 
                 // // Initialize skip_writer in shared memory with shared memory buffers
                 // // Use placement new to initialize the writer that resides in shared memory
-                // new (&shared_storage.skip_list_storage.writer) DelayedSkipListWriter<CollectiveMainloop::kStages>(
+                // new (&shared_storage.skip_list_storage.writer) DelayedSkipListWriter<CollectiveMainloop::kStages, ReverseSkipList, Phase, HasMustDoList>(
                 //     shared_storage.skip_list_storage.n_blocks_buffer,
                 //     shared_storage.skip_list_storage.end_range_buffer,
                 //     shared_storage.skip_list_storage.skip_tests
                 // );
                 // consider: move this to shared memory to reduce register pressure + not needing to worry about which thread been elected
                 // Initialize skip_writer with shared memory buffers
-                DelayedSkipListWriter<CollectiveMainloop::kStages, ReverseSkipList, Phase, HasMustDoList> skip_writer(
+                DelayedSkipListWriter<CollectiveMainloop::kStagesForSkips, ReverseSkipList, Phase, HasMustDoList> skip_writer(
                     shared_storage.skip_list_storage.n_blocks_buffer,
                     shared_storage.skip_list_storage.end_range_buffer,
                     shared_storage.skip_list_storage.skip_tests
@@ -527,21 +533,34 @@ namespace flash
                         }
                     }
                     // If there's tanh softcap, the scaling will be done before tanh.
-                    float softmax_scale_log2 = params.mainloop.softmax_scale_log2;
+                    // float softmax_scale_log2 = params.mainloop.softmax_scale_log2;
+                    float softmax_scale_log2;
+                    int const bidh = get<1>(block_coord);
+                    int const bidh_kv = !PackGQA ? params.mainloop.qhead_per_khead_divmod.divide(bidh) : bidh;
                     if constexpr (Is_FP8 && !Has_softcap)
                     {
-                        int const bidh = get<1>(block_coord);
-                        int const bidh_kv = !PackGQA ? params.mainloop.qhead_per_khead_divmod.divide(bidh) : bidh;
                         float const q_descale = params.mainloop.ptr_q_descale == nullptr ? 1.0f : params.mainloop.ptr_q_descale[bidb * get<0>(params.mainloop.stride_q_descale) + bidh_kv * get<1>(params.mainloop.stride_q_descale)];
                         float const k_descale = params.mainloop.ptr_k_descale == nullptr ? 1.0f : params.mainloop.ptr_k_descale[bidb * get<0>(params.mainloop.stride_k_descale) + bidh_kv * get<1>(params.mainloop.stride_k_descale)];
-                        softmax_scale_log2 *= q_descale * k_descale;
-                    }                    
+                        // softmax_scale_log2 *= q_descale * k_descale;
+                        softmax_scale_log2 = params.mainloop.softmax_scale_log2 * q_descale * k_descale;
+                    }else if constexpr (Is_INT8){
+                        int const m_block = get<0>(block_coord);
+                        // For INT8: Create Q descale tensor with shape (num_batches, num_heads, num_m_blocks)
+                        // Use the INT8-specific stride from params
+                        int const num_m_blocks = cute::ceil_div(seqlen_info.seqlen_q, kBlockM);
+                        auto shape_q_descale_3d = make_shape(get<3>(params.mainloop.shape_Q), get<2>(params.mainloop.shape_Q), num_m_blocks);
+                        Tensor mQDescale = make_tensor(make_gmem_ptr(params.mainloop.ptr_q_descale), shape_q_descale_3d, params.mainloop.stride_q_descale_int8);
+                        // Slice by bidb and bidh to get scalar value for this m_block
+                        softmax_scale_log2 = mQDescale(bidb, bidh, m_block);
+                    }else{
+                        softmax_scale_log2 = params.mainloop.softmax_scale_log2;
+                    }
                     const int thread_idx = threadIdx.x - MmaThreadOffset;
 
                     // // DOR: kNRows = 2 * (2 * 128 / 256) = 2
-                    // flash::Softmax<!LargeHeadDimV ? 2 * (2 * kBlockM / NumMmaThreads) : 2, /*Max_offset=*/!Is_FP8 ? 0 : 8> softmax(softmax_scale_log2, row_mask, local_row_idx);
+                    // flash::Softmax<!LargeHeadDimV ? 2 * (2 * kBlockM / NumMmaThreads) : 2, /*Max_offset=*/!Is_8Bit ? 0 : 8> softmax(softmax_scale_log2, row_mask, local_row_idx);
                     // DOR: kNRows = 2 * (2 * 128 / 256) = 2
-                    flash::Softmax<!LargeHeadDimV ? 2 * (2 * kBlockM / NumMmaThreads) : 2, /*Max_offset=*/!Is_FP8 ? 0 : 8> softmax(softmax_scale_log2, seqlen_info.seqlen_q, thread_idx);
+                    flash::Softmax<!LargeHeadDimV ? 2 * (2 * kBlockM / NumMmaThreads) : 2, /*Max_offset=*/!Is_FP8 ? 0 : 8, Is_INT8> softmax(softmax_scale_log2, seqlen_info.seqlen_q, thread_idx);
 
                     /*
                     taken from the answer here: https://youtu.be/JwUcZwPOCpA?t=3152

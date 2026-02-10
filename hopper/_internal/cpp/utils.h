@@ -7,6 +7,7 @@
 #include <assert.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <limits>
 
 #include <cuda_fp16.h>
 
@@ -26,6 +27,20 @@
 namespace flash {
 
 using namespace cute;
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// Helper to get the mask value for a given element type
+// For floating point types: -INFINITY
+// For integer types: most negative value (e.g., INT32_MIN for int32_t)
+template <typename T>
+CUTLASS_HOST_DEVICE constexpr T get_mask_value() {
+    if constexpr (std::is_floating_point_v<T>) {
+        return -INFINITY;
+    } else {
+        return std::numeric_limits<T>::lowest();
+    }
+}
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -64,6 +79,12 @@ template <>
 struct MaxOp<float> {
 // This is slightly faster
 __device__ __forceinline__ float operator()(float const &x, float const &y) { return max(x, y); }
+};
+
+template <>
+struct MaxOp<int32_t> {
+// This is slightly faster
+__device__ __forceinline__ int32_t operator()(int32_t const &x, int32_t const &y) { return max(x, y); }
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -220,6 +241,25 @@ CUTLASS_DEVICE void convert_type_out(Tensor<Engine, Layout> const &tensor, Tenso
     cutlass::NumericArrayConverter<To_type, From_type, FragmentSize> convert_op;
     #pragma unroll
     for (int i = 0; i < size(frag); ++i) { out_frg[i] = convert_op(frag[i]); }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// Convert int32 tensor to float by multiplying with a scalar (dequantization scale).
+// Leverages automatic type promotion: int32 * float -> float
+template <typename Engine, typename Layout, typename EngineOut>
+CUTLASS_DEVICE void convert_int32_to_float_scaled(Tensor<Engine, Layout> const &tensor, 
+                                                   Tensor<EngineOut, Layout> &out, 
+                                                   float scale) {
+    static_assert(std::is_same_v<typename Engine::value_type, int32_t>, 
+                  "Input tensor must be int32_t");
+    static_assert(std::is_same_v<typename EngineOut::value_type, float>, 
+                  "Output tensor must be float");
+    CUTLASS_PRAGMA_UNROLL
+    for (int i = 0; i < size(tensor); ++i) {
+        // int32 * float -> float (automatic type promotion)
+        out(i) = tensor(i) * scale;
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
