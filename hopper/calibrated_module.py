@@ -361,7 +361,7 @@ class ConfigurableModule:
         self._registry_config: CalibratedConfig | ConfigList | None = None
         self._config_index = 0
         self._warned_messages: set[str] = set()
-        self._config_output: ConfigList | None = ConfigList()
+        self._config_output: ConfigList = ConfigList()
         if self.run_config_type is None:
             self.warn_once(
                 f"Module {type(self)} has no run_config_type defined. "
@@ -443,7 +443,7 @@ class ConfigurableModule:
 
         """
         self._config_index += 1
-        if self.run_config_type is None or self._config_output is None:
+        if self.run_config_type is None:
             return
         if self._registry is None and isinstance(self.config, CalibratedCalibConfig):
             self.warn_once(
@@ -550,6 +550,5 @@ class ModuleRegistry:
             {
                 name: module._config_output
                 for name, module in self.named_modules.items()
-                if module._config_output is not None
             }
         )
