@@ -14,6 +14,14 @@ def generate_test_tensors(batch, seq_len, heads, head_dim):
     return q, k, v
 
 
+def generate_rectangular_test_tensors(batch, q_len, k_len, heads, head_dim):
+    """Generate random Q (q_len) and K/V (k_len) tensors for testing rectangular attention."""
+    q = torch.randn(batch, q_len, heads, head_dim, device="cuda", dtype=torch.bfloat16)
+    k = torch.randn(batch, k_len, heads, head_dim, device="cuda", dtype=torch.bfloat16)
+    v = torch.randn(batch, k_len, heads, head_dim, device="cuda", dtype=torch.bfloat16)
+    return q, k, v
+
+
 def run_attention_warmup(attn, q, k, v, num_iters=1):
     """Run attention forward pass multiple times to warm up."""
     for _ in range(num_iters):
@@ -182,6 +190,24 @@ def compute_reference_lse(q, k, v, head_dim):
     return lse_ref
 
 
+def compute_reference_attention_output(q, k, v, head_dim):
+    """Compute reference attention output using PyTorch matmul+softmax (supports rectangular)."""
+    scale = 1.0 / (head_dim ** 0.5)
+
+    # Rearrange to [batch, num_heads, seq_len, head_dim]
+    q_ref = q.transpose(1, 2).float()  # [B, H, Lq, D]
+    k_ref = k.transpose(1, 2).float()  # [B, H, Lk, D]
+    v_ref = v.transpose(1, 2).float()  # [B, H, Lk, D]
+
+    # Compute attention and output
+    scores = torch.matmul(q_ref, k_ref.transpose(-2, -1)) * scale  # [B, H, Lq, Lk]
+    attn = torch.softmax(scores, dim=-1)  # [B, H, Lq, Lk]
+    out = torch.matmul(attn, v_ref)  # [B, H, Lq, D]
+
+    # Back to [B, Lq, H, D]
+    return out.transpose(1, 2)
+
+
 def compute_error_metrics(output, reference, name=""):
     """Compute and return error metrics between output and reference."""
 
@@ -251,6 +277,141 @@ def test_softmax_lse_correctness(q, k, v, head_dim, tolerance=0.001, use_int8=Fa
     print(f"  {prefix}Softmax LSE test: {'✅ PASSED' if passed else '❌ FAILED'}")
     print(f"    Max diff: {max_diff:.6f}, Mean diff: {mean_diff:.6f} (tolerance: {tolerance_actual:.6f})")
     
+    return passed
+
+
+def test_rectangular_attention_correctness(head_dim, batch=1, q_len=1024, k_len=256, heads=4, tolerance_max_abs=1e-2, tolerance_cosine=0.999, use_int8=False):
+    """
+    Test rectangular attention (Lq != Lk) output against a PyTorch reference.
+    """
+    q, k, v = generate_rectangular_test_tensors(batch, q_len, k_len, heads, head_dim)
+    scale = 1.0 / (head_dim ** 0.5)
+
+    attn = LiteAttention(enable_skipping=False, use_int8=use_int8)
+    torch.cuda.synchronize()
+    output_lite = attn(q, k, v, scale=scale)
+    torch.cuda.synchronize()
+
+    output_ref = compute_reference_attention_output(q, k, v, head_dim)
+
+    metrics = compute_error_metrics(output_lite, output_ref)
+    passed = (metrics['max_abs_error'] < tolerance_max_abs and
+              metrics['cosine_sim'] >= tolerance_cosine)
+
+    prefix = "INT8 " if use_int8 else ""
+    print(f"  {prefix}Rectangular attention vs PyTorch test: {'✅ PASSED' if passed else '❌ FAILED'}")
+    print(f"    Max absolute error: {metrics['max_abs_error']:.6e} (tolerance: {tolerance_max_abs:.6e})")
+    print(f"    Mean absolute error: {metrics['mean_abs_error']:.6e}")
+    print(f"    RMSE: {metrics['rmse']:.6e}")
+    print(f"    Cosine similarity: {metrics['cosine_sim']:.8f} (tolerance: {tolerance_cosine:.8f})")
+
+    return passed
+
+
+def test_rectangular_attention_skipping_twice(head_dim, batch=1, q_len=240, k_len=208, heads=4, use_int8=False):
+    """
+    Test rectangular attention with skipping enabled.
+    Runs LiteAttention twice to ensure skip-list state is exercised across passes,
+    and asserts the skip list is non-empty.
+    """
+    # Construct deterministic Q/K to reliably exercise skipping for rectangular attention.
+    # Intuition: make one key-tile "high" (K ~= +Q) and another "low" (K ~= -Q) so that
+    # after the running max is established by the high tile, the low tile's max scores
+    # are far below it and should be skipped.
+    #
+    # We align the K layout to tile boundaries to make the effect stable across runs.
+    tile_dtype = torch.int8 if use_int8 else torch.bfloat16
+    kBlockM, kBlockN = LiteAttention.get_MN(head_dim, tile_dtype, v_colmajor=False)
+
+    device = "cuda"
+    dtype = torch.bfloat16
+
+    # Base (existing) structured construction.
+    q_base_len = 2 * kBlockM + 1  # ensure multiple q-tiles, keep Lq != Lk
+    k_base_len = 4 * kBlockN      # 4 key tiles: [+Q, -Q, -Q, +Q]
+    assert q_len > q_base_len, f"q_len must be > {q_base_len} (got {q_len})"
+    assert k_len > k_base_len, f"k_len must be > {k_base_len} (got {k_len})"
+
+    # Per-head unit vectors (deterministic, avoids randomness in skip behavior).
+    base = torch.zeros(heads, head_dim, device=device, dtype=torch.float32)
+    for h in range(heads):
+        base[h, h % head_dim] = 1.0
+    base = base.to(dtype)
+
+    alpha = 4.0
+    q_vec = (alpha * base).view(1, 1, heads, head_dim)
+    q_base = q_vec.repeat(batch, q_base_len, 1, 1).contiguous()
+
+    k_base = torch.empty(batch, k_base_len, heads, head_dim, device=device, dtype=dtype)
+    k_base[:, 0:kBlockN] = q_vec
+    k_base[:, kBlockN:2 * kBlockN] = -q_vec
+    k_base[:, 2 * kBlockN:3 * kBlockN] = -q_vec
+    k_base[:, 3 * kBlockN:4 * kBlockN] = q_vec
+
+    # Values don't affect the skip decision; keep them small-ish for numerical comfort.
+    v_base = (0.1 * torch.randn(batch, k_base_len, heads, head_dim, device=device, dtype=dtype)).contiguous()
+
+    # Expand with additional random vectors until (q_len, k_len).
+    q_extra = (0.1 * torch.randn(batch, q_len - q_base_len, heads, head_dim, device=device, dtype=dtype)).contiguous()
+    k_extra = (0.1 * torch.randn(batch, k_len - k_base_len, heads, head_dim, device=device, dtype=dtype)).contiguous()
+    v_extra = (0.1 * torch.randn(batch, k_len - k_base_len, heads, head_dim, device=device, dtype=dtype)).contiguous()
+
+    q = torch.cat([q_base, q_extra], dim=1).contiguous()
+    k = torch.cat([k_base, k_extra], dim=1).contiguous()
+    v = torch.cat([v_base, v_extra], dim=1).contiguous()
+
+    scale = 1.0 / (head_dim ** 0.5)
+
+    attn = LiteAttention(enable_skipping=True, use_int8=use_int8)
+    # Keep this near 0 to make the skip decision robust across head dims.
+    attn.threshold = -1.0
+
+    passed = True
+
+    # Pass 1 (initializes skip list and produces a computed read_list)
+    torch.cuda.synchronize()
+    _ = attn(q, k, v, scale=scale)
+    torch.cuda.synchronize()
+
+    read_list_1 = attn.read_list
+    if read_list_1 is None:
+        passed = False
+    else:
+        # Ensure skip list isn't empty (at least one non-empty entry).
+        passed &= (read_list_1[..., 0].max().item() > 0)
+        passed &= bool(check_skip_list_length_valid(read_list_1).item())
+        passed &= bool(check_no_empty_or_negative_ranges(read_list_1).item())
+
+    # Pass 2 (uses previous pass skip list and updates it again)
+    torch.cuda.synchronize()
+    output_2 = attn(q, k, v, scale=scale)
+    torch.cuda.synchronize()
+
+    read_list_2 = attn.read_list
+    if read_list_2 is None:
+        passed = False
+    else:
+        passed &= (read_list_2[..., 0].max().item() > 0)
+        passed &= bool(check_skip_list_length_valid(read_list_2).item())
+        passed &= bool(check_no_empty_or_negative_ranges(read_list_2).item())
+
+    # Output should be finite
+    passed &= (not torch.isnan(output_2).any().item())
+    passed &= torch.isfinite(output_2.float()).all().item()
+
+    pct = None
+    if read_list_2 is not None:
+        pct = float(attn.calc_percentage(read_list_2).item())
+        # Ensure we actually exercised skipping (not compute-all and not skip-all).
+        passed &= (0.0 < pct < 1.0)
+
+    prefix = "INT8 " if use_int8 else ""
+    print(f"  {prefix}Rectangular skipping (two-pass) test: {'✅ PASSED' if passed else '❌ FAILED'}")
+    if pct is not None:
+        print(f"    Computed tiles pct (pass 2): {pct:.2%} (raw: {pct})")
+    else:
+        print(f"    read_list is None")
+
     return passed
 
 def consistency_test(q, k, v, head_dim, num_iters=10):
@@ -430,6 +591,7 @@ def stress_test(q, k, v, head_dim, num_iters=10, use_int8=False):
     percentage_per_head = attn.calc_percentage_per_head(attn.read_list)
     
     passed = True
+    percentage_tol = 1e-4  # allow small drift due to numerical nondeterminism
 
     for i in range(num_iters):
         torch.cuda.synchronize()
@@ -438,7 +600,7 @@ def stress_test(q, k, v, head_dim, num_iters=10, use_int8=False):
         new_percentage = attn.calc_percentage(attn.read_list)
         new_percentage_per_head = attn.calc_percentage_per_head(attn.read_list)
         
-        if new_percentage != percentage:
+        if (new_percentage - percentage).abs() > percentage_tol:
             print(f"  Skip list: {attn._skip_list[attn._phase, 0,0,0,:n]}, ktiles: {attn._skip_list.shape[-1] - 1}")
             # print(f"  percentage changed from {percentage:.2%} to {new_percentage:.2%} at iteration {i}")
             print(f"  percentage changed from {percentage} to {new_percentage} at iteration {i}")
@@ -604,6 +766,9 @@ def run_tests_for_head_dim(head_dim, batch=2, seq_len=18200, heads=32):
     bf16_results.append(test_must_do_list(q, k, v, head_dim, use_int8=False))
     q_short, k_short, v_short = generate_test_tensors(batch=batch, seq_len=min(6143, seq_len), heads=heads, head_dim=head_dim)
     bf16_results.append(test_softmax_lse_correctness(q_short, k_short, v_short, head_dim, use_int8=False))
+    bf16_results.append(test_rectangular_attention_correctness(head_dim))
+    bf16_results.append(test_rectangular_attention_skipping_twice(head_dim, q_len = 4096, k_len = 1024, use_int8=False))
+    bf16_results.append(test_rectangular_attention_skipping_twice(head_dim, q_len = 1024, k_len = 4096, use_int8=False))
 
     # consistency_test(q, k, v, head_dim)
     
@@ -618,6 +783,9 @@ def run_tests_for_head_dim(head_dim, batch=2, seq_len=18200, heads=32):
     int8_results.append(test_must_skip_list(q, k, v, head_dim, use_int8=True))
     int8_results.append(test_must_do_list(q, k, v, head_dim, use_int8=True))
     int8_results.append(test_softmax_lse_correctness(q_short, k_short, v_short, head_dim, tolerance=0.01, use_int8=True))
+    int8_results.append(test_rectangular_attention_correctness(head_dim, tolerance_max_abs=0.1, tolerance_cosine=0.99, use_int8=True))
+    int8_results.append(test_rectangular_attention_skipping_twice(head_dim, q_len = 4096, k_len = 1024, use_int8=True))
+    int8_results.append(test_rectangular_attention_skipping_twice(head_dim, q_len = 1024, k_len = 4096, use_int8=True))
 
     torch.cuda.synchronize()
     

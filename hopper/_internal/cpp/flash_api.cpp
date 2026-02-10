@@ -722,6 +722,7 @@
          std::optional<at::Tensor> q_descale_,  // (b, h_k), not (b, h)
          std::optional<at::Tensor> k_descale_,  // (b, h_k)
          std::optional<at::Tensor> v_descale_,  // (b, h_k)
+         bool use_int8,
          std::optional<double> softmax_scale_,
          bool is_causal,
          int64_t window_size_left,
@@ -747,6 +748,76 @@
      auto dprops = at::cuda::getCurrentDeviceProperties();
      bool is_sm8x = dprops->major >= 8;
      TORCH_CHECK(is_sm8x, "FlashAttention only supports Ampere GPUs or newer.");
+ 
+    // Inline INT8 quantization: if use_int8 is true and Q/K are bf16/fp16, quantize them directly
+    if (use_int8) {
+        auto q_orig_type = q.scalar_type();
+        TORCH_CHECK(q_orig_type == at::ScalarType::Half || q_orig_type == at::ScalarType::BFloat16,
+                    "INT8 quantization requires Q and K to be fp16 or bf16");
+        TORCH_CHECK(k.scalar_type() == q_orig_type, "Q and K must have the same dtype");
+        TORCH_CHECK(q.is_contiguous() && k.is_contiguous(),
+                    "Q, K must be contiguous for inline quantization");
+
+        const int batch = q.size(0);
+        const int seqlen_q = q.size(1);
+        const int seqlen_k = k.size(1);
+        const int num_heads = q.size(2);
+        const int head_dim = q.size(3);
+        
+        bool v_colmajor = false;
+        bool is_skipable = attn_read_list_.has_value();
+        double q_scale = softmax_scale_.value_or(1.0 / std::sqrt(static_cast<double>(head_dim)));
+
+        // K shape: [batch, seqlen_k, num_heads, head_dim] -> mean over dim 1 -> [batch, num_heads, head_dim]
+        auto k_mean = at::mean(k, /*dim=*/1, /*keepdim=*/false, /*dtype=*/at::kFloat);
+        
+        // Get tile sizes
+        auto [block_m, block_n, mma_pv_is_rs, intra_wg_overlap] = tile_size_fwd_sm90(
+            head_dim, head_dim, false, false, 1, v_colmajor, false, false, is_skipable, true);
+         
+         const int num_q_blocks = (seqlen_q + block_m - 1) / block_m;
+         const int num_k_blocks = (seqlen_k + block_n - 1) / block_n;
+         
+         // Pre-allocate output tensors
+         auto q_int8 = at::empty({batch, seqlen_q, num_heads, head_dim}, q.options().dtype(torch::kInt8));
+         auto k_int8 = at::empty({batch, seqlen_k, num_heads, head_dim}, k.options().dtype(torch::kInt8));
+         auto q_desc = at::empty({batch, num_heads, num_q_blocks}, q.options().dtype(torch::kFloat32));
+         auto k_desc = at::empty({batch, num_heads, num_k_blocks}, k.options().dtype(torch::kFloat32));
+         
+         cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+         
+         // Launch quantization kernels
+         if (q_orig_type == at::ScalarType::BFloat16) {
+             launch_quantize_qk_runtime<cutlass::bfloat16_t>(
+                 reinterpret_cast<const cutlass::bfloat16_t*>(q.data_ptr()),
+                 reinterpret_cast<const cutlass::bfloat16_t*>(k.data_ptr()),
+                 reinterpret_cast<int8_t*>(q_int8.data_ptr()),
+                 reinterpret_cast<int8_t*>(k_int8.data_ptr()),
+                 reinterpret_cast<float*>(q_desc.data_ptr()),
+                 reinterpret_cast<float*>(k_desc.data_ptr()),
+                 reinterpret_cast<const float*>(k_mean.data_ptr()),
+                 batch, seqlen_q, seqlen_k, num_heads, head_dim,
+                 v_colmajor, is_skipable, q_scale, stream);
+         } else {  // Half
+             launch_quantize_qk_runtime<cutlass::half_t>(
+                 reinterpret_cast<const cutlass::half_t*>(q.data_ptr()),
+                 reinterpret_cast<const cutlass::half_t*>(k.data_ptr()),
+                 reinterpret_cast<int8_t*>(q_int8.data_ptr()),
+                 reinterpret_cast<int8_t*>(k_int8.data_ptr()),
+                 reinterpret_cast<float*>(q_desc.data_ptr()),
+                 reinterpret_cast<float*>(k_desc.data_ptr()),
+                 reinterpret_cast<const float*>(k_mean.data_ptr()),
+                 batch, seqlen_q, seqlen_k, num_heads, head_dim,
+                 v_colmajor, is_skipable, q_scale, stream);
+         }
+         
+         // Replace q, k with quantized versions (move to avoid copies)
+         q = std::move(q_int8);
+         k = std::move(k_int8);
+         q_descale_ = std::move(q_desc);
+         k_descale_ = std::move(k_desc);
+         softmax_scale_ = std::nullopt;  // Already scaled during quantization
+     }
  
      auto q_type = q.scalar_type();
      TORCH_CHECK(q_type == at::ScalarType::Half || q_type == at::ScalarType::BFloat16 || q_type == at::ScalarType::Float8_e4m3fn || q_type == torch::kInt8,
@@ -1814,100 +1885,6 @@
              static_cast<int64_t>(MmaPV_is_RS), static_cast<int64_t>(IntraWGOverlap)};
  }
  
-// Wrapper function for TMA-based Q/K quantization
-// Returns (Q_q, K_q, q_descale, k_descale)
-// k_mean is pre-computed
-// q_scale: dequantization scale factor
-std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor>
-quantize_qk(
-    at::Tensor Q,
-    at::Tensor K,
-    at::Tensor k_mean,
-    bool v_colmajor,
-    bool is_skipable,
-    double q_scale)
-{
-     TORCH_CHECK(Q.is_cuda(), "Q must be on CUDA");
-     TORCH_CHECK(K.is_cuda(), "K must be on CUDA");
-     TORCH_CHECK(k_mean.is_cuda(), "k_mean must be on CUDA");
-     TORCH_CHECK(Q.is_contiguous(), "Q must be contiguous");
-     TORCH_CHECK(K.is_contiguous(), "K must be contiguous");
-     TORCH_CHECK(k_mean.is_contiguous(), "k_mean must be contiguous");
-     TORCH_CHECK(Q.dim() == 4, "Q must be 4D: [batch, seqlen, heads, head_dim]");
-     TORCH_CHECK(K.dim() == 4, "K must be 4D: [batch, seqlen, heads, head_dim]");
-     TORCH_CHECK(k_mean.dim() == 3, "k_mean must be 3D: [batch, heads, head_dim]");
-     TORCH_CHECK(Q.dtype() == torch::kHalf || Q.dtype() == torch::kBFloat16, 
-                 "Q must be float16 or bfloat16");
-     TORCH_CHECK(K.dtype() == Q.dtype(), "K must have same dtype as Q");
-     TORCH_CHECK(k_mean.dtype() == torch::kFloat32, "k_mean must be float32");
- 
-     const int batch = Q.size(0);
-     const int seqlen_q = Q.size(1);
-     const int seqlen_k = K.size(1);
-     const int num_heads = Q.size(2);
-     const int head_dim = Q.size(3);
- 
-     TORCH_CHECK(K.size(0) == batch, "K batch must match Q batch");
-     TORCH_CHECK(K.size(2) == num_heads, "K heads must match Q heads");
-     TORCH_CHECK(K.size(3) == head_dim, "K head_dim must match Q head_dim");
-     TORCH_CHECK(k_mean.size(0) == batch, "k_mean batch must match Q batch");
-     TORCH_CHECK(k_mean.size(1) == num_heads, "k_mean heads must match Q heads");
-     TORCH_CHECK(k_mean.size(2) == head_dim, "k_mean head_dim must match Q head_dim");
-
-     // Get tile sizes from tile_size_fwd_sm90
-     auto [block_m, block_n, mma_pv_is_rs, intra_wg_overlap] = tile_size_fwd_sm90(
-         head_dim, head_dim, false, false, 1, v_colmajor, false, false, is_skipable, true);
-
-     // Allocate output tensors
-     auto Q_q = at::empty({batch, seqlen_q, num_heads, head_dim},
-                          Q.options().dtype(torch::kInt8));
-     auto K_q = at::empty({batch, seqlen_k, num_heads, head_dim},
-                          K.options().dtype(torch::kInt8));
-
-     const int num_q_blocks = (seqlen_q + block_m - 1) / block_m;
-     const int num_k_blocks = (seqlen_k + block_n - 1) / block_n;
-
-     // q_descale: [batch, heads, num_q_blocks]
-     auto q_descale = at::empty({batch, num_heads, num_q_blocks},
-                                Q.options().dtype(torch::kFloat32));
-     // k_descale: [batch, heads, num_k_blocks]
-     auto k_descale = at::empty({batch, num_heads, num_k_blocks},
-                                K.options().dtype(torch::kFloat32));
-
-     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-     at::cuda::CUDAGuard device_guard(Q.device());
-
-    if (Q.dtype() == torch::kHalf) {
-        launch_quantize_qk_runtime<cutlass::half_t>(
-            reinterpret_cast<const cutlass::half_t*>(Q.data_ptr()),
-            reinterpret_cast<const cutlass::half_t*>(K.data_ptr()),
-            reinterpret_cast<int8_t*>(Q_q.data_ptr()),
-            reinterpret_cast<int8_t*>(K_q.data_ptr()),
-            reinterpret_cast<float*>(q_descale.data_ptr()),
-            reinterpret_cast<float*>(k_descale.data_ptr()),
-            reinterpret_cast<float*>(k_mean.data_ptr()),
-            batch, seqlen_q, seqlen_k, num_heads,
-            head_dim, v_colmajor, is_skipable,
-            q_scale,
-            stream);
-    } else {
-        launch_quantize_qk_runtime<cutlass::bfloat16_t>(
-            reinterpret_cast<const cutlass::bfloat16_t*>(Q.data_ptr()),
-            reinterpret_cast<const cutlass::bfloat16_t*>(K.data_ptr()),
-            reinterpret_cast<int8_t*>(Q_q.data_ptr()),
-            reinterpret_cast<int8_t*>(K_q.data_ptr()),
-            reinterpret_cast<float*>(q_descale.data_ptr()),
-            reinterpret_cast<float*>(k_descale.data_ptr()),
-            reinterpret_cast<float*>(k_mean.data_ptr()),
-            batch, seqlen_q, seqlen_k, num_heads,
-            head_dim, v_colmajor, is_skipable,
-            q_scale,
-            stream);
-    }
-
-     return std::make_tuple(Q_q, K_q, q_descale, k_descale);
- }
- 
  TORCH_LIBRARY(lite_attention, m) {
      m.def("fwd("
          "Tensor q,"
@@ -1933,6 +1910,7 @@ quantize_qk(
          "Tensor? q_descale = None,"
          "Tensor? k_descale = None,"
          "Tensor? v_descale = None,"
+         "bool use_int8 = False,"
          "float? softmax_scale = None,"
          "bool is_causal = False,"
          "int window_size_left = -1,"
@@ -2016,13 +1994,6 @@ quantize_qk(
          "bool softcap = False,"
          "bool is_skipable = False,"
          "bool is_int8 = False) -> int[]", &get_tile_size_fwd_sm90);
-    m.def("quantize_qk("
-        "Tensor Q,"
-        "Tensor K,"
-        "Tensor k_mean,"
-        "bool v_colmajor = False,"
-        "bool is_skipable = False,"
-        "float q_scale = 1.0) -> (Tensor, Tensor, Tensor, Tensor)", &quantize_qk);
  }
  
  TORCH_LIBRARY_IMPL(lite_attention, CUDA, m) {
