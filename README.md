@@ -133,6 +133,96 @@ If your machine has less than 96GB of RAM and lots of CPU cores, `ninja` might r
 MAX_JOBS=4 pip install --no-build-isolation .
 ```
 
+## 🔌 Integration
+
+### 1. Replace `flash_attention` with `LiteAttention` in Your Model
+
+In each self-attention module, replace the `flash_attention` call with a `LiteAttention()` instance.
+You can set parameters like `enable_skipping` or `use_int8`.
+
+```python
+from lite_attention import LiteAttention
+
+class MyBlock(nn.Module):
+    def __init__(self, ...):
+        super().__init__()
+        self.lite_attention = LiteAttention()
+        ...
+
+    def forward(self, q, k, v):
+        ...
+        x = self.lite_attention(q, k, v)
+        return x
+```
+
+See below for parameters of `LiteAttention`
+
+> [!IMPORTANT]
+> Each `LiteAttention` instance maintains internal skip state that should not be shared across different attention layers in your model. Create a separate instance for each attention layer:
+> ```python
+> # Correct: Separate instances for different layers
+> self.attn_layer1 = LiteAttention()
+> self.attn_layer2 = LiteAttention()
+> 
+> # Incorrect: Don't reuse the same instance across different layers
+> self.shared_attn = LiteAttention()  # Don't share!
+> ```
+> However, **do reuse** the same instance across multiple forward passes (different calls to your model over time).
+
+
+### 2. Configure with a Registry
+
+After building the model, create a `LiteAttentionRegistry`. It discovers all `LiteAttention` modules in the model and configures them:
+
+```python
+from lite_attention import LiteAttentionRegistry
+
+model = build_my_model(...)  # already has LiteAttention() modules inside
+
+registry = LiteAttentionRegistry.from_model(
+    model,
+    mode=args.la_mode,           # "calib", "load", or "const"
+    threshold=args.la_threshold, # for mode="const"
+    filename=args.la_filename,   # for mode="calib" (output) or "load" (input)
+    calib_config={               # for mode="calib"
+        "target_error": args.la_target_error,
+        "metric": args.la_metric,  # "L1" (default), "Cossim", or "RMSE"
+    },
+)
+```
+
+All parameters can be provided at once. The registry uses only those relevant to the selected `mode` and ignores the rest:
+
+- `mode="const"` uses `threshold`. Fixed threshold for all layers and timesteps.
+- `mode="calib"` uses `filename` and `calib_config`. Runs a binary search per layer and timestep to find thresholds that meet the target error. Saves results to `filename` via `save_if_calib()`.
+- `mode="load"` uses `filename`. Loads previously calibrated per-layer, per-timestep thresholds from a TOML file.
+
+### 3. Run Inference and Save
+
+After inference, add a call to `registry.save_if_calib()`. This writes the TOML file when `mode="calib"`, and is a no-op otherwise:
+
+```python
+video = model.generate(prompt, ...)
+
+registry.save_if_calib()   # <-- add this after inference
+```
+
+### Threshold
+
+To get started without calibration, use a fixed threshold:
+```python
+registry = LiteAttentionRegistry.from_model(model, mode="const", threshold=-10.0)
+```
+
+The threshold is a log-space value. It must be negative in non-debug mode. 
+During attention computation, LiteAttention checks the maximum log-attention-score for each tile. If it falls below the threshold, the tile is skipped in subsequent timesteps.
+A threshold of `-10.0` is a good start value, while values closer to `0` are more aggressive (skip more tiles, faster but potentially lower quality).
+
+### Calibration
+
+Calibration is an experimental feature. It automatically finds per-layer, per-timestep thresholds that meet a target error budget, which can improve generation quality at a given level of time savings compared to using a fixed threshold.
+We recommend to run several calibrations in order to find a good balance between speed and quality, then use the generated config file for all subsequent runs of the model.
+
 ## 🚀 Usage
 
 ### Basic Usage (Single GPU)
@@ -149,16 +239,16 @@ def LiteAttention(
 
 **Parameters:**
 - `enable_skipping` (bool): Whether to enable skip list optimizations. Defaults to `True`. When `False`, performs standard Flash Attention.
-- `threshold` (float): Log-space threshold for skipping tiles. Controlled from the Regstry (see below). Change here only for unitestst.
 - `max_batch_size` (int): Maximum batch size to pre-allocate memory for. Defaults to `2`. The actual batch size used during inference can be smaller than this value, but not larger.
 - `reverse_skip_list` (bool): Whether to use the reversed skip list format (internal optimization). Defaults to `True`.
 - `use_int8` (bool): Whether to use Int8 quantization for Q and K. Defaults to `False`. Enables per-block quantization for Q and channel-smoothed per-block quantization for K.
+- `threshold` (float): Log-space threshold for skipping tiles. Controlled from the Regstry (see below). Change here only for testing.
 
 ```python
 from lite_attention import LiteAttention
 
 
-# In your model, set the attention class to be LiteAttention with an optional threshold
+# In your model, set the attention class to be LiteAttention
 self.attn = LiteAttention()
 .
 .
@@ -171,18 +261,6 @@ self.attn.reset_skip_state()
 # or to toggle the skipping optimization; turning it off falls back to regular FA3
 self.attn.enable_skip_optimization(enable=False)
 ```
-
-> [!IMPORTANT]
-> Each `LiteAttention` instance maintains internal skip state that should not be shared across different attention layers in your model. Create a separate instance for each attention layer:
-> ```python
-> # Correct: Separate instances for different layers
-> self.attn_layer1 = LiteAttention()
-> self.attn_layer2 = LiteAttention()
-> 
-> # Incorrect: Don't reuse the same instance across different layers
-> self.shared_attn = LiteAttention()  # Don't share!
-> ```
-> However, **do reuse** the same instance across multiple forward passes (different calls to your model over time).
 
 For parts of the sequence that should not be skipped use the must-do feature. Pass the must_do_list parameter:
 
@@ -308,86 +386,6 @@ self.attn.visualize_skips(
     save_path="./attention_viz"
 )
 ```
-
-## 🔌 Integration
-
-Integration has two parts: (1) replace `flash_attention` calls with calls to the `LiteAttention` modules, and (2) configure thresholds externally via a `LiteAttentionRegistry`.
-
-### 1. Replace `flash_attention` with `LiteAttention` in Your Model
-
-In each self-attention module, replace the `flash_attention` call with a `LiteAttention()` instance.
-You can set parameters like `enable_skipping` or `use_int8`.
-
-```python
-from lite_attention import LiteAttention
-
-class MyBlock(nn.Module):
-    def __init__(self, ...):
-        super().__init__()
-        self.lite_attention = LiteAttention()
-        ...
-
-    def forward(self, q, k, v):
-        ...
-        x = self.lite_attention(q, k, v)
-        return x
-```
-
-Each `LiteAttention` instance maintains internal skip state. Create a **separate instance per attention layer** (don't share across layers), but **reuse** the same instance across forward passes (timesteps).
-
-### 2. Configure with the Registry
-
-After building the model, create a `LiteAttentionRegistry`. It discovers all `LiteAttention` modules in the model and configures them:
-
-```python
-from lite_attention import LiteAttentionRegistry
-
-model = build_my_model(...)  # already has LiteAttention() modules inside
-
-registry = LiteAttentionRegistry.from_model(
-    model,
-    mode=args.la_mode,           # "calib", "load", or "const"
-    threshold=args.la_threshold, # for mode="const"
-    filename=args.la_filename,   # for mode="calib" (output) or "load" (input)
-    calib_config={               # for mode="calib"
-        "target_error": args.la_target_error,
-        "metric": args.la_metric,  # "L1" (default), "Cossim", or "RMSE"
-    },
-)
-```
-
-All parameters can be provided at once. The registry uses only those relevant to the selected `mode` and ignores the rest:
-
-- `mode="const"` uses `threshold`. Fixed threshold for all layers and timesteps.
-- `mode="calib"` uses `filename` and `calib_config`. Runs a binary search per layer and timestep to find thresholds that meet the target error. Saves results to `filename` via `save_if_calib()`.
-- `mode="load"` uses `filename`. Loads previously calibrated per-layer, per-timestep thresholds from a TOML file.
-
-### 3. Run Inference and Save
-
-After inference, add a call to `registry.save_if_calib()`. This writes the TOML file when `mode="calib"`, and is a no-op otherwise:
-
-```python
-video = model.generate(prompt, ...)
-
-registry.save_if_calib()   # <-- add this after inference
-```
-
-### Threshold
-
-To get started without calibration, use a fixed threshold:
-```python
-registry = LiteAttentionRegistry.from_model(model, mode="const", threshold=-10.0)
-```
-
-The threshold is a log-space value. It must be negative in non-debug mode. 
-During attention computation, LiteAttention checks the maximum log-attention-score for each tile. If it falls below the threshold, the tile is skipped in subsequent timesteps.
-A threshold of `-10.0` is a good start value, while values closer to `0` are more aggressive (skip more tiles, faster but potentially lower quality).
-
-### Calibration
-
-Calibration is an experimental feature. It automatically finds per-layer, per-timestep thresholds that meet a target error budget, which can improve generation quality at a given level of time savings compared to using a fixed threshold.
-
-The workflow is: run several calibrations to find a good balance between speed and quality, then use the config file for all subsequent runs of the model.
 
 ## 📝 Integration Example: Wan2.1-14B
 
