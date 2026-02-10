@@ -675,10 +675,13 @@ setup(
     install_requires=[
         "torch",
         "einops",
-        "packaging",
-        "ninja",
         "structlog",
         "tomli-w",
+    ],
+    setup_requires=[
+        "torch",
+        "packaging",
+        "ninja",
     ],
     options={"bdist_wheel": {"py_limited_api": "cp39"}},
 )
