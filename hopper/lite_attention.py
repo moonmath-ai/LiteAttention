@@ -1366,7 +1366,7 @@ class LiteAttentionRegistry(ModuleRegistry):
 
         for name, module in registry.named_modules.items():
             if module._instance_config is not None:
-                if force:
+                if force or mode == "calib":
                     module._instance_config = None
                 else:
                     log.warning(
