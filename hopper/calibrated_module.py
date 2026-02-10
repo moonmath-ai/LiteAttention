@@ -442,6 +442,7 @@ class ConfigurableModule:
             results: A RunConfig instance for this timestep.
 
         """
+        self._config_index += 1
         if self.run_config_type is None or self._config_output is None:
             return
         if self._registry is None and isinstance(self.config, CalibratedCalibConfig):
@@ -454,7 +455,6 @@ class ConfigurableModule:
                 f"module run_config_type {self.run_config_type}."
             )
         self._config_output.append(results)
-        self._config_index += 1
 
 
 class ModuleRegistry:
