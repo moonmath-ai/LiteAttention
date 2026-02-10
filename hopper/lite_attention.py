@@ -76,7 +76,6 @@ must_do_list = [0, 128, 500, 640]  # Compute sequence positions [0, 128) and [50
 """
 
 import torch
-import torch.nn as nn
 import os
 import math
 import typing
@@ -84,17 +83,23 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Tuple, Union
 
+import structlog
+import torch.nn as nn
+import torch.nn.functional as F
+
 from .calibrated_module import (
     CalibratedCalibConfig,
     CalibratedRunConfig,
     ConfigurableModule,
     ModuleRegistry,
 )
+from ._internal.flash_attn_interface import flash_attn_func
 
-import structlog
+# Import the C++ extension to register operators with PyTorch
+import lite_attention._C  # noqa: F401
+_lite_attention_ops = torch.ops.lite_attention
 
 log = structlog.get_logger()
-
 
 @dataclass
 class LiteAttentionRunConfig(CalibratedRunConfig):
@@ -113,15 +118,6 @@ class LiteAttentionCalibConfig(CalibratedCalibConfig):
 
     metric: typing.Literal["Cossim", "L1", "RMSE"] = "L1"
     target_error: float = 0.01
-
-
-from ._internal.flash_attn_interface import flash_attn_func
-import torch.nn.functional as F
-
-# Import the C++ extension to register operators with PyTorch
-import lite_attention._C  # noqa: F401
-_lite_attention_ops = torch.ops.lite_attention
-
 
 class LiteAttention(nn.Module, ConfigurableModule):
     """
