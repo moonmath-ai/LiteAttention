@@ -113,19 +113,22 @@ The near-linear scaling between sparsity and runtime improvement demonstrates th
 
 ### Build from Source
 
-Clone this repo and build from source:
+The build compiles CUDA kernels and must be run with `--no-build-isolation`. All build-time and runtime dependencies must be in the venv **before** installing:
 
 ```sh
+# Build-time dependencies (setup_requires)
+pip install torch ninja packaging
+
+# Runtime dependencies (install_requires)
+pip install einops structlog tomli-w
+
 git clone https://github.com/moonmath-ai/LiteAttention.git
 cd LiteAttention/hopper
-pip install .
+pip install --no-build-isolation .
 ```
 
-If your machine has less than 96GB of RAM and lots of CPU cores, `ninja` might run too many parallel compilation jobs that could exhaust the amount of RAM. To limit the number of parallel compilation jobs, you can set the environment variable `MAX_JOBS`:
-
-```sh
-MAX_JOBS=4 pip install .
-```
+`ninja` tip: Make sure `ninja --version && echo $?` returns exit code 0. Without a working `ninja`, compilation falls back to serial mode (~2h instead of ~5min).
+If it misbehaves: `pip uninstall -y ninja && pip install ninja`. To limit RAM usage on machines with many cores: `MAX_JOBS=4 pip install --no-build-isolation .`
 
 ## 🚀 Usage
 
@@ -310,6 +313,84 @@ self.attn.visualize_skips(
 )
 ```
 
+## 🔌 Integration
+
+Integration has two parts: (1) replace `flash_attention` calls with calls to the `LiteAttention` modules, and (2) configure thresholds externally via a `LiteAttentionRegistry`.
+
+### 1. Replace `flash_attention` with `LiteAttention` in Your Model
+
+In each self-attention module, replace the `flash_attention` call with a `LiteAttention()` instance.
+You can set parameters like `enable_skipping` or `use_int8`.
+
+```python
+from lite_attention import LiteAttention
+
+class MyBlock(nn.Module):
+    def __init__(self, ...):
+        super().__init__()
+        self.lite_attention = LiteAttention()
+        ...
+
+    def forward(self, q, k, v):
+        ...
+        x = self.lite_attention(q, k, v)
+        return x
+```
+
+Each `LiteAttention` instance maintains internal skip state. Create a **separate instance per attention layer** (don't share across layers), but **reuse** the same instance across forward passes (timesteps).
+
+### 2. Configure with the Registry
+
+After building the model, create a `LiteAttentionRegistry`. It discovers all `LiteAttention` modules in the model and configures them:
+
+```python
+from lite_attention import LiteAttentionRegistry
+
+model = build_my_model(...)  # already has LiteAttention() modules inside
+
+registry = LiteAttentionRegistry.from_model(
+    model,
+    mode=args.la_mode,           # "calib", "load", or "const"
+    threshold=args.la_threshold, # for mode="const"
+    filename=args.la_filename,   # for mode="calib" (output) or "load" (input)
+    calib_config={               # for mode="calib"
+        "target_error": args.la_target_error,
+        "metric": args.la_metric,  # "L1" (default), "Cossim", or "RMSE"
+    },
+)
+```
+
+All parameters can be provided at once. The registry uses only those relevant to the selected `mode` and ignores the rest:
+
+- `mode="const"` uses `threshold`. Fixed threshold for all layers and timesteps.
+- `mode="calib"` uses `filename` and `calib_config`. Runs a binary search per layer and timestep to find thresholds that meet the target error. Saves results to `filename` via `save_if_calib()`.
+- `mode="load"` uses `filename`. Loads previously calibrated per-layer, per-timestep thresholds from a TOML file.
+
+### 3. Run Inference and Save
+
+After inference, add a call to `registry.save_if_calib()`. This writes the TOML file when `mode="calib"`, and is a no-op otherwise:
+
+```python
+video = model.generate(prompt, ...)
+
+registry.save_if_calib()   # <-- add this after inference
+```
+
+### Threshold
+
+To get started without calibration, use a fixed threshold:
+```python
+registry = LiteAttentionRegistry.from_model(model, mode="const", threshold=-10.0)
+```
+
+The threshold is a log-space value. During attention computation, LiteAttention checks the maximum log-attention-score for each tile. If it falls below the threshold, the tile is skipped in subsequent timesteps. A threshold of `-10.0` is conservative (skips fewer tiles), while values closer to `0` are more aggressive (skip more tiles, faster but potentially lower quality).
+
+### Calibration
+
+Calibration is an experimental feature. It automatically finds per-layer, per-timestep thresholds that meet a target error budget, which can improve generation quality at a given level of time savings compared to using a fixed threshold.
+
+The workflow is: run several calibrations to find a good balance between speed and quality, then use the config file for all subsequent runs of the model.
+
 ## 📝 Integration Example: Wan2.1-14B
 
 Import the lite attention module into the [model.py](https://github.com/Wan-Video/Wan2.1/blob/main/wan/modules/model.py) file
@@ -375,6 +456,11 @@ Lastly, update the forward function to call the lite_attention instance:
 You can see additional debug logs by setting the `LITE_ATTENTION_VERBOSE` environment variable to anything other than "FALSE"
 
 If you want to be able to test thresholds greater than 0, you need to set the `LITE_ATTENTION_DEBUG` environment variable to anything other than "FALSE"
+
+## ⚠️ Limits
+
+* The registry and calibration API is experimental and may change.
+* `SeqParallelLiteAttention` has **not been tested** with the calibration registry.
 
 ## 📚 Citation
 
