@@ -368,6 +368,12 @@ class ConfigurableModule:
                 "Cannot save calibration results."
             )
 
+    def _reset_skip_state_calibration(self) -> None:
+        self._config_index = 0
+        self._config_output = ConfigList()
+        if isinstance(self.config, CalibratedCalibConfig) or any(isinstance(c, CalibratedCalibConfig) for c in self.config_all):
+            raise RuntimeError("Using reset_skip_state() with a calibration config is not allowed. Most calibration results will be lost.")
+
     @property
     def module_name(self) -> str | None:
         """Get the registered name of this module, or None if unregistered."""
