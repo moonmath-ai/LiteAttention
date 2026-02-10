@@ -310,16 +310,13 @@ class LiteAttention(nn.Module, ConfigurableModule):
         return LiteAttention.calc_percentage_per_head(read_list).mean()
 
     @staticmethod
-    def calc_error(quant_o, fa2_o, round_num=4):
+    def calc_error(quant_o, fa2_o):
         if quant_o.shape[-2] > 200000:
             quant_o, fa2_o = quant_o.cpu(), fa2_o.cpu()
         x, xx = quant_o.float(), fa2_o.float()
         sim = F.cosine_similarity(x.reshape(1, -1), xx.reshape(1, -1)).item()
         l1 = ((x - xx).abs().sum() / xx.abs().sum()).item()
         rmse = torch.sqrt(torch.mean((x - xx) ** 2)).item()
-        sim = round(sim, round_num)
-        l1 = round(l1, round_num)
-        rmse = round(rmse, round_num)
         return {"Cossim": sim, "L1": l1, "RMSE": rmse}
 
     @staticmethod
