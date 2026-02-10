@@ -314,7 +314,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
         return LiteAttention.calc_percentage_per_head(read_list).mean()
 
     @staticmethod
-    def calc_error(quant_o, fa2_o, verbose=True, round_num=4):
+    def calc_error(quant_o, fa2_o, round_num=4):
         if quant_o.shape[-2] > 200000:
             quant_o, fa2_o = quant_o.cpu(), fa2_o.cpu()
         x, xx = quant_o.float(), fa2_o.float()
@@ -324,8 +324,6 @@ class LiteAttention(nn.Module, ConfigurableModule):
         sim = round(sim, round_num)
         l1 = round(l1, round_num)
         rmse = round(rmse, round_num)
-        if verbose:
-            print(f"Cossim: {sim:.6f}, L1: {l1:.6f}, RMSE:{rmse:.6f}")
         return {"Cossim": sim, "L1": l1, "RMSE": rmse}
 
     @staticmethod
@@ -821,7 +819,6 @@ class LiteAttention(nn.Module, ConfigurableModule):
             temp_list = read_list.clone()
 
             def calibration_step(curr_th):
-                print(f"testing th {curr_th}")
                 output_old_th = flash_attn_func(
                     q=query,
                     k=key,
@@ -856,25 +853,24 @@ class LiteAttention(nn.Module, ConfigurableModule):
                 self._phase = 1 - self._phase
                 # calc error
                 curr_error = self.calc_error(output_new_th, output_old_th)[cfg.metric]
-                print(
-                    f"{curr_th=}, {curr_error=}, skip percentage={self.calc_percentage(write_list[: query.shape[0]])}"
-                )
                 return curr_error
 
             def find_threshold(low, high):
                 curr_error = calibration_step(high)
                 error_diff = curr_error - cfg.target_error
                 if error_diff <= 0:
-                    print(
-                        f"Warning: error at th={high} ({curr_error:.4f}) is below target ({cfg.target_error}). Using th={high}"
+                    log.warning(
+                        "can't find a threshold with the requested target error. using the high limit (below noise target)",
+                        threshold=high, error=curr_error, target=cfg.target_error,
                     )
                     return high
 
                 curr_error = calibration_step(low)
                 error_diff = curr_error - cfg.target_error
                 if error_diff >= 0:
-                    print(
-                        f"Warning: error at th={low} ({curr_error:.4f}) is above target ({cfg.target_error}). Using th={low}"
+                    log.warning(
+                        "can't find a threshold with the requested target error. using the low limit (above noise target)",
+                        threshold=low, error=curr_error, target=cfg.target_error,
                     )
                     return low
 
@@ -884,7 +880,6 @@ class LiteAttention(nn.Module, ConfigurableModule):
                     curr_error = calibration_step(curr_th)
                     error_diff = curr_error - cfg.target_error
                     if abs(error_diff / cfg.target_error) < 0.1:
-                        print(f"found calibrated threshold: {curr_th}")
                         return curr_th
                     elif error_diff > 0:
                         high = curr_th
@@ -919,7 +914,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
         if self.enable_skipping and os.getenv("LITE_ATTENTION_VERBOSE", "FALSE") != "FALSE":
             real_batch_size = query.shape[0]
             self._last_percentage = self.calc_percentage(read_list[:real_batch_size])
-            print(f"[Info]: Percentage of tiles skipped: {1.0 - self._last_percentage:.2%}")
+            log.info("LiteAttention forward pass statistics", skip_percentage=1.0 - self._last_percentage, threshold=threshold)
         
         return output
     

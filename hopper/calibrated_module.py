@@ -70,7 +70,7 @@ from pathlib import Path
 import structlog
 import tomli_w
 
-log = structlog.get_logger()
+logger = structlog.get_logger()
 
 
 @dataclass
@@ -350,7 +350,7 @@ class ConfigurableModule:
         self.reset_config()
         # set by ModuleRegistry:
         self._registry: ModuleRegistry | None = None
-        self.logger = structlog.get_logger().bind(module_id=id(self))
+        self.logger = logger.bind(module_id=id(self))
 
     def reset_config(self) -> None:
         """
@@ -428,9 +428,7 @@ class ConfigurableModule:
     def warn_once(self, message: str) -> None:
         """Log a warning message, but only once per unique message."""
         if message not in self._warned_messages:
-            log = self.logger
-            if self.module_name is not None:
-                log = log.bind(module_name=self.module_name)
+            log = self.logger.bind(module_name=self.module_name)
             log.warning(message)
             self._warned_messages.add(message)
 
