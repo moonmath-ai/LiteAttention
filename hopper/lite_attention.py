@@ -894,6 +894,52 @@ class LiteAttention(nn.Module, ConfigurableModule):
             assert isinstance(cfg, LiteAttentionRunConfig)
             threshold = cfg.threshold
 
+            # HACK: measure errors for multiple thresholds on the first call
+            measure_thresholds = os.getenv("LITE_ATTENTION_MEASURE", "")
+            if measure_thresholds and not getattr(LiteAttention, '_measure_done', False):
+                LiteAttention._measure_done = True
+                test_thresholds = [float(x) for x in measure_thresholds.split(",")]
+                print(f"\n{'='*80}")
+                print(f"MEASURING ERRORS FOR THRESHOLDS (first LiteAttention instance, first call)")
+                print(f"Query shape: {list(query.shape)}  (batch, seq_len, heads, head_dim)")
+                print(f"Key shape:   {list(key.shape)}")
+                print(f"{'='*80}")
+                original_read = read_list.clone()
+                temp_list = read_list.clone()
+                saved_phase = self._phase
+                for th in test_thresholds:
+                    read_list.copy_(original_read)
+                    self._phase = saved_phase
+                    # Step 1: full attn (read_list=all ones), write skip decisions for this threshold
+                    output_full = flash_attn_func(
+                        q=query, k=key, v=value, softmax_scale=softmax_scale,
+                        attn_read_list=read_list, attn_must_do_list=must_do_list_expanded,
+                        attn_write_list=write_list, thr=th,
+                        return_softmax_lse=return_softmax_lse,
+                        reverse_skip_list=self.reverse_skip_list,
+                        phase=(self._phase == 1) if self.reverse_skip_list else False,
+                        use_int8=self.use_int8,
+                    )
+                    self._phase = 1 - self._phase
+                    # Step 2: skipped attn using the skip decisions
+                    output_skipped = flash_attn_func(
+                        q=query, k=key, v=value, softmax_scale=softmax_scale,
+                        attn_read_list=write_list, attn_must_do_list=must_do_list_expanded,
+                        attn_write_list=temp_list, thr=th,
+                        return_softmax_lse=return_softmax_lse,
+                        reverse_skip_list=self.reverse_skip_list,
+                        phase=(self._phase == 1) if self.reverse_skip_list else False,
+                        use_int8=self.use_int8,
+                    )
+                    self._phase = 1 - self._phase
+                    skip_pct = 1.0 - self.calc_percentage(write_list[:query.shape[0]])
+                    errors = self.calc_error(output_skipped, output_full)
+                    print(f"  threshold={th:7.1f} | skip={skip_pct:.4f} | L1={errors['L1']:.6f} | RMSE={errors['RMSE']:.6f} | Cossim={errors['Cossim']:.8f}")
+                print(f"{'='*80}\n")
+                # Restore state for normal execution
+                read_list.copy_(original_read)
+                self._phase = saved_phase
+
         output = flash_attn_func(
             q=query,
             k=key, 
