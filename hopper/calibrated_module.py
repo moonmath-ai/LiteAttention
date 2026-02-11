@@ -371,7 +371,11 @@ class ConfigurableModule:
     def _reset_skip_state_calibration(self) -> None:
         self._config_index = 0
         self._config_output = ConfigList()
-        if isinstance(self.config, CalibratedCalibConfig) or any(isinstance(c, CalibratedCalibConfig) for c in self.config_all):
+        if (
+           isinstance(self.config, CalibratedCalibConfig) 
+           or isinstance(self.config_all, ConfigList) 
+           and any(isinstance(c, CalibratedCalibConfig) for c in self.config_all)
+        ):
             raise RuntimeError("Using reset_skip_state() with a calibration config is not allowed. Most calibration results will be lost.")
 
     @property
