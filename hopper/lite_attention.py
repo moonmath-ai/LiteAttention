@@ -672,7 +672,7 @@ class LiteAttention:
             return query, key, None, None
     
     def __call__(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, 
-                 scale: Optional[float] = None, return_softmax_lse: bool = False, must_do_list: list = None, must_skip_list: list = None) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+                 scale: Optional[float] = None, return_softmax_lse: bool = False, must_do_list: list = None, must_skip_list: list = None, custom_read_list: torch.Tensor = None, custom_write_list: torch.Tensor = None, set_phase: Optional[int] = None) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """
         Perform Flash Attention 3 computation with optional skip list optimization.
         
@@ -746,13 +746,15 @@ class LiteAttention:
             k=key, 
             v=value,
             softmax_scale=None if self.use_int8 else scale,
-            attn_read_list=read_list,
+            attn_read_list=custom_read_list if (custom_read_list is not None) else read_list,
             attn_must_do_list=must_do_list_expanded,
-            attn_write_list=write_list,
+            attn_write_list=custom_write_list if (custom_write_list is not None) else write_list,
             thr=self.threshold,
             return_softmax_lse=return_softmax_lse,
             reverse_skip_list=self.reverse_skip_list,
             # self._phase == 1 because we changed it in _get_read_write_lists!
+            # phase=(self._phase == 1) if self.reverse_skip_list else False,
+            # phase=(self._phase == (1 if custom_read_list is None else 0)) if self.reverse_skip_list else False,
             phase=(self._phase == 1) if self.reverse_skip_list else False,
             q_descale=q_descale,
             k_descale=k_descale,
