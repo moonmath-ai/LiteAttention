@@ -2,7 +2,7 @@
 
 ### [Project Page](https://moonmath-ai.github.io/LiteAttention/) | [arXiv](https://arxiv.org/abs/2511.11062)  | [HuggingFace](https://huggingface.co/papers/2511.11062) | [MoonMath.ai](https://moonmath.ai)
 
-We present *LiteAttention*, a temporal sparse attention mechanism that exploits the slow evolution of attention patterns across diffusion timesteps. By identifying non-essential tiles early and propagating skip decisions forward, LiteAttention eliminates redundant attention computations without repeated profiling overheads. Built on FlashAttention3, it achieves **up to 54% attention sparsity** on production video diffusion models **with no degradation in generation quality**.
+We present *LiteAttention*, a temporal sparse attention mechanism that exploits the slow evolution of attention patterns across diffusion timesteps. By identifying non-essential tiles early and propagating skip decisions forward, LiteAttention eliminates redundant attention computations without repeated profiling overheads. LiteAttention achieves **up to 54% attention sparsity** on production video diffusion models **with no degradation in generation quality**.
 
 
 ## 📖 Overview
@@ -103,6 +103,7 @@ The near-linear scaling between sparsity and runtime improvement demonstrates th
 - H100 / H200 GPU
 - CUDA >= 12.8
 - CUDA toolkit
+- C++ 20
 - PyTorch 2.2 and above
 - `packaging` Python package (`pip install packaging`)
 - `ninja` Python package (`pip install ninja`) *
@@ -131,8 +132,21 @@ MAX_JOBS=4 pip install .
 ### Basic Usage (Single GPU)
 
 ```python
-def LiteAttention(enable_skipping: bool = True, threshold: float = -10.0, max_batch_size: int = 4)
+def LiteAttention(
+    enable_skipping: bool = True, 
+    threshold: float = -10.0, 
+    max_batch_size: int = 2, 
+    reverse_skip_list: bool = True, 
+    use_int8: bool = False
+)
 ```
+
+**Parameters:**
+- `enable_skipping` (bool): Whether to enable skip list optimizations. Defaults to `True`. When `False`, performs standard Flash Attention.
+- `threshold` (float): Log-space threshold for skipping tiles. Defaults to `-10.0`. Tiles with `max(log-attention-score) < threshold` will be skipped. Must be negative in non-debug mode. Lower values generally mean more aggressive skipping.
+- `max_batch_size` (int): Maximum batch size to pre-allocate memory for. Defaults to `2`. The actual batch size used during inference can be smaller than this value, but not larger.
+- `reverse_skip_list` (bool): Whether to use the reversed skip list format (internal optimization). Defaults to `True`.
+- `use_int8` (bool): Whether to use Int8 quantization for Q and K. Defaults to `False`. Enables per-block quantization for Q and channel-smoothed per-block quantization for K.
 
 ```python
 from lite_attention import LiteAttention
@@ -182,26 +196,26 @@ The must_do_list defines ranges that must not be skipped and the format is as fo
     must_do_list = [start_0, end_0, start_1, end_1, ...]
     start_i - start index of a range we must no skip. (inclusive)
     end_i - end index of a range we must not skip. (exclusive)
-    IMPORTANT: start_i > end_i > start_(i+1) > end_(i+1) > ... because we iterate in reverse order inside of the kernel.
+    IMPORTANT: start_i < end_i < start_(i+1) < end_(i+1) < ... (regular ascending order).
 
 For example, if we have a sequence of length 100, the must_do_list could look like this:
 
 ```python
-must_do_list = [80, 60, 45, 40, 12, 2]
+must_do_list = [2, 12, 40, 45, 60, 80]
 ```
 
 The must_skip_list defines ranges that can always be skipped according to the same convention as the must_do_list. For example if:
 ```python
-must_skip_list = [80, 40]
+must_skip_list = [40, 80]
 ```
-then all the tokens between 80 and 40 can always be skipped.
+then all the tokens between 40 and 80 can always be skipped.
 
 ### Multi-GPU Usage (Sequence Parallelism)
 
 When using multi-GPU with sequence parallelism, use `SeqParallelLiteAttention`:
 
 ```python
-def SeqParallelLiteAttention(num_nodes: int, enable_skipping: bool = True, threshold: float = -10.0, max_batch_size: int = 4)
+def SeqParallelLiteAttention(num_nodes: int, enable_skipping: bool = True, threshold: float = -10.0, max_batch_size: int = 2, use_int8: bool = False)
 ```
 
 ```python
@@ -261,6 +275,40 @@ output_v2v, lse_v2v = self.attn(query_video, key_video, value_video, scale, retu
 > # For cross-attention or text-to-video attention - disable skipping
 > self.attn_cross = LiteAttention(enable_skipping=False)
 > ```
+
+### Quantization Support
+
+LiteAttention supports Int8 quantization for Q and K to further reduce memory usage and increase performance. The quantization scheme is as follows:
+- **Q**: Per-block quantization
+- **K**: Per-block quantization with channel-wise mean smoothing
+
+To enable quantization, simply set `use_int8=True` when initializing. This works for both `LiteAttention` and `SeqParallelLiteAttention`.
+
+```python
+# Enable quantization
+self.attn = LiteAttention(enable_skipping=True, threshold=-6.0, use_int8=True)
+# or for sequence parallelism
+self.attn = SeqParallelLiteAttention(num_nodes=8, threshold=-6.0, use_int8=True)
+```
+
+### Visualization
+
+LiteAttention provides a built-in method to visualize the attention patterns and skipped tiles. This is useful for debugging and understanding the effectiveness of the skip mask.
+
+```python
+# Run a forward pass first to populate the skip list
+output = self.attn(query, key, value, scale)
+
+# Visualize specific heads (e.g., heads 0 and 2)
+# Results will be saved to the specified directory (creates batch_{b}/head_{h} subfolders)
+self.attn.visualize_skips(
+    query=query, 
+    key=key, 
+    heads_list=torch.tensor([0, 2]), 
+    scale=scale, 
+    save_path="./attention_viz"
+)
+```
 
 ## 📝 Integration Example: Wan2.1-14B
 

@@ -25,10 +25,6 @@ import torch
 from torch.utils.cpp_extension import BuildExtension, CppExtension, CUDAExtension, CUDA_HOME
 
 
-with open("../README.md", "r", encoding="utf-8") as fh:
-    long_description = fh.read()
-
-
 # ninja build does not work unless include_dirs are abs path
 this_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -52,6 +48,7 @@ DISABLE_SOFTCAP = os.getenv("FLASH_ATTENTION_DISABLE_SOFTCAP", "TRUE") == "TRUE"
 DISABLE_PACKGQA = os.getenv("FLASH_ATTENTION_DISABLE_PACKGQA", "TRUE") == "TRUE"
 DISABLE_FP16 = os.getenv("FLASH_ATTENTION_DISABLE_FP16", "TRUE") == "TRUE"
 DISABLE_FP8 = os.getenv("FLASH_ATTENTION_DISABLE_FP8", "TRUE") == "TRUE"
+DISABLE_INT8 = os.getenv("FLASH_ATTENTION_DISABLE_INT8", "FALSE") == "TRUE"
 DISABLE_VARLEN = os.getenv("FLASH_ATTENTION_DISABLE_VARLEN", "TRUE") == "TRUE"
 DISABLE_CLUSTER = os.getenv("FLASH_ATTENTION_DISABLE_CLUSTER", "TRUE") == "TRUE"
 DISABLE_HDIM64 = os.getenv("FLASH_ATTENTION_DISABLE_HDIM64", "FALSE") == "TRUE"
@@ -402,7 +399,8 @@ if not SKIP_CUDA_BUILD:
     # ptxas 12.8 gives the best perf currently
     # We want to use the nvcc front end from 12.6 however, since if we use nvcc 12.8
     # Cutlass 3.8 will expect the new data types in cuda.h from CTK 12.8, which we don't have.
-    if bare_metal_version != Version("12.8"):
+    # For CUDA 13.0+, use the system compiler directly
+    if bare_metal_version != Version("12.8") and bare_metal_version < Version("13.0"):
         download_and_copy(
             name="nvcc",
             src_func=lambda system, arch, version: f"cuda_nvcc-{system}-{arch}-{version}-archive/bin",
@@ -460,6 +458,7 @@ if not SKIP_CUDA_BUILD:
         + (["-DFLASHATTENTION_DISABLE_PACKGQA"] if DISABLE_PACKGQA else [])
         + (["-DFLASHATTENTION_DISABLE_FP16"] if DISABLE_FP16 else [])
         + (["-DFLASHATTENTION_DISABLE_FP8"] if DISABLE_FP8 else [])
+        + (["-DFLASHATTENTION_DISABLE_INT8"] if DISABLE_INT8 else [])
         + (["-DFLASHATTENTION_DISABLE_VARLEN"] if DISABLE_VARLEN else [])
         + (["-DFLASHATTENTION_DISABLE_CLUSTER"] if DISABLE_CLUSTER else [])
         + (["-DFLASHATTENTION_DISABLE_HDIM64"] if DISABLE_HDIM64 else [])
@@ -474,7 +473,7 @@ if not SKIP_CUDA_BUILD:
     )
 
     DTYPE_FWD_SM80 = ["bf16"] + (["fp16"] if not DISABLE_FP16 else [])
-    DTYPE_FWD_SM90 = ["bf16"] + (["fp16"] if not DISABLE_FP16 else []) + (["e4m3"] if not DISABLE_FP8 else [])
+    DTYPE_FWD_SM90 = ["bf16"] + (["fp16"] if not DISABLE_FP16 else []) + (["e4m3"] if not DISABLE_FP8 else []) + (["int8"] if not DISABLE_INT8 else [])
     HALF_DTYPE_FWD_SM90 = ["bf16"] + (["fp16"] if not DISABLE_FP16 else [])
     DTYPE_BWD = ["bf16"] + (["fp16"] if not DISABLE_FP16 else [])
     HEAD_DIMENSIONS_BWD = (
@@ -533,9 +532,14 @@ if not SKIP_CUDA_BUILD:
     if not DISABLE_SPLIT:
         sources += ["_internal/cpp/flash_fwd_combine.cu"]
     sources += ["_internal/cpp/flash_prepare_scheduler.cu"]
+    # Add quantization kernels for INT8 support
+    if not DISABLE_INT8:
+        sources += ["_internal/cpp/quant.cu"]
     nvcc_flags = [
         "-O3",
-        "-std=c++17",
+        # "-g",
+        # "-std=c++17",
+        "-std=c++20",
         "--ftemplate-backtrace-limit=0",  # To debug template code
         "--use_fast_math",
         # "--keep",
@@ -544,7 +548,7 @@ if not SKIP_CUDA_BUILD:
         # f"--split-compile={os.getenv('NVCC_THREADS', '4')}",  # split-compile is faster
         "-lineinfo",  # TODO: disable this for release to reduce binary size
         "-DCUTE_SM90_EXTENDED_MMA_SHAPES_ENABLED",  # Necessary for the WGMMA shapes that we use
-        "-DCUTLASS_ENABLE_GDC_FOR_SM90",  # For PDL
+        # "-DCUTLASS_ENABLE_GDC_FOR_SM90",  # For PDL
         "-DCUTLASS_DEBUG_TRACE_LEVEL=0",  # Can toggle for debugging
         "-DNDEBUG",  # Important, otherwise performance is severely impacted
     ]
@@ -644,30 +648,11 @@ class CachedWheelsCommand(_bdist_wheel):
             super().run()
 
 setup(
-    name=PACKAGE_NAME,
     version=get_package_version(),
-    packages=["lite_attention", "lite_attention._internal"],
-    package_dir={"lite_attention": "."},
-    description="Lite Attention",
-    long_description=long_description,
-    long_description_content_type="text/markdown",
-    classifiers=[
-        "Programming Language :: Python :: 3",
-        "License :: OSI Approved :: Apache Software License",
-        "Operating System :: Unix",
-    ],
     ext_modules=ext_modules,
     cmdclass={"bdist_wheel": CachedWheelsCommand, "build_ext": BuildExtension}
     if ext_modules
     else {
         "bdist_wheel": CachedWheelsCommand,
     },
-    python_requires=">=3.8",
-    install_requires=[
-        "torch",
-        "einops",
-        "packaging",
-        "ninja",
-    ],
-    options={"bdist_wheel": {"py_limited_api": "cp39"}},
 )

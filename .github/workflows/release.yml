@@ -21,50 +21,48 @@ jobs:
     outputs:
       release_tag: ${{ steps.get_tag.outputs.tag }}
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          path: LiteAttention
-      
-      - name: Get latest tag
+      - name: Validate ref is a tag and set release tag
         id: get_tag
-        working-directory: LiteAttention
         run: |
-          LATEST_TAG=$(git describe --tags --abbrev=0)
-          echo "tag=$LATEST_TAG" >> $GITHUB_OUTPUT
-          echo "Latest tag: $LATEST_TAG"
+          if [[ "${{ github.ref }}" != refs/tags/* ]]; then
+            echo "::error::This workflow must be run from a git tag. When using 'Run workflow', select a tag (e.g. v0.2.0) in the 'Use workflow from' dropdown."
+            exit 1
+          fi
+          TAG="${GITHUB_REF#refs/tags/}"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Release tag: $TAG"
 
   generate_videos:
     name: Generate videos for ${{ matrix.target }}
-    runs-on: [self-hosted, multigpu]
+    needs: [get_release_tag]
+    runs-on: [self-hosted, gpu]
     strategy:
       matrix:
         target: [ltx]
         include:
           - target: ltx
-            repo_url: test-org-139/LTX-Video.git # TODO: change to moonmath-ai
+            repo_url: moonmath-ai/LTX-Video.git
             repo_name: LTX-Video
             branch: ci-lite-attention
-            prompts_branch: ltx-short
-            prompts_repo: test-org-139/ci-prompts-list.git # TODO: change to moonmath-ai
+            prompts_branch: ltx
+            prompts_repo: moonmath-ai/ci-prompts-list.git
     
     steps:
       - name: Create GitHub App token
         id: app-token
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@67018539274d69449ef7c02e8e71183d1719ab42
         with:
           app-id: ${{ secrets.CI_PULL_ID }}
           private-key: ${{ secrets.CI_PULL_SECRET }}
-          owner: test-org-139 # TODO: change to moonmath-ai
+          owner: moonmath-ai
 
       - name: Checkout LiteAttention Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           path: LiteAttention
       
       - name: Checkout ${{ matrix.target }} Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           repository: ${{ matrix.repo_url }}
           ref: ${{ matrix.branch || 'main' }}
@@ -76,7 +74,7 @@ jobs:
           persist-credentials: false
       
       - name: Checkout prompts list
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           path: ${{ matrix.repo_name }}-prompts
           repository: ${{ matrix.prompts_repo }}
@@ -95,7 +93,7 @@ jobs:
         run: |
           INPUT_PATH=$(pwd)/../${{ matrix.repo_name }}-prompts
           OUTPUT_PATH=$HOME/output/${{ matrix.target }}-${{github.sha}}
-          CACHE_DIR=$HOME/.cache/
+          if [ -n "${HF_HOME:-}" ]; then CACHE_DIR="${HF_HOME%/}/"; else CACHE_DIR="$HOME/.cache/"; fi
           echo "INPUT_PATH=$INPUT_PATH" >> $GITHUB_ENV
           echo "OUTPUT_PATH=$OUTPUT_PATH" >> $GITHUB_ENV
           echo "CACHE_DIR=$CACHE_DIR" >> $GITHUB_ENV
@@ -103,7 +101,14 @@ jobs:
           mkdir -p $OUTPUT_PATH
           mkdir -p $CACHE_DIR
           
-          docker run --rm --gpus all \
+          docker run --rm \
+            --gpus all \
+            --pid=host \
+            --ipc=host \
+            -e NCCL_P2P_DISABLE=1 \
+            -e NCCL_IB_DISABLE=1 \
+            -e NCCL_NET=Socket \
+            -e NCCL_NVLS_ENABLE=0 \
             -v $INPUT_PATH:/input \
             -v $OUTPUT_PATH:/output \
             -v $CACHE_DIR:/root/.cache \
@@ -113,41 +118,8 @@ jobs:
               --output_path /output \
               --videos_per_prompt ${{ vars.VIDEOS_PER_PROMPT || 1 }}
       
-      - name: Checkout surveyor2 repository
-        uses: actions/checkout@v4
-        with:
-          repository: test-org-139/surveyor2.git # TODO: change to moonmath-ai
-          ref: main
-          path: surveyor2
-          token: ${{ steps.app-token.outputs.token }}
-          persist-credentials: false
-      
-      - name: Build surveyor2 Docker image
-        working-directory: surveyor2
-        run: |
-          docker build -t surveyor2:${{github.sha}} .
-      
-      - name: Run Surveyor2 in Docker container
-        run: |
-          docker run --rm --gpus all \
-            -v ${{ env.INPUT_PATH }}:/input \
-            -v ${{ env.OUTPUT_PATH }}:/generated_videos \
-            -v ${{ env.CACHE_DIR }}:/root/.cache \
-            surveyor2:${{github.sha }} \
-            /bin/bash -lc "
-            surveyor2 inputs \
-              --prompts /input/prompts.jsonl \
-              --reference-videos /input/ref_videos \
-              --generated-videos /generated_videos \
-              --output inputs.yaml && \
-            surveyor2 profile \
-              --inputs inputs.yaml \
-              --report-json /generated_videos/report.json || true && \
-            surveyor2 markdown \
-              --input /generated_videos/report.json \
-              --output /generated_videos/report.md"
       - name: Upload generated videos
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: "${{ matrix.target }}-videos-${{ github.sha }}"
           path: ${{ env.OUTPUT_PATH }}
@@ -157,7 +129,6 @@ jobs:
         if: always()
         run: |
           docker rmi ${{ matrix.target }}:${{ github.sha }} || true
-          docker rmi surveyor2:${{ github.sha }} || true
 
   create_draft_release:
     name: Create Draft Release with Videos
@@ -167,13 +138,13 @@ jobs:
       contents: write
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           fetch-depth: 0
           path: LiteAttention
       
       - name: Download All Video Artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           path: LiteAttention/release-videos
           pattern: "*-videos-*"
@@ -271,9 +242,15 @@ jobs:
           FLASH_ATTENTION_SKIP_CUDA_BUILD: "TRUE"
         run: |
           python setup.py sdist --dist-dir=dist
-      - name: Deploy
+      - name: Download wheel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: 'wheel-*'
+          path: wheels
+          merge-multiple: true
+      - name: Deploy to PyPI
         env:
           TWINE_USERNAME: "__token__"
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
         run: |
-          python -m twine upload dist/*
+          python -m twine upload LiteAttention/hopper/dist/*.tar.gz $(find wheels -maxdepth 1 -name '*.whl' 2>/dev/null || true)

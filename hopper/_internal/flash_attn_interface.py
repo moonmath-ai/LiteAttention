@@ -41,6 +41,7 @@ def _flash_attn_forward(
         q_descale,
         k_descale,
         v_descale,
+        use_int8,
         softmax_scale,
         causal,
         window_size=(-1, -1),
@@ -56,6 +57,8 @@ def _flash_attn_forward(
         attn_must_do_list=None,
         attn_write_list=None,
         thr=-3.0,
+        reverse_skip_list=False,
+        phase=False
     ):
     q, k, k_new, v_new = [maybe_contiguous(x) for x in (q, k, k_new, v_new)]
     v = v.contiguous() if v.stride(-1) != 1 and v.stride(-3) != 1 else v
@@ -103,11 +106,13 @@ def _flash_attn_forward(
         num_splits,
         pack_gqa,
         sm_margin,
-        # qk_skip_mask_args,
+        use_int8,
         attn_read_list,
         attn_must_do_list,
         attn_write_list,
-        thr=thr,
+        thr,
+        reverse_skip_list,
+        phase,
     )
     return out, softmax_lse, *rest
 
@@ -183,6 +188,8 @@ class FlashAttnQKVPackedFunc(torch.autograd.Function):
         attn_must_do_list=None,
         attn_write_list=None,
         thr=-3.0,
+        reverse_skip_list=False,
+        phase=False,
     ):
         if softmax_scale is None:
             softmax_scale = qkv.shape[-1] ** (-0.5)
@@ -219,6 +226,8 @@ class FlashAttnQKVPackedFunc(torch.autograd.Function):
             attn_must_do_list=attn_must_do_list,
             attn_write_list=attn_write_list,
             thr=thr,
+            reverse_skip_list=reverse_skip_list,
+            phase=phase,
         )
         # ctx.save_for_backward(q, k, v, out_padded, softmax_lse)
         ctx.save_for_backward(q, k, v, out, softmax_lse)
@@ -283,6 +292,7 @@ class FlashAttnFunc(torch.autograd.Function):
         causal,
         qv=None,
         q_descale=None, k_descale=None, v_descale=None,
+        use_int8=False,
         window_size=(-1, -1),
         attention_chunk=0,
         softcap=0.0,
@@ -296,6 +306,8 @@ class FlashAttnFunc(torch.autograd.Function):
         attn_write_list=None,
         thr=-3.0,
         return_softmax_lse=False,
+        reverse_skip_list=False,
+        phase=False,
     ):
         if softmax_scale is None:
             softmax_scale = (q.shape[-1] + (qv.shape[-1] if qv is not None else 0)) ** (-0.5)
@@ -313,6 +325,7 @@ class FlashAttnFunc(torch.autograd.Function):
             None, None, None,   # page_table, kv_batch_idx, leftpad_k,
             None, None, None,  # rotary_cos/sin, seqlens_rotary
             q_descale, k_descale, v_descale,
+            use_int8,
             softmax_scale,
             causal=causal,
             window_size=window_size,
@@ -326,6 +339,8 @@ class FlashAttnFunc(torch.autograd.Function):
             attn_must_do_list=attn_must_do_list,
             attn_write_list=attn_write_list,
             thr=thr,
+            reverse_skip_list=reverse_skip_list,
+            phase=phase,
         )
         # ctx.save_for_backward(q, k, v, out_padded, softmax_lse)
         ctx.save_for_backward(q, k, v, out, softmax_lse)
@@ -552,6 +567,7 @@ def flash_attn_func(
     causal=False,
     qv=None,
     q_descale=None, k_descale=None, v_descale=None,
+    use_int8=False,
     window_size=(-1, -1),
     attention_chunk=0,
     softcap=0.0,
@@ -565,6 +581,8 @@ def flash_attn_func(
     attn_write_list=None,
     thr=-3.0,
     return_softmax_lse=False,
+    reverse_skip_list=False,
+    phase=False,
 ):
     """dropout_p should be set to 0.0 during evaluation
     Supports multi-query and grouped-query attention (MQA/GQA) by passing in KV with fewer heads
@@ -619,6 +637,7 @@ def flash_attn_func(
         causal,
         qv,
         q_descale, k_descale, v_descale,
+        use_int8,
         window_size,
         attention_chunk,
         softcap,
@@ -632,6 +651,8 @@ def flash_attn_func(
         attn_write_list,
         thr,
         return_softmax_lse,
+        reverse_skip_list,
+        phase,
     )
 
 
