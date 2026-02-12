@@ -10,3 +10,18 @@ repos:
         name: ruff isort
         args: [--select, I, --fix]
       - id: ruff-format
+
+  - repo: https://github.com/pre-commit/mirrors-clang-format
+    rev: v21.1.8
+    hooks:
+      - id: clang-format
+        exclude: ^(hopper/instantiations/|csrc/)
+
+  - repo: local
+    hooks:
+      - id: generate-kernels
+        name: generate kernel instantiations
+        language: python
+        entry: python hopper/utils/generate_kernels.py -o hopper/instantiations
+        files: ^(hopper/utils/generate_kernels\.py|hopper/instantiations/)
+        pass_filenames: false
