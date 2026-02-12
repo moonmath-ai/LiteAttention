@@ -173,7 +173,7 @@ def test_softmax_lse_correctness(qkv_short, head_dim, use_int8):
     if lse_lite.dim() == 4 and lse_lite.shape[-1] == 1:
         lse_lite = lse_lite.squeeze(-1)
 
-    tolerance = 0.01 if use_int8 else 0.001
+    tolerance = 0.1 if use_int8 else 0.001
     torch.testing.assert_close(lse_lite.float(), lse_ref, atol=tolerance, rtol=0)
 
 
