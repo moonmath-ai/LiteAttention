@@ -32,6 +32,9 @@ dependencies = [
     "packaging",
     "wheel",
     "ninja",
+    "einops",
+    "structlog",
+    "tomli-w",
 ]
 
 [project.optional-dependencies]

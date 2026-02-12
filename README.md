@@ -113,19 +113,115 @@ The near-linear scaling between sparsity and runtime improvement demonstrates th
 
 ### Build from Source
 
-Clone this repo and build from source:
+The build compiles CUDA kernels and must be run with `--no-build-isolation`. All build-time and runtime dependencies must be in the venv **before** installing:
 
 ```sh
+# Build-time dependencies (setup_requires)
+pip install torch ninja packaging
+
+# Runtime dependencies (install_requires)
+pip install einops structlog tomli-w
+
 git clone https://github.com/moonmath-ai/LiteAttention.git
 cd LiteAttention/hopper
-pip install .
+pip install --no-build-isolation .
 ```
 
 If your machine has less than 96GB of RAM and lots of CPU cores, `ninja` might run too many parallel compilation jobs that could exhaust the amount of RAM. To limit the number of parallel compilation jobs, you can set the environment variable `MAX_JOBS`:
 
 ```sh
-MAX_JOBS=4 pip install .
+MAX_JOBS=4 pip install --no-build-isolation .
 ```
+
+## 🔌 Integration
+
+### 1. Replace `flash_attention` with `LiteAttention` in Your Model
+
+In each self-attention module, replace the `flash_attention` call with a `LiteAttention()` instance.
+You can set parameters like `enable_skipping` or `use_int8`.
+
+```python
+from lite_attention import LiteAttention
+
+class MyBlock(nn.Module):
+    def __init__(self, ...):
+        super().__init__()
+        self.lite_attention = LiteAttention()
+        ...
+
+    def forward(self, q, k, v):
+        ...
+        x = self.lite_attention(q, k, v)
+        return x
+```
+
+See below for parameters of `LiteAttention`
+
+> [!IMPORTANT]
+> Each `LiteAttention` instance maintains internal skip state that should not be shared across different attention layers in your model. Create a separate instance for each attention layer:
+> ```python
+> # Correct: Separate instances for different layers
+> self.attn_layer1 = LiteAttention()
+> self.attn_layer2 = LiteAttention()
+> 
+> # Incorrect: Don't reuse the same instance across different layers
+> self.shared_attn = LiteAttention()  # Don't share!
+> ```
+> However, **do reuse** the same instance across multiple forward passes (different calls to your model over time).
+
+
+### 2. Configure with a Registry
+
+After building the model, create a `LiteAttentionRegistry`. It discovers all `LiteAttention` modules in the model and configures them:
+
+```python
+from lite_attention import LiteAttentionRegistry
+
+model = build_my_model(...)  # already has LiteAttention() modules inside
+
+registry = LiteAttentionRegistry.from_model(
+    model,
+    mode=args.la_mode,           # "calib", "load", or "const"
+    threshold=args.la_threshold, # for mode="const"
+    filename=args.la_filename,   # for mode="calib" (output) or "load" (input)
+    calib_config={               # for mode="calib"
+        "target_error": args.la_target_error,
+        "metric": args.la_metric,  # "L1" (default), "Cossim", or "RMSE"
+    },
+)
+```
+
+All parameters can be provided at once. The registry uses only those relevant to the selected `mode` and ignores the rest:
+
+- `mode="const"` uses `threshold`. Fixed threshold for all layers and timesteps.
+- `mode="calib"` uses `filename` and `calib_config`. Runs a binary search per layer and timestep to find thresholds that meet the target error. Saves results to `filename` via `save_if_calib()`.
+- `mode="load"` uses `filename`. Loads previously calibrated per-layer, per-timestep thresholds from a TOML file.
+
+### 3. Run Inference and Save
+
+After inference, add a call to `registry.save_if_calib()`. This writes the TOML file when `mode="calib"`, and is a no-op otherwise:
+
+```python
+video = model.generate(prompt, ...)
+
+registry.save_if_calib()   # <-- add this after inference
+```
+
+### Threshold
+
+To get started without calibration, use a fixed threshold:
+```python
+registry = LiteAttentionRegistry.from_model(model, mode="const", threshold=-10.0)
+```
+
+The threshold is a log-space value. It must be negative in non-debug mode. 
+During attention computation, LiteAttention checks the maximum log-attention-score for each tile. If it falls below the threshold, the tile is skipped in subsequent timesteps.
+A threshold of `-10.0` is a good start value, while values closer to `0` are more aggressive (skip more tiles, faster but potentially lower quality).
+
+### Calibration
+
+Calibration is an experimental feature. It automatically finds per-layer, per-timestep thresholds that meet a target error budget, which can improve generation quality at a given level of time savings compared to using a fixed threshold.
+We recommend to run several calibrations in order to find a good balance between speed and quality, then use the generated config file for all subsequent runs of the model.
 
 ## 🚀 Usage
 
@@ -134,7 +230,7 @@ MAX_JOBS=4 pip install .
 ```python
 def LiteAttention(
     enable_skipping: bool = True, 
-    threshold: float = -10.0, 
+    threshold: float | None = None, 
     max_batch_size: int = 2, 
     reverse_skip_list: bool = True, 
     use_int8: bool = False
@@ -143,28 +239,21 @@ def LiteAttention(
 
 **Parameters:**
 - `enable_skipping` (bool): Whether to enable skip list optimizations. Defaults to `True`. When `False`, performs standard Flash Attention.
-- `threshold` (float): Log-space threshold for skipping tiles. Defaults to `-10.0`. Tiles with `max(log-attention-score) < threshold` will be skipped. Must be negative in non-debug mode. Lower values generally mean more aggressive skipping.
 - `max_batch_size` (int): Maximum batch size to pre-allocate memory for. Defaults to `2`. The actual batch size used during inference can be smaller than this value, but not larger.
 - `reverse_skip_list` (bool): Whether to use the reversed skip list format (internal optimization). Defaults to `True`.
 - `use_int8` (bool): Whether to use Int8 quantization for Q and K. Defaults to `False`. Enables per-block quantization for Q and channel-smoothed per-block quantization for K.
+- `threshold` (float): Log-space threshold for skipping tiles. Controlled from the Regstry (see below). Change here only for testing.
 
 ```python
 from lite_attention import LiteAttention
 
 
-# In your model, set the attention class to be LiteAttention with an optional threshold
-self.attn = LiteAttention(threshold=-6.0)
-.
-.
-.
-hidden_states_a_raw = self.attn(query, key, value, scale)
-
-# If you don't know the threshold at the point of initialization, you can set it later via the set_threshold function
+# In your model, set the attention class to be LiteAttention
 self.attn = LiteAttention()
 .
 .
 .
-self.attn.set_threshold(threshold=calculated_threshold)
+hidden_states_a_raw = self.attn(query, key, value, scale)
 
 # Additionally, we provide the capability to reset the skip state if needed 
 self.attn.reset_skip_state()
@@ -172,18 +261,6 @@ self.attn.reset_skip_state()
 # or to toggle the skipping optimization; turning it off falls back to regular FA3
 self.attn.enable_skip_optimization(enable=False)
 ```
-
-> [!IMPORTANT]
-> Each `LiteAttention` instance maintains internal skip state that should not be shared across different attention layers in your model. Create a separate instance for each attention layer:
-> ```python
-> # Correct: Separate instances for different layers
-> self.attn_layer1 = LiteAttention(threshold=-6.0)
-> self.attn_layer2 = LiteAttention(threshold=-6.0)
-> 
-> # Incorrect: Don't reuse the same instance across different layers
-> self.shared_attn = LiteAttention(threshold=-6.0)  # Don't share!
-> ```
-> However, **do reuse** the same instance across multiple forward passes (different calls to your model over time).
 
 For parts of the sequence that should not be skipped use the must-do feature. Pass the must_do_list parameter:
 
@@ -215,14 +292,14 @@ then all the tokens between 40 and 80 can always be skipped.
 When using multi-GPU with sequence parallelism, use `SeqParallelLiteAttention`:
 
 ```python
-def SeqParallelLiteAttention(num_nodes: int, enable_skipping: bool = True, threshold: float = -10.0, max_batch_size: int = 2, use_int8: bool = False)
+def SeqParallelLiteAttention(num_nodes: int, enable_skipping: bool = True, max_batch_size: int = 2, use_int8: bool = False)
 ```
 
 ```python
 from lite_attention import SeqParallelLiteAttention
 
 # In your model, set the attention class to be SeqParallelLiteAttention with the number of nodes
-self.attn = SeqParallelLiteAttention(num_nodes=8, threshold=-6.0)
+self.attn = SeqParallelLiteAttention(num_nodes=8)
 .
 .
 .
@@ -243,7 +320,7 @@ Example use case: When you have both text and video tokens, you can break down f
 
 ```python
 # Example: Breaking down full self-attention with text and video tokens
-self.attn = LiteAttention(enable_skipping=True, threshold=-6.0)
+self.attn = LiteAttention(enable_skipping=True)
 
 # Split queries, keys, values into text and video parts
 query_text, query_video = query[:, :text_len, :, :], query[:, text_len:, :, :]
@@ -270,7 +347,7 @@ output_v2v, lse_v2v = self.attn(query_video, key_video, value_video, scale, retu
 > The skip optimization should **only be enabled for video-to-video self-attention**. For other attention types (e.g., cross-attention or text-to-video attention), you should disable the skip optimization:
 > ```python
 > # For video-to-video self-attention - keep skipping enabled
-> self.attn_self = LiteAttention(enable_skipping=True, threshold=-6.0)
+> self.attn_self = LiteAttention(enable_skipping=True)
 > 
 > # For cross-attention or text-to-video attention - disable skipping
 > self.attn_cross = LiteAttention(enable_skipping=False)
@@ -286,9 +363,9 @@ To enable quantization, simply set `use_int8=True` when initializing. This works
 
 ```python
 # Enable quantization
-self.attn = LiteAttention(enable_skipping=True, threshold=-6.0, use_int8=True)
+self.attn = LiteAttention(enable_skipping=True, use_int8=True)
 # or for sequence parallelism
-self.attn = SeqParallelLiteAttention(num_nodes=8, threshold=-6.0, use_int8=True)
+self.attn = SeqParallelLiteAttention(num_nodes=8, use_int8=True)
 ```
 
 ### Visualization
@@ -334,7 +411,7 @@ class WanSelfAttention(nn.Module):
       # Initialize LiteAttention if available
       if LITE_ATTENTION_AVAILABLE:
           print("Using LiteAttention")
-          self.lite_attention = LiteAttention(enable_skipping=True, threshold=-10.0)
+          self.lite_attention = LiteAttention(enable_skipping=True)
       else:
           self.lite_attention = None
 ```
@@ -375,6 +452,11 @@ Lastly, update the forward function to call the lite_attention instance:
 You can see additional debug logs by setting the `LITE_ATTENTION_VERBOSE` environment variable to anything other than "FALSE"
 
 If you want to be able to test thresholds greater than 0, you need to set the `LITE_ATTENTION_DEBUG` environment variable to anything other than "FALSE"
+
+## ⚠️ Limits
+
+* The registry and calibration functionality is experimental and may change.
+* `SeqParallelLiteAttention` has **not been tested** with the calibration registry.
 
 ## 📚 Citation
 
