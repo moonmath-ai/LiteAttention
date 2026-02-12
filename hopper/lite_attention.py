@@ -948,6 +948,17 @@ class LiteAttention(nn.Module, ConfigurableModule):
         self._last_num_heads = None
         self.restart_config()
 
+    @property
+    def threshold(self):
+        if isinstance(self.config, LiteAttentionRunConfig):
+            return self.config.threshold
+        else:
+            raise RuntimeError("Can't access threshold for a calibreation config")
+
+    @threshold.setter
+    def threshold(self, value):
+        return self.set_threshold(value)
+
     def set_threshold(self, threshold: float):
         """
         Update the threshold value for skip list optimization.
