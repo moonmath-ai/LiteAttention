@@ -1,6 +1,9 @@
 import os
 import torch
 from lite_attention import LiteAttention
+import warnings
+
+warnings.filterwarnings("ignore", message=r"Module has no registry. Using local config.")
 
 # Enable debug mode to allow non-negative thresholds in tests
 os.environ["LITE_ATTENTION_DEBUG"] = "TRUE"
@@ -102,8 +105,7 @@ def test_skip_all(q, k, v, head_dim, use_int8=False):
     Test that when threshold is inf, all tiles are skipped except one range.
     Expected: skip_list should contain exactly 2 entries (one range of length 1).
     """
-    attn = LiteAttention(use_int8=use_int8)
-    attn.threshold = float('inf')
+    attn = LiteAttention(use_int8=use_int8, threshold = float('inf'))
     
     # Warm up
     run_attention_warmup(attn, q, k, v)
@@ -140,8 +142,7 @@ def test_skip_nothing(q, k, v, head_dim, use_int8=False):
     Test that when threshold is -inf, no tiles are skipped.
     Expected: skip lists should remain consistent between read and write phases.
     """
-    attn = LiteAttention(use_int8=use_int8)
-    attn.threshold = float('-inf')
+    attn = LiteAttention(use_int8=use_int8, threshold = float('-inf'))
     read_list_original, _ = attn._get_read_write_lists(q, v)
     read_list_original = read_list_original.clone()
     attn._phase = 0
@@ -250,8 +251,7 @@ def test_softmax_lse_correctness(q, k, v, head_dim, tolerance=0.001, use_int8=Fa
     """
     Test that softmax_lse output matches PyTorch reference implementation.
     """
-    attn = LiteAttention(use_int8=use_int8)
-    attn.threshold = 0.0
+    attn = LiteAttention(use_int8=use_int8, threshold = 0.0)
     
     torch.cuda.synchronize()
     output_lite, lse_lite = attn(q, k, v, return_softmax_lse=True)
@@ -362,9 +362,8 @@ def test_rectangular_attention_skipping_twice(head_dim, batch=1, q_len=240, k_le
 
     scale = 1.0 / (head_dim ** 0.5)
 
-    attn = LiteAttention(enable_skipping=True, use_int8=use_int8)
     # Keep this near 0 to make the skip decision robust across head dims.
-    attn.threshold = -1.0
+    attn = LiteAttention(enable_skipping=True, use_int8=use_int8, threshold = -1.0)
 
     passed = True
 
@@ -416,8 +415,7 @@ def test_rectangular_attention_skipping_twice(head_dim, batch=1, q_len=240, k_le
 
 def consistency_test(q, k, v, head_dim, num_iters=10):
     """Test that the skip list is consistent between reads and writes."""
-    attn = LiteAttention()
-    attn.threshold = float(0.0)
+    attn = LiteAttention(threshold = float(0.0))
 
     previous_skip_list = None
     skip_list = None
@@ -484,10 +482,8 @@ def test_must_skip_list(q, k, v, head_dim, use_int8=False):
     
     all_passed = True
     for test_idx, must_skip_list in enumerate(must_skip_list_cases):
-        attn = LiteAttention(use_int8=use_int8)
-
         # Set threshold to -inf to compute everything by default
-        attn.threshold = -float("inf")
+        attn = LiteAttention(use_int8=use_int8, threshold = -float("inf"))
 
         torch.cuda.synchronize()
         output = attn(q, k, v, must_skip_list=must_skip_list)
@@ -539,10 +535,8 @@ def test_must_do_list(q, k, v, head_dim, use_int8=False):
     
     all_passed = True
     for test_idx, must_do_list in enumerate(must_do_list_cases):
-        attn = LiteAttention(use_int8=use_int8)
-
         # Set threshold to +inf to skip everything by default
-        attn.threshold = float("inf")
+        attn = LiteAttention(use_int8=use_int8, threshold = float("inf"))
 
         for i in range(10):
             torch.cuda.synchronize()
@@ -580,8 +574,7 @@ def test_must_do_list(q, k, v, head_dim, use_int8=False):
 
 def stress_test(q, k, v, head_dim, num_iters=10, use_int8=False):
     """Stress test the attention mechanism."""
-    attn = LiteAttention(use_int8=use_int8)
-    attn.threshold = float(0.0)
+    attn = LiteAttention(use_int8=use_int8, threshold = float(0.0))
 
     output = run_attention_warmup(attn, q, k, v, 2) # only after 2 iters we stabilize due to bi-direction
 
