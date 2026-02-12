@@ -37,7 +37,10 @@ pip install .  # from repo root
 
 ## Running Tests
 
-Tests for LiteAttention are in `hopper/tests/`:
+Tests for LiteAttention are in
+1. `test_lite_attention.py` and `test_must_do_list.py`: not using pytest.
+
+2. `hopper/tests/`: Tests use pytest with many parameterized configurations (dtype, sequence lengths, head dimensions, etc.).
 ```bash
 cd hopper/tests
 pytest test_flash_attn.py  # Main attention tests
@@ -45,7 +48,27 @@ pytest test_flash_attn.py::test_lite_attn_output  # Run specific test
 pytest test_flash_attn.py -k "seqlen_q=1024"  # Filter by parameter
 ```
 
-Tests use pytest with many parameterized configurations (dtype, sequence lengths, head dimensions, etc.).
+## Remote Development (Nebius GPU machines)
+
+The code require a GPU. Use rsync from the local machine instead to a remote server (ask which server).
+
+```bash
+# We update first than push without .git; this works for a regular repo and for a worktree (for a wirktree, `git submodule` won't work on the remote)
+git submodule update --init --recursive
+rsync -az --exclude .venv --exclude __pycache__ --exclude build --exclude .git \
+  ~/code/<branch-name>/ <remote>:~/code/<branch-name>/
+
+# On remote: create venv and install deps
+cd ~/code/<branch-name>
+uv venv .venv
+uv pip install torch packaging ninja tomli-w structlog pytest
+
+# Build LiteAttention (requires g++ as compiler)
+cd hopper && CXX=g++ ../.venv/bin/python setup.py install && cd ..
+
+# Run
+.venv/bin/python test_lite_attention.py
+```
 
 ## Code Architecture
 
