@@ -790,7 +790,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
         >>> # Force computation for positions [0, 128) and [500, 640) (exclusive end)
         >>> output = lite_attn(q, k, v, must_do_list=[0, 128, 500, 640])
         """
-        cfg = self.config
+        cfg = self.config if self.enable_skipping else None
 
         # Get read and write lists (internal mask management)
         read_list, write_list = self._get_read_write_lists(query, key, value, must_skip_list)
@@ -808,7 +808,9 @@ class LiteAttention(nn.Module, ConfigurableModule):
             (1.44269504089 / math.sqrt(head_dim)) if scale is None else (1.44269504089 * scale)
         ) if self.use_int8 else scale
 
-        if isinstance(cfg, LiteAttentionCalibConfig):
+        if not self.enable_skipping:
+            threshold = 0.0  # unused
+        elif isinstance(cfg, LiteAttentionCalibConfig):
             temp_list = read_list.clone()
 
             def calibration_step(curr_th):
@@ -901,7 +903,8 @@ class LiteAttention(nn.Module, ConfigurableModule):
         )
 
         # Record calibration results and advance timestep
-        self.add_calibration_results(LiteAttentionRunConfig(threshold=threshold))
+        if self.enable_skipping:
+            self.add_calibration_results(LiteAttentionRunConfig(threshold=threshold))
 
         # Calculate and store statistics if enabled
         if self.enable_skipping and os.getenv("LITE_ATTENTION_VERBOSE", "FALSE") != "FALSE":
