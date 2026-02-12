@@ -37,15 +37,21 @@ pip install .  # from repo root
 
 ## Running Tests
 
-Tests for LiteAttention are in
-1. `test_lite_attention.py` and `test_must_do_list.py`: not using pytest.
+### LiteAttention integration tests (root)
+```bash
+pytest test_lite_attention.py                          # all tests
+pytest test_lite_attention.py::test_skip_all            # single test
+pytest test_lite_attention.py -k "d128 and bf16"        # filter by head_dim / dtype
+```
 
-2. `hopper/tests/`: Tests use pytest with many parameterized configurations (dtype, sequence lengths, head dimensions, etc.).
+`test_must_do_list.py` need to be converted to pytest. meanwhile it is run with python
+
+### FlashAttention kernel tests (hopper/tests/)
 ```bash
 cd hopper/tests
-pytest test_flash_attn.py  # Main attention tests
-pytest test_flash_attn.py::test_lite_attn_output  # Run specific test
-pytest test_flash_attn.py -k "seqlen_q=1024"  # Filter by parameter
+pytest test_flash_attn.py
+pytest test_flash_attn.py::test_lite_attn_output
+pytest test_flash_attn.py -k "seqlen_q=1024"
 ```
 
 ## Remote Development (Nebius GPU machines)
