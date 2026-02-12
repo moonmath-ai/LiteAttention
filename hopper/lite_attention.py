@@ -106,7 +106,6 @@ class LiteAttentionRunConfig(CalibratedRunConfig):
     """Runtime configuration for LiteAttention threshold."""
 
     threshold: float
-
     @classmethod
     def default(cls) -> typing.Self:
         return cls(threshold=-10.0)
@@ -809,77 +808,87 @@ class LiteAttention(nn.Module, ConfigurableModule):
         ) if self.use_int8 else scale
 
         if isinstance(cfg, LiteAttentionCalibConfig):
-            temp_list = read_list.clone()
+            # temp_list = read_list.clone()
+            # original_phase = self._phase
+            # original_skip_list = self._skip_list.clone()
 
             def calibration_step(curr_th):
-                output_old_th = flash_attn_func(
-                    q=query,
-                    k=key,
-                    v=value,
-                    softmax_scale=softmax_scale,
-                    attn_read_list=read_list,
-                    attn_must_do_list=must_do_list_expanded,
-                    attn_write_list=write_list,
-                    thr=curr_th,
-                    return_softmax_lse=return_softmax_lse,
-                    reverse_skip_list=self.reverse_skip_list,
-                    phase=(self._phase == 1) if self.reverse_skip_list else False,
-                    use_int8=self.use_int8,
-                )
-                # we switch read <-> write manually; we remember to flip phase
+                # remember the original skip list and phase
+                original_phase = self._phase
+                original_skip_list = self._skip_list
+                self._skip_list = self._skip_list.clone()
+
+                # because i say so!
                 self._phase = 1 - self._phase
-                output_new_th = flash_attn_func(
-                    q=query,
-                    k=key,
-                    v=value,
-                    softmax_scale=softmax_scale,
-                    attn_read_list=write_list,  # this injects the new threshold calculated before.
-                    attn_must_do_list=must_do_list_expanded,
-                    attn_write_list=temp_list,  # we will drop this result
-                    thr=curr_th,
-                    return_softmax_lse=return_softmax_lse,
-                    reverse_skip_list=self.reverse_skip_list,
-                    phase=(self._phase == 1) if self.reverse_skip_list else False,
-                    use_int8=self.use_int8,
-                )
-                # and we must flip back
-                self._phase = 1 - self._phase
+
+                for i in range(2):
+                    rl, wl = self._get_read_write_lists(query, key, value, must_skip_list)
+                    output_new_th = flash_attn_func(
+                        q=query,
+                        k=key,
+                        v=value,
+                        softmax_scale=softmax_scale,
+                        attn_read_list=rl,
+                        attn_must_do_list=must_do_list_expanded,
+                        attn_write_list=wl,
+                        thr=curr_th,
+                        return_softmax_lse=return_softmax_lse,
+                        reverse_skip_list=self.reverse_skip_list,
+                        phase=(self._phase == 1) if self.reverse_skip_list else False,
+                        use_int8=self.use_int8,
+                    )
+                    torch.cuda.synchronize()
+                    if i == 0:
+                        output_old_th = output_new_th
+                    # self._phase = 1 - self._phase
+
+                # the order does matter! (first getting the read_list then reseting the phase)
+                clib_read_list = self.read_list
+                # restore the skip list
+                self._skip_list = original_skip_list
+                self._phase = original_phase
                 # calc error
                 curr_error = self.calc_error(output_new_th, output_old_th)[cfg.metric]
-                return curr_error
+                return curr_error, clib_read_list
 
             def find_threshold(low, high):
-                curr_error = calibration_step(high)
+                curr_error, clib_read_list = calibration_step(high)
                 error_diff = curr_error - cfg.target_error
                 if error_diff <= 0:
                     log.warning(
                         "can't find a threshold with the requested target error. using the high limit (below noise target)",
                         threshold=high, error=curr_error, target=cfg.target_error,
                     )
-                    return high
+                    return high, clib_read_list
 
-                curr_error = calibration_step(low)
+                curr_error, clib_read_list = calibration_step(low)
                 error_diff = curr_error - cfg.target_error
                 if error_diff >= 0:
                     log.warning(
                         "can't find a threshold with the requested target error. using the low limit (above noise target)",
                         threshold=low, error=curr_error, target=cfg.target_error,
                     )
-                    return low
+                    return low, clib_read_list
 
                 # binary search between high (error > target) and low (error <= target)
                 while True:
                     curr_th = (low + high) / 2
-                    curr_error = calibration_step(curr_th)
+                    curr_error, clib_read_list = calibration_step(curr_th)
                     error_diff = curr_error - cfg.target_error
                     if abs(error_diff / cfg.target_error) < 0.1:
-                        return curr_th
+                        return curr_th, clib_read_list
                     elif error_diff > 0:
                         high = curr_th
                     else:
                         low = curr_th
 
-            threshold = find_threshold(low=-20.0, high=0.0)
+            threshold, clib_read_list = find_threshold(low=-20.0, high=0.0)
+            index = "step_" + str(self._config_index)
+            module_name = self.module_name.replace(".", "_")
+            os.makedirs("ideal_skip_lists", exist_ok=True)
+            # filename = f"ideal_skip_lists/map_{module_name}_step_{index}.png"
+            # filename = f"{module_name}_step_{index}"
+            self.visualize_skips(query, key, range(0, self._last_num_heads), scale, save_path='ideal_skip_lists', read_list=clib_read_list, name_prefix=module_name, name_suffix=index)
         else:
             assert isinstance(cfg, LiteAttentionRunConfig)
             threshold = cfg.threshold
@@ -1011,8 +1020,10 @@ class LiteAttention(nn.Module, ConfigurableModule):
         heads_list: torch.Tensor,
         scale: float,
         save_path: str,
+        read_list: Optional[torch.Tensor] = None,
         max_res: int = 520,
         name_prefix: str = "",
+        name_suffix: str = "",
         do_softmax: bool = True,
         dims: Optional[Tuple[Tuple[int, int, int], Tuple[int, int, int]]] = None
         ):
@@ -1062,7 +1073,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
         batch = query.shape[0]
         seq_len_q = query.shape[1]
         seq_len_k = key.shape[1]
-        skip_list = self._skip_list[self._phase]
+        skip_list = self._skip_list[self._phase] if read_list is None else read_list
 
         # find out if the skip list is reversed or not
         r1, r2 = skip_list[0, 0, 0, 1:3]
@@ -1071,10 +1082,10 @@ class LiteAttention(nn.Module, ConfigurableModule):
         else:
             step = 0
 
-        for b in range(batch):
-            for h in heads_list:
-                batch_head_dir = os.path.join(save_path, f"batch_{b}", f"head_{h}")
-                os.makedirs(batch_head_dir, exist_ok=True)
+        # for b in range(batch):
+        #     for h in heads_list:
+        #         batch_head_dir = os.path.join(save_path, f"batch_{b}", f"head_{h}")
+        #         os.makedirs(batch_head_dir, exist_ok=True)
 
         # kBlockM, kBlockN = LiteAttention.get_MN(key.shape[-1], key.dtype)
         kBlockM, kBlockN = LiteAttention.get_MN(key.shape[-1], torch.int8 if self.use_int8 else key.dtype)
@@ -1158,9 +1169,11 @@ class LiteAttention(nn.Module, ConfigurableModule):
                 plt.axis("off")
                 plt.tight_layout()
 
-                batch_head_dir = os.path.join(save_path, f"batch_{b}", f"head_{h}")
-                filename = f"{name_prefix}.png" if name_prefix else "visualization.png"
-                file_path = os.path.join(batch_head_dir, filename)
+                # batch_head_dir = os.path.join(save_path, f"batch_{b}", f"head_{h}")
+                # filename = f"{name_prefix}.png" if name_prefix else "visualization.png"
+                filename = f"{name_prefix}_batch_{b}_head_{h}_{name_suffix}.png"
+                # file_path = os.path.join(batch_head_dir, filename)
+                file_path = os.path.join(save_path, filename)
                 plt.savefig(file_path, dpi=150)
                 plt.close()
 

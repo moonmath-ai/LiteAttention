@@ -369,6 +369,9 @@ class ConfigurableModule:
             )
 
     def _reset_skip_state_calibration(self) -> None:
+        if self._config_index == 0:
+            assert not self._config_output
+            return
         self._config_index = 0
         self._config_output = ConfigList()
         if (

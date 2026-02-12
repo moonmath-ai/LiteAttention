@@ -250,8 +250,9 @@ def test_softmax_lse_correctness(q, k, v, head_dim, tolerance=0.001, use_int8=Fa
     """
     Test that softmax_lse output matches PyTorch reference implementation.
     """
-    attn = LiteAttention(use_int8=use_int8)
-    attn.threshold = 0.0
+    attn = LiteAttention(use_int8=use_int8, threshold=0.0)
+    attn.set_threshold(0.0)
+    # attn.threshold = 0.0
     
     torch.cuda.synchronize()
     output_lite, lse_lite = attn(q, k, v, return_softmax_lse=True)
