@@ -1336,7 +1336,7 @@ class LiteAttentionRegistry(ModuleRegistry):
         Create a registry from a model and configure all its LiteAttention modules.
 
         Args:
-            model: A PyTorch model containing LiteAttention modules.
+            model: `nn.Module` that contains LiteAttention modules.
             mode: Configuration mode - 'const', 'load', or 'calib'.
             threshold: Threshold value for mode='const'.
             filename: Path to config file for mode='load' (input) or
