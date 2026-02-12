@@ -79,6 +79,7 @@ import torch
 import os
 import math
 import typing
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Tuple, Union
@@ -974,6 +975,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
         Changing the threshold does not reset the skip list state. The new threshold
         will be applied starting from the next forward pass.
         """
+        warnings.warn("usage of `LiteAttention.threshold = value` and `LiteAttention.set_threshold` is deprecated. Please use a module registry")
         if threshold >= 0 and os.getenv("LITE_ATTENTION_DEBUG", "FALSE") == "FALSE":
             raise ValueError("threshold must be negative when debug mode is not enabled")
 
