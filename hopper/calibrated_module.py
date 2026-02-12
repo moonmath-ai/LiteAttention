@@ -367,16 +367,18 @@ class ConfigurableModule:
                 f"Module {type(self)} has no run_config_type defined. "
                 "Cannot save calibration results."
             )
-
-    def _reset_skip_state_calibration(self) -> None:
+    def restart_config(self):
+        if self._config_index == 0:
+            assert not self._config_output
+            return
         self._config_index = 0
         self._config_output = ConfigList()
         if (
-           isinstance(self.config, CalibratedCalibConfig) 
-           or isinstance(self.config_all, ConfigList) 
+           isinstance(self.config, CalibratedCalibConfig)
+           or isinstance(self.config_all, ConfigList)
            and any(isinstance(c, CalibratedCalibConfig) for c in self.config_all)
         ):
-            raise RuntimeError("Using reset_skip_state() with a calibration config is not allowed. Most calibration results will be lost.")
+            self.warn_once("Using restart_config() with a calibration config; data will be lost.")
 
     @property
     def module_name(self) -> str | None:

@@ -942,8 +942,8 @@ class LiteAttention(nn.Module, ConfigurableModule):
         self.verbose_reinitialization = False
         self._last_percentage = 0.0
         self._last_num_heads = None
-        self._reset_skip_state_calibration()
-    
+        self.restart_config()
+
     def set_threshold(self, threshold: float):
         """
         Update the threshold value for skip list optimization.
