@@ -316,7 +316,7 @@ def test_must_do_list(qkv, head_dim, use_int8, case_fn):
         torch.cuda.synchronize()
 
         expected = count_tiles(must_do, kBlockN) / ktiles
-        actual = attn.calc_percentage(attn.read_list)
+        actual = attn.calc_percentage(attn.read_list).item()
         assert actual == pytest.approx(expected, abs=0.01)
 
 
