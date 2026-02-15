@@ -20,6 +20,13 @@ dependencies = [
     "tomli-w",
 ]
 
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
 
 [dependency-groups]
 dev = ["pytest"]
