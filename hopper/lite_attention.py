@@ -871,7 +871,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
                     return low
 
                 # binary search between high (error > target) and low (error <= target)
-                while True:
+                for _ in range(30):
                     curr_th = (low + high) / 2
                     curr_error = calibration_step(curr_th)
                     error_diff = curr_error - cfg.target_error
@@ -881,6 +881,8 @@ class LiteAttention(nn.Module, ConfigurableModule):
                         high = curr_th
                     else:
                         low = curr_th
+                log.warning("binary search did not converge, using midpoint", threshold=curr_th, error=curr_error, target=cfg.target_error)
+                return curr_th
 
             threshold = find_threshold(low=-20.0, high=0.0)
         else:
