@@ -60,16 +60,12 @@ git submodule update --init --recursive
 rsync -az --exclude .venv --exclude __pycache__ --exclude build --exclude .git \
   ~/code/<branch-name>/ <remote>:~/code/<branch-name>/
 
-# On remote: create venv and install deps
+# On remote: build and install everything with uv sync
 cd ~/code/<branch-name>
-uv venv .venv
-uv pip install torch packaging ninja tomli-w structlog pytest
-
-# Build LiteAttention (requires g++ as compiler)
-CXX=g++ uv sync --group dev
+CUDA_HOME=/usr/local/cuda-12.8 CXX=g++ uv sync --group dev
 
 # Run
-.venv/bin/python test_lite_attention.py
+.venv/bin/pytest test_lite_attention.py
 ```
 
 ## Code Architecture
