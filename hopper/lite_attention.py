@@ -118,7 +118,7 @@ class LiteAttentionCalibConfig(CalibratedCalibConfig):
     """Calibration configuration for finding optimal threshold."""
 
     metric: typing.Literal["Cossim", "L1", "RMSE"] = "L1"
-    target_error: float = 0.01
+    target_error: float = 0.001
 
 class LiteAttention(nn.Module, ConfigurableModule):
     """
@@ -1339,7 +1339,7 @@ class LiteAttentionRegistry(ModuleRegistry):
     def from_model(
         cls,
         model,
-        mode: str,
+        mode: str | None = None,
         threshold: float | None = None,
         filename: str | Path | None = None,
         calib_config: dict | None = None,
@@ -1364,6 +1364,9 @@ class LiteAttentionRegistry(ModuleRegistry):
         """
         if filename is not None:
             filename = Path(filename)
+        if mode is None:
+            warnings.warn("No 'mode' supplied for the registry. Using a 'const' mode", stacklevel=2)
+            mode = 'const'
 
         registry = cls(model.named_modules())
         registry._mode = mode
@@ -1382,8 +1385,11 @@ class LiteAttentionRegistry(ModuleRegistry):
 
         if mode == "const":
             if threshold is None:
-                raise ValueError("threshold is required for mode='const'")
-            registry.set_bulk_config(LiteAttentionRunConfig(threshold=threshold))
+                warnings.warn("no 'threshold' specified for mode 'const'. Using default value", stacklevel=2)
+                cfg = LiteAttentionRunConfig.default()
+            else:
+                cfg = LiteAttentionRunConfig(threshold=threshold)
+            registry.set_bulk_config(cfg)
         elif mode == "load":
             if filename is None:
                 raise ValueError("filename is required for mode='load'")
@@ -1395,7 +1401,8 @@ class LiteAttentionRegistry(ModuleRegistry):
             if filename is None:
                 raise ValueError("filename is required for mode='calib'")
             if calib_config is None:
-                raise ValueError("calib_config is required for mode='calib'")
+                warnings.warn("no 'calib_config' specified for mode='calib'. Using default values", stacklevel=2)                
+                calib_config = {}
             registry.set_bulk_config(LiteAttentionCalibConfig(**calib_config))
         else:
             raise ValueError(
