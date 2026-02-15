@@ -1,7 +1,73 @@
+---
+Language: Cpp
 BasedOnStyle: LLVM
+
+# 4-space indentation throughout
 IndentWidth: 4
-ColumnLimit: 120
-BinPackArguments: false
-BinPackParameters: false
-AlignAfterOpenBracket: BlockIndent
+TabWidth: 4
+UseTab: Never
+ContinuationIndentWidth: 8
+
+# Very long lines are never broken
+ColumnLimit: 0
+
+# K&R braces everywhere (Attach)
 BreakBeforeBraces: Attach
+
+# No namespace indentation (FA style: content at column 0 inside namespace)
+NamespaceIndentation: None
+
+# Pointers right-aligned (void *ptr), references left-aligned (const& x)
+PointerAlignment: Right
+ReferenceAlignment: Left
+
+# Template: template <typename T>
+SpaceAfterTemplateKeyword: true
+
+# Don't align args to opening paren — use continuation indent instead
+AlignAfterOpenBracket: DontAlign
+
+# No include sorting
+SortIncludes: Never
+
+# Access modifiers
+AccessModifierOffset: -4
+
+# Short forms — allow if (...) { stmt; } on single line
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Always
+AllowShortEnumsOnASingleLine: false
+
+# Constructor initializers: comma-first style
+BreakConstructorInitializers: BeforeComma
+
+# Spaces
+SpaceBeforeParens: ControlStatements
+SpacesInAngles: false
+SpacesBeforeTrailingComments: 2
+
+# Macro continuation backslashes right-aligned
+AlignEscapedNewlines: Right
+
+# Preprocessor directives not indented
+IndentPPDirectives: None
+
+# Don't reflow comments
+ReflowComments: false
+
+# Don't auto-generate namespace closing comments
+FixNamespaceComments: false
+
+# Workaround: remap CUDA attributes to C++ [[attributes]] so BreakAfterAttributes applies
+# See https://github.com/llvm/llvm-project/issues/117552
+Macros:
+  - __device__=[[maybe_unused]]
+  - __host__=[[maybe_unused]]
+  - __global__=[[maybe_unused]]
+  - __forceinline__=[[maybe_unused]]
+  - CUTLASS_HOST_DEVICE=[[maybe_unused]]
+  - CUTLASS_DEVICE=[[maybe_unused]]
+
+BreakAfterAttributes: Always
