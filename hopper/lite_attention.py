@@ -118,7 +118,7 @@ class LiteAttentionCalibConfig(CalibratedCalibConfig):
     """Calibration configuration for finding optimal threshold."""
 
     metric: typing.Literal["Cossim", "L1", "RMSE"] = "L1"
-    target_error: float = 0.001
+    target_error: float = 0.01
 
 class LiteAttention(nn.Module, ConfigurableModule):
     """
