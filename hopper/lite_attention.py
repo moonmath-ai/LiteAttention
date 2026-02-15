@@ -934,7 +934,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
                     self._phase = 1 - self._phase
                     skip_pct = 1.0 - self.calc_percentage(write_list[:query.shape[0]])
                     errors = self.calc_error(output_skipped, output_full)
-                    print(f"  threshold={th:7.1f} | skip={skip_pct:.4f} | L1={errors['L1']:.6f} | RMSE={errors['RMSE']:.6f} | Cossim={errors['Cossim']:.8f}")
+                    print(f"  threshold={th:7.1f} | skip={skip_pct:.4f} | L1={errors['L1']:.6f} | RMSE={errors['RMSE']:.6f} | 1-Cossim={errors['Cossim']:.8f}")
                 print(f"{'='*80}\n")
                 # Restore state for normal execution
                 read_list.copy_(original_read)
