@@ -24,12 +24,57 @@ Key concepts:
 
 ### Build LiteAttention (the main package)
 ```bash
-pip install .  # from repo root
-# Or with limited parallelism if low on RAM:
-MAX_JOBS=4 pip install .
-# Or with uv:
-uv sync --group dev
+# With uv (recommended):
+CUDA_HOME=/usr/local/cuda-12.8 CXX=g++ uv sync --group dev
+
+# Or with pip:
+CUDA_HOME=/usr/local/cuda-12.8 CXX=g++ pip install .
+# With limited parallelism if low on RAM:
+MAX_JOBS=4 CUDA_HOME=/usr/local/cuda-12.8 CXX=g++ pip install .
 ```
+
+Note: `CUDA_HOME` must point to a CUDA 12.8 toolkit matching the PyTorch cu128 build.
+The PyTorch index is configured in `pyproject.toml` (`tool.uv.sources` / `tool.uv.index`).
+
+### Using LiteAttention as a dependency in another project
+
+CUDA extensions must be built against the target venv's torch for ABI
+compatibility. Use `no-build-isolation-package` so the build runs in the
+project environment, and include build deps (`setuptools`, `packaging`, `ninja`)
+as project dependencies so they are installed before lite-attention is built.
+
+```toml
+# pyproject.toml of the consuming project
+[project]
+dependencies = [
+    "torch>=2.2",
+    "setuptools>=64",
+    "packaging",
+    "ninja",
+    "lite-attention",
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv]
+no-build-isolation-package = ["lite-attention"]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+lite-attention = { path = "../LiteAttention" }  # or a git URL
+```
+
+```bash
+CUDA_HOME=/usr/local/cuda-12.8 CXX=g++ uv sync
+```
+
+Key points:
+- `no-build-isolation-package`: builds lite-attention in the target venv (same torch at build and runtime)
+- `setuptools`, `packaging`, `ninja` in project deps: uv installs them first, before building lite-attention
+- `CUDA_HOME` must match the PyTorch CUDA version (cu128 -> cuda-12.8)
 
 ## Running Tests
 
@@ -55,16 +100,15 @@ pytest test_flash_attn.py -k "seqlen_q=1024"
 The code require a GPU. Use rsync from the local machine instead to a remote server (ask which server).
 
 ```bash
-# We update first than push without .git; this works for a regular repo and for a worktree (for a wirktree, `git submodule` won't work on the remote)
-git submodule update --init --recursive
-rsync -az --exclude .venv --exclude __pycache__ --exclude build --exclude .git \
-  ~/code/<branch-name>/ <remote>:~/code/<branch-name>/
+# Sync code to remote (include .git for submodules)
+rsync -az --exclude .venv --exclude __pycache__ --exclude build \
+  ~/code/LiteAttention/ <remote>:~/code/LiteAttention/
 
 # On remote: build and install everything with uv sync
-cd ~/code/<branch-name>
+cd ~/code/LiteAttention
 CUDA_HOME=/usr/local/cuda-12.8 CXX=g++ uv sync --group dev
 
-# Run
+# Run tests
 .venv/bin/pytest test_lite_attention.py
 ```
 
