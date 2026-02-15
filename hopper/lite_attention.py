@@ -318,7 +318,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
         sim = F.cosine_similarity(x.reshape(1, -1), xx.reshape(1, -1)).item()
         l1 = ((x - xx).abs().sum() / xx.abs().sum()).item()
         rmse = torch.sqrt(torch.mean((x - xx) ** 2)).item()
-        return {"Cossim": sim, "L1": l1, "RMSE": rmse}
+        return {"Cossim": 1.0 - sim, "L1": l1, "RMSE": rmse}
 
     @staticmethod
     def get_MN(head_dim, dtype, v_colmajor=False, is_skipable=True):
