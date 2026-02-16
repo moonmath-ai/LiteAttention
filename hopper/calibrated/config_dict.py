@@ -4,11 +4,16 @@ Dictionary of module name -> config(s) with TOML load/save.
 
 from __future__ import annotations
 
+import sys
 import typing
 from pathlib import Path
 
 import tomli_w
-import tomllib
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
 
 from .config import CalibratedConfig
 from .config_list import ConfigList
