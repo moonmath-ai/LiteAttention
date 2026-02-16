@@ -131,8 +131,9 @@ class LiteAttention(nn.Module, ConfigurableModule):
     How It Works:
     -------------
     1. The attention matrix Q@K^T is computed in tiles (blocks)
-    2. Each tile's maximum score is compared against a threshold
-    3. Tiles below the threshold are skipped in subsequent computations
+    2. For each tile, the difference between the tile's max raw score and the running
+       max is computed in log2 scale: (tile_max - running_max) * softmax_scale_log2
+    3. If this difference <= threshold for all rows in a warp, the tile is skipped
     4. A "write list" is generated for the current forward pass
     5. This write list becomes the "read list" for the next forward pass
     6. The process alternates between two buffers for efficiency
@@ -140,9 +141,10 @@ class LiteAttention(nn.Module, ConfigurableModule):
     Args:
         enable_skipping (bool, optional): Whether to enable skip list optimizations. 
             Defaults to True. When False, performs standard Flash Attention.
-        threshold (float, optional): Log-space threshold for skipping tiles. Defaults to -10.0.
-            Tiles with max(log-attention-score) < threshold will be skipped.
-            Must be negative in non-debug mode. Lower values = more aggressive skipping.
+        threshold (float, optional): Threshold for skipping tiles (log2 scale). Defaults to -10.0.
+            A tile is skipped when (tile_max - running_max) * softmax_scale_log2 <= threshold
+            for all rows, i.e. the tile's best score is too far below the best seen so far.
+            Must be negative in non-debug mode. Higher (closer to 0) = more aggressive skipping.
         max_batch_size (int, optional): Maximum batch size to pre-allocate memory for.
             Defaults to 2. Actual batch size can be smaller but not larger.
         reverse_skip_list (bool, optional): Whether to use reversed skip list format.
@@ -965,13 +967,14 @@ class LiteAttention(nn.Module, ConfigurableModule):
         """
         Update the threshold value for skip list optimization.
         
-        The threshold determines how aggressively tiles are skipped. Tiles with
-        max(log-attention-score) below this threshold will be skipped.
-        
+        The threshold determines how aggressively tiles are skipped. A tile is
+        skipped when (tile_max - running_max) * softmax_scale_log2 <= threshold
+        for all rows, i.e. the tile's best score is too far below the best seen so far.
+
         Args:
-            threshold (float): Threshold value in log-space. Must be negative
+            threshold (float): Threshold value in log2 scale. Must be negative
                 unless LITE_ATTENTION_DEBUG environment variable is set.
-                Lower values = more aggressive skipping = faster but less accurate.
+                Higher (closer to 0) = more aggressive skipping = faster but less accurate.
                 Typical values: -5.0 to -15.0
         
         Raises:
@@ -1236,7 +1239,7 @@ class SeqParallelLiteAttention:
         num_nodes (int): Number of nodes in the sequence-parallel setup
         enable_skipping (bool, optional): Whether to enable skip list optimizations.
             Defaults to True.
-        threshold (float, optional): Log-space threshold for skipping tiles.
+        threshold (float, optional): Threshold for skipping tiles (log2 scale).
             Defaults to -10.0.
         max_batch_size (int, optional): Maximum batch size. Defaults to 2.
         config (LiteAttentionRunConfig | LiteAttentionCalibConfig, optional): Configuration

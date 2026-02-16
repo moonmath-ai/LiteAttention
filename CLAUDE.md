@@ -9,7 +9,7 @@ LiteAttention is a temporal sparse attention mechanism for video diffusion model
 Key concepts:
 - **Skip Lists**: Data structures tracking which attention tiles can be skipped during computation
 - **Double Buffering**: Alternates between read/write buffers each forward pass
-- **Threshold-based Skipping**: Tiles with max(log-attention-score) below threshold are skipped
+- **Threshold-based Skipping**: Tiles are skipped when their max score is too far below the running max (compared in log2 scale against the threshold)
 - **Must-Do/Must-Skip Lists**: Force computation or skipping of specific sequence ranges
 
 ## Build & Installation
