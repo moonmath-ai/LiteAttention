@@ -32,6 +32,9 @@ dependencies = [
     "packaging",
     "wheel",
     "ninja",
+    "einops",
+    "structlog",
+    "tomli-w",
 ]
 
 [project.optional-dependencies]
@@ -47,7 +50,7 @@ Homepage = "https://moonmath-ai.github.io/LiteAttention/"
 Repository = "https://github.com/moonmath-ai/LiteAttention"
 
 [tool.setuptools]
-packages = ["lite_attention", "lite_attention._internal", "lite_attention.utils"]
+packages = ["lite_attention", "lite_attention._internal", "lite_attention.utils", "lite_attention.calibrated"]
 license-files = ["LICENSE", "LICENSE-BSD", "LICENSE-MIT"]
 
 [tool.setuptools.package-dir]
