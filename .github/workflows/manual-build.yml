@@ -1,0 +1,80 @@
+# Manually trigger a single wheel build with arbitrary parameters.
+# Uses the same _build.yml template as the Release workflow.
+name: Manual Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      docker-image:
+        description: "Docker image for build (e.g. nvidia/cuda:12.9.1-devel-ubuntu22.04)"
+        required: true
+        default: "nvidia/cuda:12.9.1-devel-ubuntu22.04"
+        type: string
+      python-version:
+        description: "Python version"
+        required: true
+        default: "3.10"
+        type: string
+      cuda-version:
+        description: "CUDA version (e.g. 12.8.1, 12.9.1)"
+        required: true
+        default: "12.9.1"
+        type: string
+      torch-version:
+        description: "PyTorch version (e.g. 2.8.0, 2.9.1)"
+        required: true
+        default: "2.8.0"
+        type: string
+      cxx11_abi:
+        description: "C++11 ABI (TRUE or FALSE)"
+        required: true
+        default: "FALSE"
+        type: choice
+        options:
+          - "TRUE"
+          - "FALSE"
+      upload-to-release:
+        description: "Upload wheel to a release"
+        required: false
+        default: false
+        type: boolean
+      release-tag:
+        description: "Release tag to upload to (required if upload-to-release is true)"
+        required: false
+        type: string
+
+jobs:
+  prepare:
+    name: Prepare build args
+    runs-on: [self-hosted, Linux]
+    outputs:
+      release_version: ${{ steps.set.outputs.release_version }}
+    steps:
+      - name: Set ref and release version
+        id: set
+        run: |
+          if [[ "${{ inputs.upload-to-release }}" == "true" && -z "${{ inputs.release-tag }}" ]]; then
+            echo "::error::release-tag is required when upload-to-release is true"
+            exit 1
+          fi
+          # Use workflow ref (from "Use workflow from" dropdown) for checkout, or release-tag when uploading
+          if [[ "${{ inputs.upload-to-release }}" == "true" ]]; then
+            echo "release_version=${{ inputs.release-tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "release_version=${{ github.ref }}" >> $GITHUB_OUTPUT
+          fi
+
+  build-wheel:
+    name: Build wheel (manual)
+    needs: prepare
+    permissions:
+      contents: write
+    uses: ./.github/workflows/_build.yml
+    with:
+      docker-image: ${{ inputs.docker-image }}
+      python-version: ${{ inputs.python-version }}
+      cuda-version: ${{ inputs.cuda-version }}
+      torch-version: ${{ inputs.torch-version }}
+      cxx11_abi: ${{ inputs.cxx11_abi }}
+      release-version: ${{ needs.prepare.outputs.release_version }}
+      upload-to-release: ${{ inputs.upload-to-release }}
