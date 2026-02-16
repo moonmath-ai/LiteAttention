@@ -24,15 +24,11 @@ Key concepts:
 
 ### Build LiteAttention (the main package)
 ```bash
-cd hopper
-pip install .
+pip install .  # from repo root
 # Or with limited parallelism if low on RAM:
 MAX_JOBS=4 pip install .
-```
-
-### Build FlashAttention2 (base library, optional)
-```bash
-pip install .  # from repo root
+# Or with uv:
+uv sync --group dev
 ```
 
 ## Running Tests
@@ -70,7 +66,7 @@ uv venv .venv
 uv pip install torch packaging ninja tomli-w structlog pytest
 
 # Build LiteAttention (requires g++ as compiler)
-cd hopper && CXX=g++ ../.venv/bin/python setup.py install && cd ..
+CXX=g++ uv sync --group dev
 
 # Run
 .venv/bin/python test_lite_attention.py
