@@ -39,7 +39,7 @@ defaults:
 
 jobs:
   build-wheel:
-    runs-on: self-hosted
+    runs-on: [self-hosted, Linux]
     container:
       image: ${{ inputs.docker-image }}
       options: --gpus all
@@ -48,7 +48,8 @@ jobs:
       - name: Set up environment
         run: |
           apt-get update && apt-get install -y \
-            git
+            git \
+            python3-pip
           (type -p wget >/dev/null || (apt update && apt install wget -y)) \
           && mkdir -p -m 755 /etc/apt/keyrings \
           && out=$(mktemp) && wget -nv -O$out https://cli.github.com/packages/githubcli-archive-keyring.gpg \
@@ -65,10 +66,8 @@ jobs:
           submodules: recursive
           path: build-wheel
 
-      - name: Set up Python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
-        with:
-          python-version: ${{ inputs.python-version }}
+      # Python comes from the container image (e.g. nvidia/cuda); setup-python is skipped
+      # to avoid "bad interpreter" when the job runs in a container (runner paths not available).
 
       - name: Set CUDA and PyTorch versions
         run: |
@@ -79,10 +78,10 @@ jobs:
 
       - name: Install PyTorch ${{ inputs.torch-version }}+cu${{ inputs.cuda-version }}
         run: |
-          pip install --upgrade pip
+          python3 -m pip install --upgrade pip
           # With python 3.13 and torch 2.5.1, unless we update typing-extensions, we get error
           # AttributeError: attribute '__default__' of 'typing.ParamSpec' objects is not writable
-          pip install typing-extensions==4.12.2
+          python3 -m pip install typing-extensions==4.12.2
           # Use the CUDA version that's already installed on the system
           # Download PyTorch wheel built for the same CUDA version
           export TORCH_CUDA_VERSION=$MATRIX_CUDA_VERSION
@@ -97,19 +96,19 @@ jobs:
             # pip install --no-cache-dir --pre torch==${{ inputs.torch-version }} --index-url https://download.pytorch.org/whl/nightly/cu${TORCH_CUDA_VERSION}
             # Can't use --no-deps because we need cudnn etc.
             # Hard-coding this version of pytorch-triton for torch 2.9.0.dev20250904
-            pip install jinja2
+            python3 -m pip install jinja2
             TRITON_URL=https://download.pytorch.org/whl/nightly/pytorch_triton-3.4.0%2Bgitf7888497-cp${MATRIX_PYTHON_VERSION}-cp${MATRIX_PYTHON_VERSION}-${PLAT}.whl
             TORCH_URL=https://download.pytorch.org/whl/nightly/cu${TORCH_CUDA_VERSION}/torch-${{ inputs.torch-version }}%2Bcu${TORCH_CUDA_VERSION}-cp${MATRIX_PYTHON_VERSION}-cp${MATRIX_PYTHON_VERSION}-manylinux_2_28_$(uname -m).whl
-            pip install --no-cache-dir --pre "${TRITON_URL}"
-            pip install --no-cache-dir --pre "${TORCH_URL}"
+            python3 -m pip install --no-cache-dir --pre "${TRITON_URL}"
+            python3 -m pip install --no-cache-dir --pre "${TORCH_URL}"
           else
-            pip install --no-cache-dir torch==${{ inputs.torch-version }} --index-url https://download.pytorch.org/whl/cu${TORCH_CUDA_VERSION}
+            python3 -m pip install --no-cache-dir torch==${{ inputs.torch-version }} --index-url https://download.pytorch.org/whl/cu${TORCH_CUDA_VERSION}
           fi
           nvcc --version
-          python --version
-          python -c "import torch; print('PyTorch:', torch.__version__)"
-          python -c "import torch; print('CUDA:', torch.version.cuda)"
-          python -c "from torch.utils import cpp_extension; print (cpp_extension.CUDA_HOME)"
+          python3 --version
+          python3 -c "import torch; print('PyTorch:', torch.__version__)"
+          python3 -c "import torch; print('CUDA:', torch.version.cuda)"
+          python3 -c "from torch.utils import cpp_extension; print (cpp_extension.CUDA_HOME)"
 
       - name: Build wheel
         id: build_wheel
@@ -118,8 +117,8 @@ jobs:
           # We want setuptools >= 49.6.0 otherwise we can't compile the extension if system CUDA version is 11.7 and pytorch cuda version is 11.6
           # https://github.com/pytorch/pytorch/blob/664058fa83f1d8eede5d66418abff6e20bd76ca8/torch/utils/cpp_extension.py#L810
           # However this still fails so I'm using a newer version of setuptools
-          pip install setuptools==75.8.0
-          pip install ninja packaging wheel
+          python3 -m pip install setuptools==75.8.0
+          python3 -m pip install ninja packaging wheel
           export PATH=/usr/local/nvidia/bin:/usr/local/nvidia/lib64:$PATH
           export LD_LIBRARY_PATH=/usr/local/nvidia/lib64:/usr/local/cuda/lib64:$LD_LIBRARY_PATH
           # Limit MAX_JOBS otherwise the github runner goes OOM
@@ -132,7 +131,7 @@ jobs:
 
           # 5h timeout since GH allows max 6h and we want some buffer
           EXIT_CODE=0
-          timeout 5h python setup.py bdist_wheel --dist-dir=dist || EXIT_CODE=$?
+          timeout 5h python3 setup.py bdist_wheel --dist-dir=dist || EXIT_CODE=$?
 
           if [ $EXIT_CODE -eq 0 ]; then
             tmpname=cu${WHEEL_CUDA_VERSION}torch${MATRIX_TORCH_VERSION}cxx11abi${{ inputs.cxx11_abi }}
