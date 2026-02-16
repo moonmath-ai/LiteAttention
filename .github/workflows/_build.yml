@@ -137,7 +137,7 @@ jobs:
           if [ $EXIT_CODE -eq 0 ]; then
             tmpname=cu${WHEEL_CUDA_VERSION}torch${MATRIX_TORCH_VERSION}cxx11abi${{ inputs.cxx11_abi }}
             wheel_name=$(ls dist/*whl | xargs -n 1 basename | sed "s/-/+$tmpname-/2")
-            ls dist/*whl |xargs -I {} mv {} dist/${wheel_name}
+            ls dist/*whl | xargs -I {} mv {} dist/${wheel_name}
             echo "wheel_name=${wheel_name}" >> $GITHUB_ENV
           fi
 
