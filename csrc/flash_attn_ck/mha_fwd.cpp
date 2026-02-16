@@ -12,7 +12,8 @@ fmha_fwd_traits get_ck_fmha_fwd_traits(const mask_info &mask,
                                        int head_size,
                                        bool has_dropout,
                                        bool has_lse,
-                                       bool enable_alibi)
+                                       bool enable_alibi,
+                                       bool is_lite)
 {
     return fmha_fwd_traits{head_size,
                            head_size,
@@ -24,7 +25,9 @@ fmha_fwd_traits get_ck_fmha_fwd_traits(const mask_info &mask,
                            enable_alibi ? bias_enum::alibi : bias_enum::no_bias,
                            has_lse,
                            has_dropout,
-                           false}; // do_fp8_static_quant
+                           false, // do_fp8_static_quant
+                           false, // skip_min_seqlen_q
+                           is_lite};
 }
 
 fmha_fwd_args get_ck_fmha_fwd_args(bool has_lse,
@@ -47,7 +50,11 @@ fmha_fwd_args get_ck_fmha_fwd_args(bool has_lse,
                                    at::Tensor dropout_randval,
                                    float softmax_scale,
                                    float p_dropout,
-                                   std::pair<uint64_t*, uint64_t*> drop_seed_offset)
+                                   std::pair<uint64_t*, uint64_t*> drop_seed_offset,
+                                   const void* attn_read_list_ptr,
+                                   void* attn_write_list_ptr,
+                                   float threshold,
+                                   bool reverse_skip_list)
 {
     // q: (batch_size, seqlen_q, nheads, d)
     // k: (batch_size, seqlen_k, nheads_k, d)
@@ -139,7 +146,11 @@ fmha_fwd_args get_ck_fmha_fwd_args(bool has_lse,
                          0, // min_seqlen_q
                          p_dropout,
                          has_dropout_randval,
-                         drop_seed_offset};
+                         drop_seed_offset,
+                         attn_read_list_ptr,
+                         attn_write_list_ptr,
+                         threshold,
+                         reverse_skip_list};
 }
 
 std::vector<at::Tensor>
@@ -155,7 +166,11 @@ mha_fwd(at::Tensor &q,                            // batch_size x seqlen_q x num
         int window_size_right,
         const float /*softcap*/,
         const bool return_dropout_randval,
-        std::optional<at::Generator> gen_)
+        std::optional<at::Generator> gen_,
+        std::optional<at::Tensor> &attn_read_list,
+        std::optional<at::Tensor> &attn_write_list,
+        float threshold,
+        bool reverse_skip_list)
 {
     auto q_dtype = q.dtype();
     TORCH_CHECK(q_dtype == torch::kFloat16 || q_dtype == torch::kBFloat16,
@@ -275,6 +290,10 @@ mha_fwd(at::Tensor &q,                            // batch_size x seqlen_q x num
         auto stream = at::cuda::getCurrentHIPStream().stream();
         ck_tile::stream_config stream_config{stream};
 
+        bool is_lite = attn_read_list.has_value();
+        const void* attn_read_list_ptr = is_lite ? attn_read_list.value().data_ptr() : nullptr;
+        void* attn_write_list_ptr = (is_lite && attn_write_list.has_value()) ? attn_write_list.value().data_ptr() : nullptr;
+
         auto traits =
             get_ck_fmha_fwd_traits(
                 mask,
@@ -282,7 +301,8 @@ mha_fwd(at::Tensor &q,                            // batch_size x seqlen_q x num
                 head_size,
                 has_dropout,
                 has_lse,
-                alibi_slopes_.has_value());
+                alibi_slopes_.has_value(),
+                is_lite);
 
         auto args =
             get_ck_fmha_fwd_args(
@@ -304,7 +324,11 @@ mha_fwd(at::Tensor &q,                            // batch_size x seqlen_q x num
                 p,
                 softmax_scale,
                 p_dropout,
-                drop_seed_offset);
+                drop_seed_offset,
+                attn_read_list_ptr,
+                attn_write_list_ptr,
+                threshold,
+                reverse_skip_list);
 
         float t = fmha_fwd(traits, args, stream_config);
         TORCH_CHECK(t >= 0, "invalid argument for fmha_fwd");

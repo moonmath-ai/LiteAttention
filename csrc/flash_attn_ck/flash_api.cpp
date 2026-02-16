@@ -17,7 +17,11 @@ mha_fwd(at::Tensor &q,                            // batch_size x seqlen_q x num
         int window_size_right,
         const float softcap,
         const bool return_softmax,
-        std::optional<at::Generator> gen_);
+        std::optional<at::Generator> gen_,
+        std::optional<at::Tensor> &attn_read_list,
+        std::optional<at::Tensor> &attn_write_list,
+        float threshold,
+        bool reverse_skip_list);
 
 std::vector<at::Tensor>
 mha_varlen_fwd(at::Tensor &q,                               // total_q x num_heads x head_size, total_q := \sum_{i=0}^{b} s_i
@@ -114,9 +118,34 @@ mha_fwd_kvcache(at::Tensor &q,                                     // batch_size
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
 {
         m.doc() = "FlashAttention";
-        m.def("fwd", &mha_fwd, "Forward pass");
+        m.def("fwd", &mha_fwd, "Forward pass",
+              py::arg("q"),
+              py::arg("k"),
+              py::arg("v"),
+              py::arg("out_") = std::nullopt,
+              py::arg("alibi_slopes_") = std::nullopt,
+              py::arg("p_dropout") = 0.0,
+              py::arg("softmax_scale") = 0.0,
+              py::arg("is_causal") = false,
+              py::arg("window_size_left") = -1,
+              py::arg("window_size_right") = -1,
+              py::arg("softcap") = 0.0,
+              py::arg("return_softmax") = false,
+              py::arg("gen_") = std::nullopt,
+              py::arg("attn_read_list") = std::nullopt,
+              py::arg("attn_write_list") = std::nullopt,
+              py::arg("threshold") = 0.0f,
+              py::arg("reverse_skip_list") = false);
         m.def("varlen_fwd", &mha_varlen_fwd, "Forward pass (variable length)");
         m.def("bwd", &mha_bwd, "Backward pass");
         m.def("varlen_bwd", &mha_varlen_bwd, "Backward pass (variable length)");
         m.def("fwd_kvcache", &mha_fwd_kvcache, "Forward pass, with KV-cache");
+        m.def("get_tile_size_fwd_sm90", [](int head_dim, int head_dim_v, bool is_causal, bool is_local, int element_size,
+                                           bool v_colmajor, bool paged_kv_non_TMA, bool softcap, bool is_skipable, bool is_int8) {
+            // Return fixed tile sizes for AMD/CK implementation
+            // Format: [kBlockM, kBlockN, MmaPV_is_RS, IntraWGOverlap]
+            // For d128, we use 128x128.
+            // TODO: Match this with generate.py logic for other head dims.
+            return std::vector<int>{128, 128, 0, 0};
+        }, "Get tile size for forward pass");
 }
