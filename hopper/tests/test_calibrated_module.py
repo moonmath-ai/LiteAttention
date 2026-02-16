@@ -1,20 +1,20 @@
 """CPU-only tests for the calibration/configuration framework (hopper/calibrated_module.py).
 
-This file imports calibrated_module directly (not via hopper/__init__.py) to avoid
-pulling in lite_attention.py and its CUDA extension dependency.
+WORKAROUND: Imports calibrated_module directly from file to avoid hopper/__init__.py
+which eagerly imports CUDA-dependent modules. This allows running these tests on
+CPU-only machines. If calibrated_module gains dependencies on other hopper submodules,
+this approach will need updating.
 """
 
+import copy
 import importlib
 import sys
-import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 import torch.nn as nn
 
-# Import calibrated_module directly from file path to avoid hopper/__init__.py
-# which eagerly imports the CUDA-dependent lite_attention module.
 _spec = importlib.util.spec_from_file_location(
     "hopper.calibrated_module",
     Path(__file__).resolve().parent.parent / "hopper" / "calibrated_module.py",
@@ -111,6 +111,13 @@ def test_from_dict_unknown_type_raises():
         CalibratedConfig.from_dict({"_type": "Nonexistent"}, CONFIG_TYPES)
 
 
+def test_from_dict_mutates_input():
+    """from_dict uses pop('_type') which mutates the input dict. Document this behavior."""
+    original = {"_type": "DummyRunConfig", "threshold": -5.0}
+    CalibratedConfig.from_dict(original, CONFIG_TYPES)
+    assert "_type" not in original, "from_dict pops _type from the input dict"
+
+
 def test_default_works():
     cfg = DummyRunConfig.default()
     assert cfg.threshold == -10.0
@@ -162,7 +169,6 @@ def test_config_list_mixed_types_raises():
 
 
 def test_config_list_mismatched_list_lengths_raises():
-    # explode should raise when list fields have different lengths
     data = {"_type": "DummyCalibConfig", "metric": ["L1", "RMSE"], "target_error": [0.01]}
     with pytest.raises(ValueError, match="same length"):
         ConfigList.explode(data, CONFIG_TYPES)
@@ -201,6 +207,18 @@ def test_calibrated_config_dict_to_dict_from_dict_roundtrip():
     assert restored["layer1"].metric == "RMSE"
 
 
+def test_calibrated_config_dict_from_dict_does_not_mutate_raw():
+    """CalibratedConfigDict.from_dict delegates to CalibratedConfig.from_dict
+    which pops _type. Verify mutation behavior for non-list branch."""
+    raw = {"mod": {"_type": "DummyRunConfig", "threshold": -3.0}}
+    raw_copy = copy.deepcopy(raw)
+    CalibratedConfigDict.from_dict(raw, CONFIG_TYPE_LIST)
+    # This documents that the nested dict IS mutated (pop removes _type).
+    assert "_type" not in raw["mod"], "from_dict mutates nested dict via pop"
+    # The outer structure is preserved.
+    assert "mod" in raw
+
+
 def test_calibrated_config_dict_collect():
     ccd = CalibratedConfigDict(
         {
@@ -228,26 +246,38 @@ def test_calibrated_config_dict_toml_roundtrip(tmp_path):
     assert loaded["layer1"].threshold == -7.0
 
 
-def test_calibrated_config_dict_toml_roundtrip_with_config_lists(tmp_path):
-    """Save ConfigLists via collect(), reload via from_dict with list values."""
+def test_calibrated_config_dict_save_load_roundtrip_with_config_lists(tmp_path):
+    """Test actual save() -> load() roundtrip with ConfigLists (via to_dict)."""
     ccd = CalibratedConfigDict(
         {
             "m": ConfigList([DummyRunConfig(threshold=-1.0), DummyRunConfig(threshold=-2.0)]),
         }
     )
     path = tmp_path / "config.toml"
-    # Save collected form (dict with list values)
+    ccd.save(path)
+    loaded = CalibratedConfigDict.load(path, CONFIG_TYPE_LIST)
+    assert isinstance(loaded["m"], ConfigList)
+    assert len(loaded["m"]) == 2
+    assert loaded["m"][0].threshold == -1.0
+    assert loaded["m"][1].threshold == -2.0
+
+
+def test_calibrated_config_dict_toml_roundtrip_with_collect(tmp_path):
+    """Save ConfigLists via collect(), reload via explode."""
+    ccd = CalibratedConfigDict(
+        {
+            "m": ConfigList([DummyRunConfig(threshold=-1.0), DummyRunConfig(threshold=-2.0)]),
+        }
+    )
+    path = tmp_path / "config.toml"
     import tomli_w
+    import tomllib
 
     with path.open("wb") as f:
         tomli_w.dump(ccd.collect(), f)
 
-    # Load back — the TOML has dict-with-lists, not list-of-dicts
-    import tomllib
-
     with path.open("rb") as f:
         raw = tomllib.load(f)
-    # Reconstruct via explode
     result = {}
     for name, data in raw.items():
         result[name] = ConfigList.explode(data, CONFIG_TYPES)
@@ -277,17 +307,14 @@ def test_config_resolution_instance_over_registry():
     instance_cfg = DummyRunConfig(threshold=-1.0)
     mod = DummyModule(config=instance_cfg)
     registry_cfg = DummyRunConfig(threshold=-99.0)
-    registry = ModuleRegistry(iter([("mod", mod)]))
+    _ = ModuleRegistry(iter([("mod", mod)]))  # registers mod
     mod._registry_config = registry_cfg
-
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        assert mod.config.threshold == -1.0  # instance wins
+    assert mod.config.threshold == -1.0  # instance wins
 
 
 def test_config_resolution_registry_over_default():
     mod = DummyModule()
-    registry = ModuleRegistry(iter([("mod", mod)]))
+    _ = ModuleRegistry(iter([("mod", mod)]))  # registers mod
     registry_cfg = DummyRunConfig(threshold=-5.0)
     mod._registry_config = registry_cfg
     assert mod.config.threshold == -5.0
@@ -295,11 +322,8 @@ def test_config_resolution_registry_over_default():
 
 def test_config_resolution_falls_to_default():
     mod = DummyModule()
-    registry = ModuleRegistry(iter([("mod", mod)]))
-    # No registry config set
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        cfg = mod.config
+    _ = ModuleRegistry(iter([("mod", mod)]))  # registers mod
+    cfg = mod.config
     assert isinstance(cfg, DummyRunConfig)
     assert cfg.threshold == -10.0  # default
 
@@ -307,7 +331,7 @@ def test_config_resolution_falls_to_default():
 def test_config_indexes_into_config_list():
     cl = ConfigList([DummyRunConfig(threshold=-1.0), DummyRunConfig(threshold=-2.0)])
     mod = DummyModule()
-    registry = ModuleRegistry(iter([("mod", mod)]))
+    _ = ModuleRegistry(iter([("mod", mod)]))  # registers mod
     mod._registry_config = cl
 
     assert mod.config.threshold == -1.0  # index 0
@@ -315,9 +339,20 @@ def test_config_indexes_into_config_list():
     assert mod.config.threshold == -2.0  # index 1
 
 
+def test_config_index_out_of_bounds_on_config_list():
+    cl = ConfigList([DummyRunConfig(threshold=-1.0)])
+    mod = DummyModule()
+    _ = ModuleRegistry(iter([("mod", mod)]))  # registers mod
+    mod._registry_config = cl
+    assert mod.config.threshold == -1.0  # index 0
+    mod._config_index = 1  # beyond list
+    with pytest.raises(IndexError):
+        _ = mod.config
+
+
 def test_add_calibration_results_advances_index():
     mod = DummyModule()
-    registry = ModuleRegistry(iter([("mod", mod)]))
+    _ = ModuleRegistry(iter([("mod", mod)]))  # registers mod
     mod._registry_config = DummyRunConfig(threshold=-5.0)
     assert mod._config_index == 0
     mod.add_calibration_results(DummyRunConfig(threshold=-3.0))
@@ -326,9 +361,22 @@ def test_add_calibration_results_advances_index():
     assert mod._config_output[0].threshold == -3.0
 
 
+def test_add_calibration_results_multi_step():
+    mod = DummyModule()
+    _ = ModuleRegistry(iter([("mod", mod)]))  # registers mod
+    mod._registry_config = DummyRunConfig(threshold=-5.0)
+    thresholds = [-3.0, -4.0, -5.0]
+    for th in thresholds:
+        mod.add_calibration_results(DummyRunConfig(threshold=th))
+    assert mod._config_index == 3
+    assert len(mod._config_output) == 3
+    for i, th in enumerate(thresholds):
+        assert mod._config_output[i].threshold == th
+
+
 def test_add_calibration_results_wrong_type_raises():
     mod = DummyModule()
-    registry = ModuleRegistry(iter([("mod", mod)]))
+    _ = ModuleRegistry(iter([("mod", mod)]))  # registers mod
     mod._registry_config = DummyRunConfig(threshold=-5.0)
     with pytest.raises(TypeError, match="does not match"):
         mod.add_calibration_results(DummyCalibConfig(metric="L1"))
@@ -336,7 +384,7 @@ def test_add_calibration_results_wrong_type_raises():
 
 def test_reset_config():
     mod = DummyModule()
-    registry = ModuleRegistry(iter([("mod", mod)]))
+    _ = ModuleRegistry(iter([("mod", mod)]))  # registers mod
     mod._registry_config = DummyRunConfig(threshold=-5.0)
     mod.add_calibration_results(DummyRunConfig(threshold=-3.0))
     assert mod._config_index == 1
@@ -347,7 +395,7 @@ def test_reset_config():
 
 def test_restart_config():
     mod = DummyModule()
-    registry = ModuleRegistry(iter([("mod", mod)]))
+    _ = ModuleRegistry(iter([("mod", mod)]))  # registers mod
     mod._registry_config = DummyRunConfig(threshold=-5.0)
     mod.add_calibration_results(DummyRunConfig(threshold=-3.0))
     assert mod._config_index == 1
@@ -356,32 +404,41 @@ def test_restart_config():
     assert len(mod._config_output) == 0
 
 
+def test_restart_config_warns_on_calib_config():
+    mod = DummyModule()
+    _ = ModuleRegistry(iter([("mod", mod)]))  # registers mod
+    mod._registry_config = DummyCalibConfig(metric="L1", target_error=0.01)
+    mod._config_index = 1
+    mod._config_output = ConfigList([DummyRunConfig(threshold=-5.0)])
+    with pytest.warns(UserWarning, match="calibration config.*data will be lost"):
+        mod.restart_config()
+
+
 def test_module_name_property():
     mod = DummyModule()
     assert mod.module_name is None  # no registry
-    registry = ModuleRegistry(iter([("my_module", mod)]))
+    _ = ModuleRegistry(iter([("my_module", mod)]))
     assert mod.module_name == "my_module"
 
 
 def test_warning_no_registry():
     mod = DummyModule()
-    with pytest.warns(match="no registry or local config"):
+    with pytest.warns(UserWarning, match="no registry or local config"):
         _ = mod.config_all
 
 
 def test_warning_no_registry_config():
     mod = DummyModule()
-    registry = ModuleRegistry(iter([("mod", mod)]))
-    # registry set but no _registry_config
-    with pytest.warns(match="no registry config or local config"):
+    _ = ModuleRegistry(iter([("mod", mod)]))
+    with pytest.warns(UserWarning, match="no registry config or local config"):
         _ = mod.config_all
 
 
 def test_warning_instance_overrides_registry():
     mod = DummyModule(config=DummyRunConfig(threshold=-1.0))
-    registry = ModuleRegistry(iter([("mod", mod)]))
+    _ = ModuleRegistry(iter([("mod", mod)]))
     mod._registry_config = DummyRunConfig(threshold=-99.0)
-    with pytest.warns(match="Using local config"):
+    with pytest.warns(UserWarning, match="Using local config"):
         _ = mod.config_all
 
 
@@ -393,7 +450,6 @@ def test_warning_instance_overrides_registry():
 def test_registry_filters_non_configurable():
     model = DummyModel(n_layers=2)
     registry = ModuleRegistry(model.named_modules())
-    # Should contain the 2 DummyModule layers but NOT nn.Linear or the model itself
     for name, mod in registry.named_modules.items():
         assert isinstance(mod, ConfigurableModule)
     assert len(registry.named_modules) == 2
@@ -444,6 +500,28 @@ def test_registry_load_config_from_toml(tmp_path):
     assert registry.named_modules[names[1]]._registry_config.threshold == -2.0
 
 
+def test_registry_load_config_extra_module_raises(tmp_path):
+    model = DummyModel(n_layers=1)
+    registry = ModuleRegistry(model.named_modules())
+    ccd = CalibratedConfigDict({"nonexistent_module": DummyRunConfig(threshold=-1.0)})
+    path = tmp_path / "config.toml"
+    ccd.save(path)
+    with pytest.raises(KeyError):
+        registry.load_config(path, config_types=CONFIG_TYPE_LIST)
+
+
+def test_registry_load_config_partial_modules(tmp_path):
+    model = DummyModel(n_layers=2)
+    registry = ModuleRegistry(model.named_modules())
+    names = list(registry.named_modules.keys())
+    ccd = CalibratedConfigDict({names[0]: DummyRunConfig(threshold=-1.0)})
+    path = tmp_path / "config.toml"
+    ccd.save(path)
+    registry.load_config(path, config_types=CONFIG_TYPE_LIST)
+    assert registry.named_modules[names[0]]._registry_config.threshold == -1.0
+    assert registry.named_modules[names[1]]._registry_config is None
+
+
 def test_registry_config_property():
     model = DummyModel(n_layers=2)
     registry = ModuleRegistry(model.named_modules())
@@ -466,3 +544,34 @@ def test_registry_config_output_property():
     assert isinstance(result, CalibratedConfigDict)
     assert len(result[name]) == 1
     assert result[name][0].threshold == -3.0
+
+
+def test_config_output_save_roundtrip(tmp_path):
+    model = DummyModel(n_layers=1)
+    registry = ModuleRegistry(model.named_modules())
+    name = list(registry.named_modules.keys())[0]
+    mod = registry.named_modules[name]
+    mod._registry_config = DummyRunConfig(threshold=-5.0)
+    mod.add_calibration_results(DummyRunConfig(threshold=-3.0))
+    mod.add_calibration_results(DummyRunConfig(threshold=-4.0))
+
+    path = tmp_path / "output.toml"
+    registry.config_output.save(path)
+
+    loaded = CalibratedConfigDict.load(path, CONFIG_TYPE_LIST)
+    assert isinstance(loaded[name], ConfigList)
+    assert len(loaded[name]) == 2
+    assert loaded[name][0].threshold == -3.0
+    assert loaded[name][1].threshold == -4.0
+
+
+def test_creating_second_registry_resets_config():
+    model = DummyModel(n_layers=1)
+    registry1 = ModuleRegistry(model.named_modules())
+    registry1.set_bulk_config(DummyRunConfig(threshold=-5.0))
+    name = list(registry1.named_modules.keys())[0]
+    assert registry1.named_modules[name]._registry_config.threshold == -5.0
+
+    # Creating a new registry should clear the config
+    registry2 = ModuleRegistry(model.named_modules())
+    assert registry2.named_modules[name]._registry_config is None

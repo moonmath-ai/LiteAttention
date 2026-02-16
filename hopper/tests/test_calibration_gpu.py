@@ -1,24 +1,13 @@
 """GPU-required tests for LiteAttention calibration integration."""
 
-import os
-import warnings
-from pathlib import Path
-
 import pytest
 import torch
 import torch.nn as nn
 
-# Enable debug mode to allow non-negative thresholds in tests
-os.environ["LITE_ATTENTION_DEBUG"] = "TRUE"
-
 from lite_attention import LiteAttention
 from lite_attention.calibrated_module import (
-    CalibratedCalibConfig,
     CalibratedConfigDict,
-    CalibratedRunConfig,
     ConfigList,
-    ConfigurableModule,
-    ModuleRegistry,
 )
 from lite_attention.lite_attention import (
     LiteAttentionCalibConfig,
@@ -26,11 +15,7 @@ from lite_attention.lite_attention import (
     LiteAttentionRunConfig,
 )
 
-pytestmark = [
-    pytest.mark.filterwarnings("ignore:Module has no registry. Using local config."),
-    pytest.mark.filterwarnings("ignore:Module has no registry config. Using local config."),
-    pytest.mark.filterwarnings("ignore:usage of.*is deprecated"),
-]
+pytestmark = [pytest.mark.gpu]
 
 
 # ---------------------------------------------------------------------------
@@ -96,9 +81,7 @@ def warmup(attn, q, k, v, n=1):
 
 def test_constructor_threshold_creates_run_config():
     attn = LiteAttention(threshold=-5.0)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        cfg = attn.config
+    cfg = attn.config
     assert isinstance(cfg, LiteAttentionRunConfig)
     assert cfg.threshold == -5.0
 
@@ -106,9 +89,7 @@ def test_constructor_threshold_creates_run_config():
 def test_constructor_config_param():
     cfg = LiteAttentionRunConfig(threshold=-3.0)
     attn = LiteAttention(config=cfg)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        assert attn.config.threshold == -3.0
+    assert attn.config.threshold == -3.0
 
 
 def test_constructor_threshold_and_config_raises():
@@ -118,18 +99,14 @@ def test_constructor_threshold_and_config_raises():
 
 def test_threshold_property_reads_config():
     attn = LiteAttention(threshold=-7.0)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        assert attn.threshold == -7.0
+    assert attn.threshold == -7.0
 
 
 def test_set_threshold_warns_deprecated():
     attn = LiteAttention(threshold=-5.0)
-    with pytest.warns(match="deprecated"):
+    with pytest.warns(UserWarning, match="deprecated"):
         attn.set_threshold(-8.0)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        assert attn.threshold == -8.0
+    assert attn.threshold == -8.0
 
 
 def test_forward_records_calibration_results(qkv):
@@ -159,7 +136,7 @@ def test_per_timestep_config_list(qkv):
             self.attn = LiteAttention()
 
     m = _M()
-    registry = LiteAttentionRegistry.from_model(m, mode="const", threshold=-99.0)
+    _ = LiteAttentionRegistry.from_model(m, mode="const", threshold=-99.0)
     attn = m.attn
     # Override the registry config with our per-timestep list
     attn._registry_config = cl
@@ -168,7 +145,6 @@ def test_per_timestep_config_list(qkv):
         torch.cuda.synchronize()
         attn(q, k, v)
         torch.cuda.synchronize()
-        # The recorded result should use the threshold from that timestep
         assert attn._config_output[i].threshold == expected_th
 
 
@@ -194,14 +170,14 @@ def test_registry_from_model_const(simple_model):
 
 
 def test_registry_from_model_const_default_warns(simple_model):
-    with pytest.warns(match="no 'threshold'"):
+    with pytest.warns(UserWarning, match="no 'threshold'"):
         registry = LiteAttentionRegistry.from_model(simple_model, mode="const")
     for mod in registry.named_modules.values():
         assert mod._registry_config.threshold == LiteAttentionRunConfig.default().threshold
 
 
 def test_registry_from_model_default_mode_warns(simple_model):
-    with pytest.warns(match="No 'mode'"):
+    with pytest.warns(UserWarning, match="No 'mode'"):
         LiteAttentionRegistry.from_model(simple_model)
 
 
@@ -221,7 +197,6 @@ def test_registry_from_model_calib_missing_filename_raises(simple_model):
 
 
 def test_registry_from_model_load(simple_model, tmp_toml):
-    # First save a config
     registry = LiteAttentionRegistry.from_model(simple_model, mode="const", threshold=-4.0)
     names = list(registry.named_modules.keys())
     ccd = CalibratedConfigDict(
@@ -229,7 +204,6 @@ def test_registry_from_model_load(simple_model, tmp_toml):
     )
     ccd.save(tmp_toml)
 
-    # Now load it
     model2 = SimpleModel()
     registry2 = LiteAttentionRegistry.from_model(model2, mode="load", filename=tmp_toml)
     for mod in registry2.named_modules.values():
@@ -237,7 +211,7 @@ def test_registry_from_model_load(simple_model, tmp_toml):
 
 
 def test_registry_force_clears_instance_configs():
-    model = SimpleModel(threshold=-5.0)  # sets instance config via constructor
+    model = SimpleModel(threshold=-5.0)
     registry = LiteAttentionRegistry.from_model(model, mode="const", threshold=-3.0, force=True)
     for mod in registry.named_modules.values():
         assert mod._instance_config is None
@@ -259,7 +233,6 @@ def test_calibration_save(qkv, tmp_toml):
         calib_config={"target_error": 0.01, "metric": "L1"},
     )
 
-    # Run a few forward passes
     for _ in range(3):
         torch.cuda.synchronize()
         for mod in registry.named_modules.values():
@@ -269,7 +242,6 @@ def test_calibration_save(qkv, tmp_toml):
     registry.save_if_calib()
     assert tmp_toml.exists()
 
-    # Verify TOML contains valid thresholds
     loaded = CalibratedConfigDict.load(tmp_toml, [LiteAttentionRunConfig])
     for name in registry.named_modules:
         assert name in loaded
@@ -313,30 +285,39 @@ def test_calibration_save_then_load(qkv, tmp_toml):
         filename=tmp_toml,
         calib_config={"target_error": 0.01, "metric": "L1"},
     )
-    name = list(registry.named_modules.keys())[0]
-    mod = registry.named_modules[name]
-    torch.cuda.synchronize()
-    mod(q, k, v)
-    torch.cuda.synchronize()
+    # Run forward on all modules
+    for mod in registry.named_modules.values():
+        torch.cuda.synchronize()
+        mod(q, k, v)
+        torch.cuda.synchronize()
+
+    saved_thresholds = {
+        name: mod._config_output[0].threshold
+        for name, mod in registry.named_modules.items()
+    }
     registry.save_if_calib()
 
-    # Now load and verify
+    # Load and verify values match
     model2 = SimpleModel()
     registry2 = LiteAttentionRegistry.from_model(model2, mode="load", filename=tmp_toml)
-    for n, mod2 in registry2.named_modules.items():
-        assert mod2._registry_config is not None
+    for name, mod2 in registry2.named_modules.items():
+        cfg = mod2._registry_config
+        assert cfg is not None
+        if isinstance(cfg, ConfigList):
+            assert cfg[0].threshold == saved_thresholds[name]
+        else:
+            assert cfg.threshold == saved_thresholds[name]
 
 
 def test_save_if_calib_noop_for_const():
     model = SimpleModel()
     registry = LiteAttentionRegistry.from_model(model, mode="const", threshold=-5.0)
-    # Should not raise or do anything
     registry.save_if_calib()
 
 
 def test_calib_default_config_warns():
     model = SimpleModel()
-    with pytest.warns(match="no 'calib_config'"):
+    with pytest.warns(UserWarning, match="no 'calib_config'"):
         LiteAttentionRegistry.from_model(
             model, mode="calib", filename="/tmp/dummy.toml"
         )
