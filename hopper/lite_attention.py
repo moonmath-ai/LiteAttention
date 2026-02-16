@@ -79,6 +79,7 @@ import torch
 import os
 import math
 import typing
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Tuple, Union
@@ -87,7 +88,7 @@ import structlog
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .calibrated_module import (
+from .calibrated import (
     CalibratedCalibConfig,
     CalibratedRunConfig,
     ConfigurableModule,
@@ -317,7 +318,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
         sim = F.cosine_similarity(x.reshape(1, -1), xx.reshape(1, -1)).item()
         l1 = ((x - xx).abs().sum() / xx.abs().sum()).item()
         rmse = torch.sqrt(torch.mean((x - xx) ** 2)).item()
-        return {"Cossim": sim, "L1": l1, "RMSE": rmse}
+        return {"Cossim": 1.0 - sim, "L1": l1, "RMSE": rmse}
 
     @staticmethod
     def get_MN(head_dim, dtype, v_colmajor=False, is_skipable=True):
@@ -803,7 +804,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
         >>> # Force computation for positions [0, 128) and [500, 640) (exclusive end)
         >>> output = lite_attn(q, k, v, must_do_list=[0, 128, 500, 640])
         """
-        cfg = self.config
+        cfg = self.config if self.enable_skipping else None
 
         # Get read and write lists (internal mask management)
         read_list, write_list = self._get_read_write_lists(query, key, value, must_skip_list)
@@ -821,7 +822,9 @@ class LiteAttention(nn.Module, ConfigurableModule):
             (1.44269504089 / math.sqrt(head_dim)) if scale is None else (1.44269504089 * scale)
         ) if self.use_int8 else scale
 
-        if isinstance(cfg, LiteAttentionCalibConfig):
+        if not self.enable_skipping:
+            threshold = 0.0  # unused
+        elif isinstance(cfg, LiteAttentionCalibConfig):
             temp_list = read_list.clone()
 
             def calibration_step(curr_th):
@@ -881,7 +884,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
                     return low
 
                 # binary search between high (error > target) and low (error <= target)
-                while True:
+                for _ in range(30):
                     curr_th = (low + high) / 2
                     curr_error = calibration_step(curr_th)
                     error_diff = curr_error - cfg.target_error
@@ -891,6 +894,8 @@ class LiteAttention(nn.Module, ConfigurableModule):
                         high = curr_th
                     else:
                         low = curr_th
+                log.warning("binary search did not converge, using midpoint", threshold=curr_th, error=curr_error, target=cfg.target_error)
+                return curr_th
 
             threshold = find_threshold(low=-20.0, high=0.0)
         else:
@@ -914,7 +919,8 @@ class LiteAttention(nn.Module, ConfigurableModule):
         )
 
         # Record calibration results and advance timestep
-        self.add_calibration_results(LiteAttentionRunConfig(threshold=threshold))
+        if self.enable_skipping:
+            self.add_calibration_results(LiteAttentionRunConfig(threshold=threshold))
 
         # Calculate and store statistics if enabled
         if self.enable_skipping and os.getenv("LITE_ATTENTION_VERBOSE", "FALSE") != "FALSE":
@@ -955,8 +961,19 @@ class LiteAttention(nn.Module, ConfigurableModule):
         self.verbose_reinitialization = False
         self._last_percentage = 0.0
         self._last_num_heads = None
-        self._reset_skip_state_calibration()
-    
+        self.restart_config()
+
+    @property
+    def threshold(self):
+        if isinstance(self.config, LiteAttentionRunConfig):
+            return self.config.threshold
+        else:
+            raise RuntimeError("Can't access threshold for a calibreation config")
+
+    @threshold.setter
+    def threshold(self, value):
+        return self.set_threshold(value)
+
     def set_threshold(self, threshold: float):
         """
         Update the threshold value for skip list optimization.
@@ -984,6 +1001,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
         Changing the threshold does not reset the skip list state. The new threshold
         will be applied starting from the next forward pass.
         """
+        warnings.warn("usage of `LiteAttention.threshold = value` and `LiteAttention.set_threshold` is deprecated. Please use a module registry")
         if threshold >= 0 and os.getenv("LITE_ATTENTION_DEBUG", "FALSE") == "FALSE":
             raise ValueError("threshold must be negative when debug mode is not enabled")
 
@@ -1336,7 +1354,7 @@ class LiteAttentionRegistry(ModuleRegistry):
     def from_model(
         cls,
         model,
-        mode: str,
+        mode: str | None = None,
         threshold: float | None = None,
         filename: str | Path | None = None,
         calib_config: dict | None = None,
@@ -1346,7 +1364,7 @@ class LiteAttentionRegistry(ModuleRegistry):
         Create a registry from a model and configure all its LiteAttention modules.
 
         Args:
-            model: A PyTorch model containing LiteAttention modules.
+            model: `nn.Module` that contains LiteAttention modules.
             mode: Configuration mode - 'const', 'load', or 'calib'.
             threshold: Threshold value for mode='const'.
             filename: Path to config file for mode='load' (input) or
@@ -1361,6 +1379,9 @@ class LiteAttentionRegistry(ModuleRegistry):
         """
         if filename is not None:
             filename = Path(filename)
+        if mode is None:
+            warnings.warn("No 'mode' supplied for the registry. Using a 'const' mode", stacklevel=2)
+            mode = 'const'
 
         registry = cls(model.named_modules())
         registry._mode = mode
@@ -1379,8 +1400,11 @@ class LiteAttentionRegistry(ModuleRegistry):
 
         if mode == "const":
             if threshold is None:
-                raise ValueError("threshold is required for mode='const'")
-            registry.set_bulk_config(LiteAttentionRunConfig(threshold=threshold))
+                warnings.warn("no 'threshold' specified for mode 'const'. Using default value", stacklevel=2)
+                cfg = LiteAttentionRunConfig.default()
+            else:
+                cfg = LiteAttentionRunConfig(threshold=threshold)
+            registry.set_bulk_config(cfg)
         elif mode == "load":
             if filename is None:
                 raise ValueError("filename is required for mode='load'")
@@ -1392,7 +1416,8 @@ class LiteAttentionRegistry(ModuleRegistry):
             if filename is None:
                 raise ValueError("filename is required for mode='calib'")
             if calib_config is None:
-                raise ValueError("calib_config is required for mode='calib'")
+                warnings.warn("no 'calib_config' specified for mode='calib'. Using default values", stacklevel=2)                
+                calib_config = {}
             registry.set_bulk_config(LiteAttentionCalibConfig(**calib_config))
         else:
             raise ValueError(

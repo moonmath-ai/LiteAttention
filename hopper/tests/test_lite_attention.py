@@ -2,6 +2,9 @@ import os
 import pytest
 import torch
 from lite_attention import LiteAttention
+import warnings
+
+warnings.filterwarnings("ignore", message=r"Module has no registry. Using local config.")
 
 # Enable debug mode to allow non-negative thresholds in tests
 os.environ["LITE_ATTENTION_DEBUG"] = "TRUE"
@@ -103,8 +106,7 @@ def test_skip_all(q, k, v, head_dim, use_int8=False):
     Test that when threshold is inf, all tiles are skipped except one range.
     Expected: skip_list should contain exactly 2 entries (one range of length 1).
     """
-    attn = LiteAttention(use_int8=use_int8)
-    attn.threshold = float('inf')
+    attn = LiteAttention(use_int8=use_int8, threshold = float('inf'))
     
     # Warm up
     run_attention_warmup(attn, q, k, v)
@@ -132,8 +134,7 @@ def test_skip_nothing(q, k, v, head_dim, use_int8=False):
     Test that when threshold is -inf, no tiles are skipped.
     Expected: skip lists should remain consistent between read and write phases.
     """
-    attn = LiteAttention(use_int8=use_int8)
-    attn.threshold = float('-inf')
+    attn = LiteAttention(use_int8=use_int8, threshold = float('-inf'))
     read_list_original, _ = attn._get_read_write_lists(q, v)
     read_list_original = read_list_original.clone()
     attn._phase = 0
@@ -241,8 +242,7 @@ def test_softmax_lse_correctness(small_q, small_k, small_v, head_dim, tolerance=
     Test that softmax_lse output matches PyTorch reference implementation.
     Uses small_q/small_k/small_v fixtures to avoid OOM in reference matmul (seq_len^2).
     """
-    attn = LiteAttention(use_int8=use_int8)
-    attn.threshold = 0.0
+    attn = LiteAttention(use_int8=use_int8, threshold = 0.0)
     
     torch.cuda.synchronize()
     output_lite, lse_lite = attn(small_q, small_k, small_v, return_softmax_lse=True)
@@ -356,9 +356,8 @@ def test_rectangular_attention_skipping_twice(head_dim, batch=1, q_len=258, k_le
 
     scale = 1.0 / (head_dim ** 0.5)
 
-    attn = LiteAttention(enable_skipping=True, use_int8=use_int8)
     # Keep this near 0 to make the skip decision robust across head dims.
-    attn.threshold = -1.0
+    attn = LiteAttention(enable_skipping=True, use_int8=use_int8, threshold = -1.0)
 
     passed = True
 
@@ -411,8 +410,7 @@ def test_rectangular_attention_skipping_twice(head_dim, batch=1, q_len=258, k_le
 
 def consistency_test(q, k, v, head_dim, num_iters=10):
     """Test that the skip list is consistent between reads and writes."""
-    attn = LiteAttention()
-    attn.threshold = float(0.0)
+    attn = LiteAttention(threshold = float(0.0))
 
     previous_skip_list = None
     skip_list = None
@@ -592,15 +590,44 @@ def test_must_do_list(q, k, v, head_dim, use_int8=False):
     _, kBlockN = LiteAttention.get_MN(head_dim, element_type)
     ktiles = LiteAttention.ceil_div(seq_len, kBlockN)
 
-    # Each entry is [start0, end0, start1, end1, ...] representing ranges to compute
-    must_do_list_cases = get_must_do_list_cases(seq_len)
+    must_do_list_cases = [
+        [0, 1000, 10000, seq_len - 1],
+        [0, 5000],
+        [seq_len // 4, seq_len // 2],
+        [0, seq_len // 10, seq_len * 9 // 10, seq_len - 1],
+        [seq_len // 3, seq_len * 2 // 3],
+        [0, 2000, 5000, 7000, 10000, seq_len - 1],
+        [0, 2000, 15000, seq_len - 1],
+    ]
 
     all_passed = True
-    for case_name, must_do_list in must_do_list_cases:
-        try:
-            _test_must_do_list_single(q, k, v, head_dim, must_do_list, case_name, num_iters=10, use_int8=use_int8)
-        except AssertionError:
-            all_passed = False
+    for test_idx, must_do_list in enumerate(must_do_list_cases):
+        attn = LiteAttention(use_int8=use_int8, threshold=float("inf"))
+
+        for i in range(10):
+            torch.cuda.synchronize()
+            output = attn(q, k, v, must_do_list=must_do_list)
+            torch.cuda.synchronize()
+
+            result_list = attn.read_list
+
+            computed_tiles = 0
+            for j in range(0, len(must_do_list), 2):
+                start_seq = must_do_list[j]
+                end_seq = must_do_list[j + 1]
+                start_tile = start_seq // kBlockN
+                end_tile = LiteAttention.ceil_div(end_seq, kBlockN)
+                computed_tiles += end_tile - start_tile
+            expected_percentage = computed_tiles / ktiles
+
+            actual_percentage = attn.calc_percentage(result_list)
+            passed = abs(actual_percentage - expected_percentage) < 0.01
+
+            if not passed:
+                print(f"    Expected {expected_percentage:.2%} computed, got {actual_percentage:.2%}, expected tile count: {computed_tiles}, total tiles: {ktiles}")
+                print(f"    Must do ranges: {must_do_list}")
+
+            all_passed &= passed
 
     prefix = "INT8 " if use_int8 else ""
     print(f"  {prefix}Must-do list tests: {'✅ PASSED' if all_passed else '❌ FAILED'}")
@@ -609,8 +636,7 @@ def test_must_do_list(q, k, v, head_dim, use_int8=False):
 
 def stress_test(q, k, v, head_dim, num_iters=10, use_int8=False):
     """Stress test the attention mechanism."""
-    attn = LiteAttention(use_int8=use_int8)
-    attn.threshold = float(0.0)
+    attn = LiteAttention(use_int8=use_int8, threshold = float(0.0))
 
     output = run_attention_warmup(attn, q, k, v, 2)  # only after 2 iters we stabilize due to bi-direction
 
