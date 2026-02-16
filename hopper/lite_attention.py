@@ -81,6 +81,11 @@ import math
 import typing
 import warnings
 from dataclasses import dataclass
+
+try:
+    from typing import Self
+except ImportError:
+    from typing_extensions import Self
 from pathlib import Path
 from typing import Optional, Tuple, Union
 
@@ -88,7 +93,7 @@ import structlog
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .calibrated import (
+from .calibrated_module import (
     CalibratedCalibConfig,
     CalibratedRunConfig,
     ConfigurableModule,
@@ -109,7 +114,7 @@ class LiteAttentionRunConfig(CalibratedRunConfig):
     threshold: float
 
     @classmethod
-    def default(cls) -> typing.Self:
+    def default(cls) -> Self:
         return cls(threshold=-10.0)
 
 
@@ -1359,7 +1364,7 @@ class LiteAttentionRegistry(ModuleRegistry):
         filename: str | Path | None = None,
         calib_config: dict | None = None,
         force: bool = False,
-    ) -> typing.Self:
+    ) -> Self:
         """
         Create a registry from a model and configure all its LiteAttention modules.
 

@@ -9,8 +9,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from .config import CalibratedConfig
-from .config_dict import CalibratedConfigDict
-from .config_list import ConfigList
+from .config import CalibratedConfigDict, ConfigList
 from .module import ConfigurableModule
 
 
