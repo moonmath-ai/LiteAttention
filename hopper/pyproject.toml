@@ -35,6 +35,8 @@ dependencies = [
     "einops",
     "structlog",
     "tomli-w",
+    "tomli; python_version < '3.11'",
+    "typing_extensions; python_version < '3.11'",
 ]
 
 [project.optional-dependencies]
@@ -50,7 +52,7 @@ Homepage = "https://moonmath-ai.github.io/LiteAttention/"
 Repository = "https://github.com/moonmath-ai/LiteAttention"
 
 [tool.setuptools]
-packages = ["lite_attention", "lite_attention._internal", "lite_attention.utils", "lite_attention.calibrated"]
+packages = ["lite_attention", "lite_attention._internal", "lite_attention.utils", "lite_attention.calibrated_module"]
 license-files = ["LICENSE", "LICENSE-BSD", "LICENSE-MIT"]
 
 [tool.setuptools.package-dir]

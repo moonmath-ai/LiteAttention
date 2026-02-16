@@ -29,4 +29,5 @@ var/
 
 # Dev
 venv
+.venv
 compile_err.txt

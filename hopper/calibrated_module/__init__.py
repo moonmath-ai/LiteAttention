@@ -62,10 +62,10 @@ Quick Start
 from .config import (
     CalibratedCalibConfig,
     CalibratedConfig,
+    CalibratedConfigDict,
     CalibratedRunConfig,
+    ConfigList,
 )
-from .config_dict import CalibratedConfigDict
-from .config_list import ConfigList
 from .module import ConfigurableModule
 from .registry import ModuleRegistry
 
