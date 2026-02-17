@@ -350,36 +350,23 @@ class LiteAttention(nn.Module, ConfigurableModule):
         """
         is_int8 = dtype == torch.int8
         element_size = dtype.itemsize
-        # Call C++ tile_size_fwd_sm90 when available; otherwise use Python fallback
-        # (e.g. when extension was built without this op or from an older tree).
-        op = getattr(_lite_attention_ops, "get_tile_size_fwd_sm90", None)
-        if op is not None:
-            result = op(
-                head_dim,
-                head_dim,
-                False,
-                False,
-                element_size,
-                v_colmajor,
-                False,
-                False,
-                is_skipable,
-                is_int8,
-            )
-            kBlockM, kBlockN = result[0], result[1]
-            return kBlockM, kBlockN
-        kBlockM, kBlockN = _get_tile_size_fwd_sm90_py(
-            head_dim,
-            head_dim,
-            False,
-            False,
-            element_size,
-            v_colmajor,
-            False,
-            False,
-            is_skipable,
-            is_int8,
+        # Call C++ tile_size_fwd_sm90 function
+        # Arguments: headdim, headdim_v, is_causal, is_local, element_size, 
+        #            v_colmajor, paged_kv_non_TMA, softcap, is_skipable, is_int8
+        # Returns: [kBlockM, kBlockN, MmaPV_is_RS, IntraWGOverlap]
+        result = _lite_attention_ops.get_tile_size_fwd_sm90(
+            head_dim,           # headdim
+            head_dim,           # headdim_v (same as headdim for standard attention)
+            False,              # is_causal (not relevant for skipable case)
+            False,              # is_local
+            element_size,       # element_size (2 for fp16/bf16, 4 for fp32)
+            v_colmajor,         # v_colmajor
+            False,              # paged_kv_non_TMA
+            False,              # softcap
+            is_skipable,        # is_skipable
+            is_int8             # is_int8
         )
+        kBlockM, kBlockN = result[0], result[1]
         return kBlockM, kBlockN
 
     @staticmethod
