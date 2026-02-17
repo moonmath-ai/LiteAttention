@@ -66,8 +66,10 @@ jobs:
           submodules: recursive
           path: build-wheel
 
-      # Python comes from the container image (e.g. nvidia/cuda); setup-python is skipped
-      # to avoid "bad interpreter" when the job runs in a container (runner paths not available).
+      - name: Set up Python ${{ inputs.python-version }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ inputs.python-version }}
 
       - name: Set CUDA and PyTorch versions
         run: |
