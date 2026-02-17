@@ -7,11 +7,46 @@ import torch.nn as nn
 
 # isort: off
 # We need to import the CUDA kernels after importing torch
-import lite_attention._C # Registers operators with PyTorch
+import torch.utils.cpp_extension
+is_rocm = torch.version.hip is not None
+print(f"DEBUG: is_rocm={is_rocm}")
+
+try:
+    import lite_attention._C as _C # Registers operators with PyTorch
+    print("DEBUG: Successfully imported lite_attention._C in interface")
+    if is_rocm:
+        flash_attn_3_cuda = _C
+    else:
+        flash_attn_3_cuda = torch.ops.lite_attention
+except ImportError as e:
+    print(f"DEBUG: Failed to import lite_attention._C in interface: {e}")
+    # Fallback: check if _C is already available in lite_attention module (e.g. injected by test script)
+    import sys
+    if "lite_attention" in sys.modules:
+        print(f"DEBUG: lite_attention is in sys.modules: {sys.modules['lite_attention']}")
+        if hasattr(sys.modules["lite_attention"], "_C"):
+            print("DEBUG: Found _C in sys.modules['lite_attention']")
+            _C = sys.modules["lite_attention"]._C
+            if is_rocm:
+                flash_attn_3_cuda = _C
+            else:
+                flash_attn_3_cuda = torch.ops.lite_attention
+        else:
+             print("DEBUG: lite_attention does not have _C attribute")
+             print(f"DEBUG: dir(lite_attention): {dir(sys.modules['lite_attention'])}")
+             try:
+                import flash_attn_2_cuda as flash_attn_3_cuda
+             except ImportError:
+                flash_attn_3_cuda = None
+    else:
+        print("DEBUG: lite_attention is NOT in sys.modules")
+        try:
+            import flash_attn_2_cuda as flash_attn_3_cuda
+        except ImportError:
+            flash_attn_3_cuda = None
+print(f"DEBUG: flash_attn_3_cuda={flash_attn_3_cuda}")
 
 # isort: on
-
-flash_attn_3_cuda = torch.ops.lite_attention
 
 def maybe_contiguous(x):
     return x.contiguous() if x is not None and x.stride(-1) != 1 else x
@@ -71,6 +106,18 @@ def _flash_attn_forward(
     ]
     rotary_cos, rotary_sin = [maybe_contiguous(x) for x in (rotary_cos, rotary_sin)]
     seqlens_rotary = maybe_contiguous(seqlens_rotary)
+    if is_rocm or (hasattr(flash_attn_3_cuda, '__name__') and flash_attn_3_cuda.__name__ == 'flash_attn_2_cuda'):
+        ret = flash_attn_3_cuda.fwd(
+            q=q, k=k, v=v, out_=out,
+            alibi_slopes_=None, p_dropout=0.0, softmax_scale=softmax_scale,
+            is_causal=causal, window_size_left=window_size[0], window_size_right=window_size[1],
+            softcap=softcap, return_softmax=False, gen_=None,
+            attn_read_list=attn_read_list, attn_write_list=attn_write_list,
+            threshold=thr, reverse_skip_list=reverse_skip_list
+        )
+        out = ret[0]
+        softmax_lse = ret[1]
+        return out, softmax_lse
     out, softmax_lse, *rest = flash_attn_3_cuda.fwd(
         q,
         k,

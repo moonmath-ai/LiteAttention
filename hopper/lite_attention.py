@@ -80,11 +80,11 @@ import os
 import math
 from typing import Optional, Tuple, Union
 
-from ._internal.flash_attn_interface import flash_attn_func
+from ._internal.flash_attn_interface import flash_attn_func, flash_attn_3_cuda
 
 # Import the C++ extension to register operators with PyTorch
-import lite_attention._C  # noqa: F401
-_lite_attention_ops = torch.ops.lite_attention
+# import lite_attention._C  # noqa: F401
+# _lite_attention_ops = torch.ops.lite_attention
 
 
 class LiteAttention:
@@ -285,7 +285,7 @@ class LiteAttention:
         # Arguments: headdim, headdim_v, is_causal, is_local, element_size, 
         #            v_colmajor, paged_kv_non_TMA, softcap, is_skipable, is_int8
         # Returns: [kBlockM, kBlockN, MmaPV_is_RS, IntraWGOverlap]
-        result = _lite_attention_ops.get_tile_size_fwd_sm90(
+        result = flash_attn_3_cuda.get_tile_size_fwd_sm90(
             head_dim,           # headdim
             head_dim,           # headdim_v (same as headdim for standard attention)
             False,              # is_causal (not relevant for skipable case)
@@ -370,7 +370,9 @@ class LiteAttention:
         #   [2]: Head dimension  
         #   [3]: Query tiles dimension
         #   [4]: ktiles + 1 (the +1 stores the list length at index 0)
-        skip_list = torch.empty(2, batch, heads, qtiles, ktiles + 1, dtype=torch.int16, device=device)
+        # Ensure at least size 3 to hold [length, start, end] for initial full range
+        list_size = max(ktiles + 1, 3)
+        skip_list = torch.empty(2, batch, heads, qtiles, list_size, dtype=torch.int16, device=device)
 
         if must_skip_list is not None:
             tile_indices = LiteAttention.convert_sequence_indices_to_tile_indices(
@@ -388,8 +390,9 @@ class LiteAttention:
             skip_list[0, :, :, :, :len(tile_indices)] = torch.tensor(tile_indices, dtype=torch.int16, device=device)
         else:
             # Initialize first buffer with "compute all tiles" configuration
-            # [2, ktiles-1, -1] means: length=2, one range from ktiles-1 down to 0 (via -1)
-            skip_list[0, :, :, :, 0:3] = torch.tensor([2, ktiles - 1, -1], dtype=torch.int16, device=device) 
+            # [2, -1, ktiles-1] means: length=2, range from 0 to ktiles (val1=-1, val2=ktiles-1 -> start=0, end=ktiles)
+            # This also sets write_reversed=True (since -1 < ktiles-1)
+            skip_list[0, :, :, :, 0:3] = torch.tensor([2, -1, ktiles - 1], dtype=torch.int16, device=device) 
 
             # Note: Second buffer (skip_list[1]) is left uninitialized and will be populated
             # during the first forward pass

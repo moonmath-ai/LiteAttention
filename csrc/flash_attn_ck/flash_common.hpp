@@ -7,13 +7,24 @@
 // Include these 2 headers instead of torch/extension.h since we don't need all of the torch headers.
 #include <torch/python.h>
 #include <torch/nn/functional.h>
+
+#ifdef __HIP_PLATFORM_AMD__
+#include <ATen/hip/HIPContext.h>
+#include <ATen/hip/impl/HIPGuardImplMasqueradingAsCUDA.h>
+#define CUDAGuard HIPGuardMasqueradingAsCUDA
+#else
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
+#endif
 
 #ifdef OLD_GENERATOR_PATH
 #include <ATen/CUDAGeneratorImpl.h>
 #else
+#ifdef __HIP_PLATFORM_AMD__
+#include <ATen/hip/HIPGeneratorImpl.h>
+#else
 #include <ATen/cuda/CUDAGeneratorImpl.h>
+#endif
 #endif
 
 

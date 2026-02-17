@@ -3,6 +3,12 @@
 import sys
 import warnings
 import os
+
+# Force build for MI300X only as requested
+os.environ["PYTORCH_ROCM_ARCH"] = "gfx942"
+os.environ["TORCH_ROCM_ARCH_LIST"] = "gfx942"
+os.environ["ROCM_ARCH"] = "gfx942"
+
 import stat
 import re
 import shutil
@@ -153,7 +159,10 @@ def _write_ninja_file(path,
         flags.append(f'cuda_post_cflags = {" ".join(cuda_post_cflags)}')
         cuda_post_cflags_sm80 = [s if s != 'arch=compute_90a,code=sm_90a' else 'arch=compute_80,code=sm_80' for s in cuda_post_cflags]
         flags.append(f'cuda_post_cflags_sm80 = {" ".join(cuda_post_cflags_sm80)}')
-        cuda_post_cflags_sm80_sm90 = cuda_post_cflags + ['-gencode', 'arch=compute_80,code=sm_80']
+        if IS_HIP_EXTENSION:
+            cuda_post_cflags_sm80_sm90 = cuda_post_cflags
+        else:
+            cuda_post_cflags_sm80_sm90 = cuda_post_cflags + ['-gencode', 'arch=compute_80,code=sm_80']
         flags.append(f'cuda_post_cflags_sm80_sm90 = {" ".join(cuda_post_cflags_sm80_sm90)}')
         cuda_post_cflags_sm100 = [s if s != 'arch=compute_90a,code=sm_90a' else 'arch=compute_100a,code=sm_100a' for s in cuda_post_cflags]
         flags.append(f'cuda_post_cflags_sm100 = {" ".join(cuda_post_cflags_sm100)}')
@@ -391,7 +400,122 @@ ext_modules = []
 # files included in the source distribution, in case the user compiles from source.
 subprocess.run(["git", "submodule", "update", "--init", "../csrc/cutlass"])
 
-if not SKIP_CUDA_BUILD:
+feature_args = (
+    []
+    + (["-DFLASHATTENTION_DISABLE_BACKWARD"] if DISABLE_BACKWARD else [])
+    + (["-DFLASHATTENTION_DISABLE_PAGEDKV"] if DISABLE_PAGEDKV else [])
+    + (["-DFLASHATTENTION_DISABLE_SPLIT"] if DISABLE_SPLIT else [])
+    + (["-DFLASHATTENTION_DISABLE_APPENDKV"] if DISABLE_APPENDKV else [])
+    + (["-DFLASHATTENTION_DISABLE_LOCAL"] if DISABLE_LOCAL else [])
+    + (["-DFLASHATTENTION_DISABLE_SOFTCAP"] if DISABLE_SOFTCAP else [])
+    + (["-DFLASHATTENTION_DISABLE_PACKGQA"] if DISABLE_PACKGQA else [])
+    + (["-DFLASHATTENTION_DISABLE_FP16"] if DISABLE_FP16 else [])
+    + (["-DFLASHATTENTION_DISABLE_FP8"] if DISABLE_FP8 else [])
+    + (["-DFLASHATTENTION_DISABLE_INT8"] if DISABLE_INT8 else [])
+    + (["-DFLASHATTENTION_DISABLE_VARLEN"] if DISABLE_VARLEN else [])
+    + (["-DFLASHATTENTION_DISABLE_CLUSTER"] if DISABLE_CLUSTER else [])
+    + (["-DFLASHATTENTION_DISABLE_HDIM64"] if DISABLE_HDIM64 else [])
+    + (["-DFLASHATTENTION_DISABLE_HDIM96"] if DISABLE_HDIM96 else [])
+    + (["-DFLASHATTENTION_DISABLE_HDIM128"] if DISABLE_HDIM128 else [])
+    + (["-DFLASHATTENTION_DISABLE_HDIM192"] if DISABLE_HDIM192 else [])
+    + (["-DFLASHATTENTION_DISABLE_HDIM256"] if DISABLE_HDIM256 else [])
+    + (["-DFLASHATTENTION_DISABLE_SM8x"] if DISABLE_SM8x else [])
+    + (["-DFLASHATTENTION_ENABLE_VCOLMAJOR"] if ENABLE_VCOLMAJOR else [])
+    + (["-DFLASHATTENTION_DISABLE_HDIMDIFF64"] if DISABLE_HDIMDIFF64 else [])
+    + (["-DFLASHATTENTION_DISABLE_HDIMDIFF192"] if DISABLE_HDIMDIFF192 else [])
+)
+
+is_rocm = torch.version.hip is not None
+
+if is_rocm:
+    print("\n\nBuilding for AMD ROCm...\n\n")
+    
+    # 1. Generate Kernels
+    repo_root = Path(this_dir).parent
+    ck_dir = repo_root / "csrc" / "composable_kernel"
+    generate_script = ck_dir / "example" / "ck_tile" / "01_fmha" / "generate.py"
+    generated_dir = Path(this_dir) / "generated_ck"
+    
+    if not generated_dir.exists():
+        generated_dir.mkdir(parents=True)
+
+    # Generate LiteAttention kernels (d128, fp16, batch mode)
+    # Adjust filter as needed. Using the one that worked for the test.
+    print(f"Generating FWD kernels to {generated_dir}...")
+    subprocess.run([
+        sys.executable, str(generate_script),
+        "--api", "fwd",
+        "--optdim", "128",
+        "--output_dir", str(generated_dir),
+        "--filter", "*d128_fp16_batch*lite*" 
+    ], check=True)
+
+    # Generate BWD kernels (d128, fp16) - needed for linking mha_bwd
+    print(f"Generating BWD kernels to {generated_dir}...")
+    subprocess.run([
+        sys.executable, str(generate_script),
+        "--api", "bwd",
+        "--optdim", "128",
+        "--output_dir", str(generated_dir),
+        "--filter", "*d128_fp16_batch*" 
+    ], check=True)
+    
+    # Rename generated .cpp files to .hip so they are compiled with hipcc as device code
+    for p in generated_dir.glob("*.cpp"):
+        p.rename(p.with_suffix(".hip"))
+    
+    # 2. Collect Sources
+    def get_rocm_source(path_str):
+        path = Path(path_str)
+        if path.suffix == ".cpp":
+            hip_path = path.with_suffix(".hip")
+            if hip_path.exists():
+                return str(hip_path)
+        return str(path)
+
+    sources = [
+        get_rocm_source(str(repo_root / "csrc" / "flash_attn_ck" / "flash_api.cpp")),
+        get_rocm_source(str(repo_root / "csrc" / "flash_attn_ck" / "flash_common.cpp")),
+        get_rocm_source(str(repo_root / "csrc" / "flash_attn_ck" / "mha_fwd.cpp")),
+        get_rocm_source(str(repo_root / "csrc" / "flash_attn_ck" / "mha_varlen_fwd.cpp")),
+        str(generated_dir / "fmha_fwd_api.hip"),
+    ]
+
+    if not DISABLE_APPENDKV and not DISABLE_SPLIT:
+        sources.append(get_rocm_source(str(repo_root / "csrc" / "flash_attn_ck" / "mha_fwd_kvcache.cpp")))
+    
+    if not DISABLE_BACKWARD:
+        sources.append(get_rocm_source(str(repo_root / "csrc" / "flash_attn_ck" / "mha_bwd.cpp")))
+        sources.append(get_rocm_source(str(repo_root / "csrc" / "flash_attn_ck" / "mha_varlen_bwd.cpp")))
+        sources.append(str(generated_dir / "fmha_bwd_api.hip"))
+
+    sources.extend(str(p) for p in generated_dir.glob("*.hip") if p.name not in ["fmha_fwd_api.hip", "fmha_bwd_api.hip"])
+
+    # 3. Include Directories
+    include_dirs = [
+        str(repo_root / "csrc" / "flash_attn_ck"),
+        str(ck_dir / "include"),
+        str(ck_dir / "library" / "include"),
+        str(ck_dir / "example" / "ck_tile" / "01_fmha"),
+        str(generated_dir),
+    ]
+
+    # 4. Compiler Flags
+    extra_compile_args = {
+        "cxx": ["-O3", "-std=c++17", "-D__HIP_PLATFORM_AMD__=1", "-DTORCH_EXTENSION_NAME=lite_attention._C"] + feature_args,
+        "nvcc": ["-O3", "-std=c++17", "-D__HIP_PLATFORM_AMD__=1", "--offload-arch=gfx942"] + feature_args # nvcc here actually maps to hipcc in CUDAExtension when IS_HIP_EXTENSION is true
+    }
+
+    ext_modules.append(
+        CUDAExtension(
+            name="lite_attention._C",
+            sources=sources,
+            include_dirs=include_dirs,
+            extra_compile_args=extra_compile_args,
+        )
+    )
+
+if not SKIP_CUDA_BUILD and not is_rocm:
     print("\n\ntorch.__version__  = {}\n\n".format(torch.__version__))
     TORCH_MAJOR = int(torch.__version__.split(".")[0])
     TORCH_MINOR = int(torch.__version__.split(".")[1])
@@ -451,31 +575,6 @@ if not SKIP_CUDA_BUILD:
         torch._C._GLIBCXX_USE_CXX11_ABI = True
     repo_dir = Path(this_dir).parent
     cutlass_dir = repo_dir / "csrc" / "cutlass"
-
-    feature_args = (
-        []
-        + (["-DFLASHATTENTION_DISABLE_BACKWARD"] if DISABLE_BACKWARD else [])
-        + (["-DFLASHATTENTION_DISABLE_PAGEDKV"] if DISABLE_PAGEDKV else [])
-        + (["-DFLASHATTENTION_DISABLE_SPLIT"] if DISABLE_SPLIT else [])
-        + (["-DFLASHATTENTION_DISABLE_APPENDKV"] if DISABLE_APPENDKV else [])
-        + (["-DFLASHATTENTION_DISABLE_LOCAL"] if DISABLE_LOCAL else [])
-        + (["-DFLASHATTENTION_DISABLE_SOFTCAP"] if DISABLE_SOFTCAP else [])
-        + (["-DFLASHATTENTION_DISABLE_PACKGQA"] if DISABLE_PACKGQA else [])
-        + (["-DFLASHATTENTION_DISABLE_FP16"] if DISABLE_FP16 else [])
-        + (["-DFLASHATTENTION_DISABLE_FP8"] if DISABLE_FP8 else [])
-        + (["-DFLASHATTENTION_DISABLE_INT8"] if DISABLE_INT8 else [])
-        + (["-DFLASHATTENTION_DISABLE_VARLEN"] if DISABLE_VARLEN else [])
-        + (["-DFLASHATTENTION_DISABLE_CLUSTER"] if DISABLE_CLUSTER else [])
-        + (["-DFLASHATTENTION_DISABLE_HDIM64"] if DISABLE_HDIM64 else [])
-        + (["-DFLASHATTENTION_DISABLE_HDIM96"] if DISABLE_HDIM96 else [])
-        + (["-DFLASHATTENTION_DISABLE_HDIM128"] if DISABLE_HDIM128 else [])
-        + (["-DFLASHATTENTION_DISABLE_HDIM192"] if DISABLE_HDIM192 else [])
-        + (["-DFLASHATTENTION_DISABLE_HDIM256"] if DISABLE_HDIM256 else [])
-        + (["-DFLASHATTENTION_DISABLE_SM8x"] if DISABLE_SM8x else [])
-        + (["-DFLASHATTENTION_ENABLE_VCOLMAJOR"] if ENABLE_VCOLMAJOR else [])
-        + (["-DFLASHATTENTION_DISABLE_HDIMDIFF64"] if DISABLE_HDIMDIFF64 else [])
-        + (["-DFLASHATTENTION_DISABLE_HDIMDIFF192"] if DISABLE_HDIMDIFF192 else [])
-    )
 
     DTYPE_FWD_SM80 = ["bf16"] + (["fp16"] if not DISABLE_FP16 else [])
     DTYPE_FWD_SM90 = ["bf16"] + (["fp16"] if not DISABLE_FP16 else []) + (["e4m3"] if not DISABLE_FP8 else []) + (["int8"] if not DISABLE_INT8 else [])

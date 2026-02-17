@@ -67,7 +67,7 @@ SKIP_CK_BUILD = os.getenv("FLASH_ATTENTION_SKIP_CK_BUILD", "TRUE") == "TRUE" if 
 
 @functools.lru_cache(maxsize=None)
 def cuda_archs() -> str:
-    return os.getenv("FLASH_ATTN_CUDA_ARCHS", "80;90;100;120").split(";")
+    return os.getenv("FLASH_ATTN_CUDA_ARCHS", "80;90;100;110;120").split(";")
 
 
 def get_platform():
@@ -94,6 +94,59 @@ def get_cuda_bare_metal_version(cuda_dir):
     return raw_output, bare_metal_version
 
 
+def add_cuda_gencodes(cc_flag, archs, bare_metal_version):
+    """
+    Adds -gencode flags based on nvcc capabilities:
+      - sm_80/90 (regular)
+      - sm_100/120 on CUDA >= 12.8
+      - Use 100f on CUDA >= 12.9 (Blackwell family-specific)
+      - Map requested 110 -> 101 if CUDA < 13.0 (Thor rename)
+      - Embed PTX for newest arch for forward compatibility
+    """
+    # Always-regular 80
+    if "80" in archs:
+        cc_flag += ["-gencode", "arch=compute_80,code=sm_80"]
+
+    # Hopper 9.0 needs >= 11.8
+    if bare_metal_version >= Version("11.8") and "90" in archs:
+        cc_flag += ["-gencode", "arch=compute_90,code=sm_90"]
+
+    # Blackwell 10.x requires >= 12.8
+    if bare_metal_version >= Version("12.8"):
+        if "100" in archs:
+            # CUDA 12.9 introduced "family-specific" for Blackwell (100f)
+            if bare_metal_version >= Version("12.9"):
+                cc_flag += ["-gencode", "arch=compute_100f,code=sm_100"]
+            else:
+                cc_flag += ["-gencode", "arch=compute_100,code=sm_100"]
+
+        if "120" in archs:
+            # sm_120 is supported in CUDA 12.8/12.9+ toolkits
+            if bare_metal_version >= Version("12.9"):
+                cc_flag += ["-gencode", "arch=compute_120f,code=sm_120"]
+            else:
+                cc_flag += ["-gencode", "arch=compute_120,code=sm_120"]
+
+
+        # Thor rename: 12.9 uses sm_101; 13.0+ uses sm_110
+        if "110" in archs:
+            if bare_metal_version >= Version("13.0"):
+                cc_flag += ["-gencode", "arch=compute_110f,code=sm_110"]
+            else:
+                # Provide Thor support for CUDA 12.9 via sm_101
+                if bare_metal_version >= Version("12.8"):
+                    cc_flag += ["-gencode", "arch=compute_101,code=sm_101"]
+                # else: no Thor support in older toolkits
+
+    # PTX for newest requested arch (forward-compat)
+    numeric = [a for a in archs if a.isdigit()]
+    if numeric:
+        newest = max(numeric, key=int)
+        cc_flag += ["-gencode", f"arch=compute_{newest},code=compute_{newest}"]
+
+    return cc_flag
+
+
 def get_hip_version():
     return parse(torch.version.hip.split()[-1].rstrip('-').replace('-', '+'))
 
@@ -118,6 +171,18 @@ def check_if_rocm_home_none(global_option: str) -> None:
     warnings.warn(
         f"{global_option} was requested, but hipcc was not found."
     )
+
+
+def detect_hipify_v2():
+    try:
+        from torch.utils.hipify import __version__
+        from packaging.version import Version
+        if Version(__version__) >= Version("2.0.0"):
+            return True
+    except Exception as e:
+        print("failed to detect pytorch hipify version, defaulting to version 1.0.0 behavior")
+        print(e)
+    return False
 
 
 def append_nvcc_threads(nvcc_extra_args):
@@ -147,8 +212,9 @@ ext_modules = []
 # files included in the source distribution, in case the user compiles from source.
 if os.path.isdir(".git"):
     if not SKIP_CK_BUILD:
-        subprocess.run(["git", "submodule", "update", "--init", "csrc/composable_kernel"], check=True)
-        subprocess.run(["git", "submodule", "update", "--init", "csrc/cutlass"], check=True)
+        # subprocess.run(["git", "submodule", "update", "--init", "csrc/composable_kernel"], check=True)
+        # subprocess.run(["git", "submodule", "update", "--init", "csrc/cutlass"], check=True)
+        pass
 else:
     if IS_ROCM:
         if not SKIP_CK_BUILD:
@@ -175,20 +241,11 @@ if not SKIP_CUDA_BUILD and not IS_ROCM:
                 "FlashAttention is only supported on CUDA 11.7 and above.  "
                 "Note: make sure nvcc has a supported version by running nvcc -V."
             )
-
-    if "80" in cuda_archs():
-        cc_flag.append("-gencode")
-        cc_flag.append("arch=compute_80,code=sm_80")
-    if CUDA_HOME is not None:
-        if bare_metal_version >= Version("11.8") and "90" in cuda_archs():
-            cc_flag.append("-gencode")
-            cc_flag.append("arch=compute_90,code=sm_90")
-        if bare_metal_version >= Version("12.8") and "100" in cuda_archs():
-            cc_flag.append("-gencode")
-            cc_flag.append("arch=compute_100,code=sm_100")
-        if bare_metal_version >= Version("12.8") and "120" in cuda_archs():
-            cc_flag.append("-gencode")
-            cc_flag.append("arch=compute_120,code=sm_120")
+        # Build -gencode (regular + PTX + family-specific 'f' when available)
+        add_cuda_gencodes(cc_flag, set(cuda_archs()), bare_metal_version)
+    else:
+        # No nvcc present; warnings already emitted above
+        pass
 
     # HACK: The compiler flag -D_GLIBCXX_USE_CXX11_ABI is set to be the same as
     # torch._C._GLIBCXX_USE_CXX11_ABI
@@ -317,13 +374,22 @@ elif not SKIP_CUDA_BUILD and IS_ROCM:
     TORCH_MAJOR = int(torch.__version__.split(".")[0])
     TORCH_MINOR = int(torch.__version__.split(".")[1])
 
-    # Skips CK C++ extension compilation if using Triton Backend
+        # Skips CK C++ extension compilation if using Triton Backend
     if not SKIP_CK_BUILD:
         ck_dir = "csrc/composable_kernel"
 
         #use codegen get code dispatch
         if not os.path.exists("./build"):
             os.makedirs("build")
+        
+        archs = os.getenv("GPU_ARCHS", "native").split(";")
+        validate_and_update_archs(archs)
+        
+        if archs == ['native']:
+            arch = torch.cuda.get_device_properties("cuda").gcnArchName.split(":")[0]
+            archs = [arch]
+            
+        targets_str = ",".join(archs)
 
         optdim = os.getenv("OPT_DIM", "32,64,128,256")
         subprocess.run([sys.executable, f"{ck_dir}/example/ck_tile/01_fmha/generate.py", "-d", "fwd", "--output_dir", "build", "--receipt", "2", "--optdim", optdim], check=True)
@@ -339,14 +405,12 @@ elif not SKIP_CUDA_BUILD and IS_ROCM:
             generator_flag = ["-DOLD_GENERATOR_PATH"]
 
         check_if_rocm_home_none("flash_attn")
-        archs = os.getenv("GPU_ARCHS", "native").split(";")
-        validate_and_update_archs(archs)
+        # archs = os.getenv("GPU_ARCHS", "native").split(";") # Already processed above
+        # validate_and_update_archs(archs)
 
-        if archs != ['native']:
-            cc_flag = [f"--offload-arch={arch}" for arch in archs]
-        else:
-            arch = torch.cuda.get_device_properties("cuda").gcnArchName.split(":")[0]
-            cc_flag = [f"--offload-arch={arch}"]
+        if archs != ['native']: # Should basically always be true now if native resolved
+             cc_flag = [f"--offload-arch={arch}" for arch in archs]
+
 
         # HACK: The compiler flag -D_GLIBCXX_USE_CXX11_ABI is set to be the same as
         # torch._C._GLIBCXX_USE_CXX11_ABI
@@ -364,30 +428,140 @@ elif not SKIP_CUDA_BUILD and IS_ROCM:
             f"build/fmha_*wd*.cpp"
         )
 
+        if os.getenv("FLASH_ATTENTION_DISABLE_BACKWARD", "FALSE") == "TRUE":
+            sources = [s for s in sources if "_bwd" not in s]
+        if os.getenv("FLASH_ATTENTION_DISABLE_BF16", "FALSE") == "TRUE":
+            sources = [s for s in sources if "_bf16_" not in s]
+        if os.getenv("FLASH_ATTENTION_DISABLE_FP8", "FALSE") == "TRUE":
+            sources = [s for s in sources if "_fp8_" not in s]
+        if os.getenv("FLASH_ATTENTION_DISABLE_INT8", "FALSE") == "TRUE":
+            sources = [s for s in sources if "_int8_" not in s]
+        if os.getenv("FLASH_ATTENTION_DISABLE_DROPOUT", "FALSE") == "TRUE":
+            # Exclude files that have 'dropout' but not 'ndropout'
+            sources = [s for s in sources if not ("dropout" in s and "ndropout" not in s)]
+        if os.getenv("FLASH_ATTENTION_DISABLE_LOGITS", "FALSE") == "TRUE":
+            # Exclude files that have 'logits' but not 'nlogits'
+            sources = [s for s in sources if not ("logits" in s and "nlogits" not in s)]
+        if os.getenv("FLASH_ATTENTION_DISABLE_BIAS", "FALSE") == "TRUE":
+            # Exclude files that have 'bias' but not 'nbias'
+            sources = [s for s in sources if not ("bias" in s and "nbias" not in s)]
+        if os.getenv("FLASH_ATTENTION_DISABLE_ALIBI", "FALSE") == "TRUE":
+            # Exclude files that have 'alibi'
+            sources = [s for s in sources if "_alibi_" not in s]
+        if os.getenv("FLASH_ATTENTION_DISABLE_MASK", "FALSE") == "TRUE":
+            # Exclude files that have '_mask_' but not '_nmask_'
+            # We use '_mask_' to avoid matching 'nmask' which is a substring of 'mask'
+            # But we must be careful: '_nmask_' contains '_mask_'? No, '_nmask_' has 'n' before.
+            # Filenames are like ..._mask_... or ..._nmask_...
+            # So checking for "_mask_" will match both if we are not careful about boundaries,
+            # but usually it's `_mask` or `nmask`.
+            # Let's assume standard naming: `..._mask_...` vs `..._nmask_...`.
+            # If we exclude `_mask_` we exclude `_nmask_` too?
+            # 'nmask' string contains 'mask'.
+            # '_nmask_' string contains '_mask_'? No. 'n' is not part of '_'.
+            # Example: "a_nmask_b". "_mask_" is NOT in it. "mask" IS in it.
+            # So looking for `_mask_` is safe to exclude generic mask kernels without excluding nmask kernels.
+            # BUT, we must verify the crashing file format.
+            # Crashing file: ..._nbias_mask_lse_... -> contains "_mask_"
+            # Nmask file: ..._nbias_nmask_lse_... -> contains "_nmask_" but NOT "_mask_" (it has "_nm...").
+            sources = [s for s in sources if "_mask_" not in s]
+
+        # Check if torch is using hipify v2. Until CK is updated with HIPIFY_V2 macro,
+        # we must replace the incorrect APIs.
+        maybe_hipify_v2_flag = []
+        if detect_hipify_v2():
+            maybe_hipify_v2_flag = ["-DHIPIFY_V2"]
+
         rename_cpp_to_cu(sources)
 
-        renamed_sources = ["csrc/flash_attn_ck/flash_api.cu",
-                        "csrc/flash_attn_ck/flash_common.cu",
-                        "csrc/flash_attn_ck/mha_bwd.cu",
-                        "csrc/flash_attn_ck/mha_fwd_kvcache.cu",
-                        "csrc/flash_attn_ck/mha_fwd.cu",
-                        "csrc/flash_attn_ck/mha_varlen_bwd.cu",
-                        "csrc/flash_attn_ck/mha_varlen_fwd.cu"] + glob.glob(f"build/fmha_*wd*.cu")
+        renamed_sources = [s.replace(".cpp", ".cu") for s in sources]
 
-        cc_flag += ["-O3","-std=c++17",
+        # Debug build support
+        DEBUG_BUILD = os.getenv("FLASH_ATTENTION_DEBUG_BUILD", "FALSE") == "TRUE"
+        if DEBUG_BUILD:
+            # We pass -g and -O1 globally. 
+            # The custom hipcc_wrapper.sh will strip -g and upgrade to -O3 for kernel files only.
+            opt_level = "-O1"
+            debug_flags = ["-g", "-gdwarf-4"]
+            
+            cxx_opt_level = "-O1"
+            cxx_debug_flags = ["-g", "-gdwarf-4"]
+        else:
+            opt_level = "-O3"  # Full optimization
+            debug_flags = []
+            cxx_opt_level = "-O3"
+            cxx_debug_flags = []
+        
+        cc_flag += [opt_level, "-std=c++20"] + debug_flags + [
                     "-DCK_TILE_FMHA_FWD_FAST_EXP2=1",
-                    "-fgpu-flush-denormals-to-zero",
-                    "-DCK_ENABLE_BF16",
-                    "-DCK_ENABLE_BF8",
-                    "-DCK_ENABLE_FP16",
-                    "-DCK_ENABLE_FP32",
-                    "-DCK_ENABLE_FP64",
-                    "-DCK_ENABLE_FP8",
-                    "-DCK_ENABLE_INT8",
+                    "-fgpu-flush-denormals-to-zero"]
+
+        if os.getenv("FLASH_ATTENTION_DISABLE_BF16", "FALSE") != "TRUE":
+            cc_flag.append("-DCK_ENABLE_BF16")
+        if os.getenv("FLASH_ATTENTION_DISABLE_BF8", "FALSE") != "TRUE":
+            cc_flag.append("-DCK_ENABLE_BF8")
+        if os.getenv("FLASH_ATTENTION_DISABLE_FP16", "FALSE") != "TRUE":
+            cc_flag.append("-DCK_ENABLE_FP16")
+        if os.getenv("FLASH_ATTENTION_DISABLE_FP32", "FALSE") != "TRUE":
+            cc_flag.append("-DCK_ENABLE_FP32")
+        if os.getenv("FLASH_ATTENTION_DISABLE_FP64", "FALSE") != "TRUE":
+            cc_flag.append("-DCK_ENABLE_FP64")
+        if os.getenv("FLASH_ATTENTION_DISABLE_FP8", "FALSE") != "TRUE":
+            cc_flag.append("-DCK_ENABLE_FP8")
+        if os.getenv("FLASH_ATTENTION_DISABLE_INT8", "FALSE") != "TRUE":
+            cc_flag.append("-DCK_ENABLE_INT8")
+
+        cc_flag += [
                     "-DCK_USE_XDL",
                     "-DUSE_PROF_API=1",
                     # "-DFLASHATTENTION_DISABLE_BACKWARD",
                     "-D__HIP_PLATFORM_HCC__=1"]
+
+        # User requested flags
+        if os.getenv("FLASH_ATTENTION_DISABLE_BACKWARD", "TRUE") == "TRUE":
+            cc_flag.append("-DFLASHATTENTION_DISABLE_BACKWARD")
+        if os.getenv("FLASH_ATTENTION_DISABLE_SPLIT", "TRUE") == "TRUE":
+            cc_flag.append("-DFLASHATTENTION_DISABLE_SPLIT")
+        if os.getenv("FLASH_ATTENTION_DISABLE_PAGEDKV", "TRUE") == "TRUE":
+            cc_flag.append("-DFLASHATTENTION_DISABLE_PAGEDKV")
+        if os.getenv("FLASH_ATTENTION_DISABLE_APPENDKV", "TRUE") == "TRUE":
+            cc_flag.append("-DFLASHATTENTION_DISABLE_APPENDKV")
+        if os.getenv("FLASH_ATTENTION_DISABLE_LOCAL", "TRUE") == "TRUE":
+            cc_flag.append("-DFLASHATTENTION_DISABLE_LOCAL")
+        if os.getenv("FLASH_ATTENTION_DISABLE_SOFTCAP", "TRUE") == "TRUE":
+            cc_flag.append("-DFLASHATTENTION_DISABLE_SOFTCAP")
+        if os.getenv("FLASH_ATTENTION_DISABLE_PACKGQA", "TRUE") == "TRUE":
+            cc_flag.append("-DFLASHATTENTION_DISABLE_PACKGQA")
+        if os.getenv("FLASH_ATTENTION_DISABLE_FP16", "TRUE") == "TRUE":
+            cc_flag.append("-DFLASHATTENTION_DISABLE_FP16")
+        if os.getenv("FLASH_ATTENTION_DISABLE_FP8", "TRUE") == "TRUE":
+            cc_flag.append("-DFLASHATTENTION_DISABLE_FP8")
+        if os.getenv("FLASH_ATTENTION_DISABLE_INT8", "FALSE") == "TRUE":
+            cc_flag.append("-DFLASHATTENTION_DISABLE_INT8")
+        if os.getenv("FLASH_ATTENTION_DISABLE_VARLEN", "TRUE") == "TRUE":
+            cc_flag.append("-DFLASHATTENTION_DISABLE_VARLEN")
+        if os.getenv("FLASH_ATTENTION_DISABLE_CLUSTER", "TRUE") == "TRUE":
+            cc_flag.append("-DFLASHATTENTION_DISABLE_CLUSTER")
+        if os.getenv("FLASH_ATTENTION_DISABLE_HDIM64", "FALSE") == "TRUE":
+            cc_flag.append("-DFLASHATTENTION_DISABLE_HDIM64")
+        if os.getenv("FLASH_ATTENTION_DISABLE_HDIM96", "FALSE") == "TRUE":
+            cc_flag.append("-DFLASHATTENTION_DISABLE_HDIM96")
+        if os.getenv("FLASH_ATTENTION_DISABLE_HDIM128", "FALSE") == "TRUE":
+            cc_flag.append("-DFLASHATTENTION_DISABLE_HDIM128")
+        if os.getenv("FLASH_ATTENTION_DISABLE_HDIM192", "FALSE") == "TRUE":
+            cc_flag.append("-DFLASHATTENTION_DISABLE_HDIM192")
+        if os.getenv("FLASH_ATTENTION_DISABLE_HDIM256", "FALSE") == "TRUE":
+            cc_flag.append("-DFLASHATTENTION_DISABLE_HDIM256")
+        if os.getenv("FLASH_ATTENTION_DISABLE_SM80", "TRUE") == "TRUE":
+            cc_flag.append("-DFLASHATTENTION_DISABLE_SM80")
+
+        if os.getenv("FLASH_ATTENTION_ENABLE_VCOLMAJOR", "FALSE") == "TRUE":
+            cc_flag.append("-DFLASHATTENTION_ENABLE_VCOLMAJOR")
+
+        if os.getenv("FLASH_ATTENTION_DISABLE_HDIMDIFF64", "TRUE") == "TRUE":
+            cc_flag.append("-DFLASHATTENTION_DISABLE_HDIMDIFF64")
+        if os.getenv("FLASH_ATTENTION_DISABLE_HDIMDIFF192", "TRUE") == "TRUE":
+            cc_flag.append("-DFLASHATTENTION_DISABLE_HDIMDIFF192")
 
         cc_flag += [f"-DCK_TILE_FLOAT_TO_BFLOAT16_DEFAULT={os.environ.get('CK_TILE_FLOAT_TO_BFLOAT16_DEFAULT', 3)}"]
 
@@ -405,9 +579,13 @@ elif not SKIP_CUDA_BUILD and IS_ROCM:
         if hip_version > Version('6.2.41133') and hip_version < Version('6.3.00000'):
             cc_flag += ["-mllvm", "-amdgpu-coerce-illegal-types=1"]
 
+        # Use same optimization level for C++ compiler
+        # cxx_opt_level = "-O3" if DEBUG_BUILD else "-O3"  # -O3 required for inline assembly
+        # cxx_debug_flags = ["-g"] if DEBUG_BUILD else []
+        
         extra_compile_args = {
-            "cxx": ["-O3", "-std=c++17"] + generator_flag,
-            "nvcc": cc_flag + generator_flag,
+            "cxx": [cxx_opt_level, "-std=c++20"] + cxx_debug_flags + generator_flag + maybe_hipify_v2_flag,
+            "nvcc": cc_flag + generator_flag + maybe_hipify_v2_flag,
         }
 
         include_dirs = [
