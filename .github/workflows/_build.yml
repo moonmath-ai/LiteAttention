@@ -60,14 +60,16 @@ jobs:
           && apt update \
           && apt install gh -y
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
           ref: ${{ inputs.release-version }}
           submodules: recursive
           path: build-wheel
 
-      # Python comes from the container image (e.g. nvidia/cuda); setup-python is skipped
-      # to avoid "bad interpreter" when the job runs in a container (runner paths not available).
+      - name: Set up Python ${{ inputs.python-version }}
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: ${{ inputs.python-version }}
 
       - name: Set CUDA and PyTorch versions
         run: |
