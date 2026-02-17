@@ -739,10 +739,8 @@
          std::optional<at::Tensor> attn_must_do_list_,
          std::optional<at::Tensor> attn_write_list_,
          double thr,
-         bool reverse_skip_list = false,
          bool phase = false
      ) {
-     // params.reverse_skip_list = reverse_skip_list;
      // params.phase = phase;
  
      auto dprops = at::cuda::getCurrentDeviceProperties();
@@ -1027,8 +1025,7 @@
                       softcap,
                       sm_margin);
  
-     params.reverse_skip_list = reverse_skip_list;
-     params.phase = phase;
+    params.phase = phase;
  
      // Convert skip mask tensors to QKSkipMaskArgs struct
      // Expected shape: [batch, heads, limbs] where limbs = ceil_div(q_tiles * k_tiles, 64)
@@ -1927,7 +1924,6 @@
          "Tensor? attn_must_do_list = None,"
          "Tensor? attn_write_list = None,"
          "float thr = -3.0,"
-         "bool reverse_skip_list = False,"
          "bool phase = False) -> (Tensor(out!), Tensor, Tensor, Tensor)"
      );
      m.def("bwd("

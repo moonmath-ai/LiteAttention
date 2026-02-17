@@ -18,37 +18,24 @@ Shape: [2, batch, heads, qtiles, ktiles + 1]
 - Dimension 3: Query tiles (rows of the attention matrix)
 - Dimension 4: Key tiles + 1 (the +1 is for storing the list length)
 
-The format depends on the `reverse_skip_list` flag:
-
-**When reverse_skip_list == True (default):**
+Format (reverse skip list, always):
 Each entry format: [length, end_n, start_n, ..., end_1, start_1, end_0, start_0, uninitialized...]
 
 The relationship between start and end depends on the phase:
-- When self._phase == 1: start_x < end_x
-- When self._phase == 0: start_x > end_x
+- When phase == 1: start_x < end_x
+- When phase == 0: start_x > end_x
 
 To compute the actual range of tiles:
 ```python
-step = 1 if self._phase else -1
+step = 1 if phase else -1
 for tile_idx in range(start=start_x + step, end=end_x + step, step=step):
     # Compute this tile
 ```
 
-Example (reverse_skip_list=True, phase=1):
+Example (phase=1):
 skip_list[0, 0, 0, 0, :] = [4, 99, 50, 30, 0, ?, ?, ...]
 - Range 1: start=50, end=99, step=1 → compute tiles 51, 52, ..., 99 (49 tiles)
 - Range 0: start=0, end=30, step=1 → compute tiles 1, 2, ..., 30 (30 tiles)
-
-**When reverse_skip_list == False:**
-Each entry format: [length, start_0, end_0, ..., start_n, end_n, uninitialized...]
-
-Always: start_x > end_x
-The range is: range(start=start_x, end=end_x, step=-1)
-
-Example (reverse_skip_list=False):
-skip_list[0, 0, 0, 0, :] = [4, 99, 50, 30, 0, ?, ?, ...]
-- Range 0: start=99, end=50 → compute tiles 99, 98, ..., 50 (50 tiles)
-- Range 1: start=30, end=0 → compute tiles 30, 29, ..., 0 (31 tiles)
 
 Must-Do List:
 =============
@@ -145,8 +132,6 @@ class LiteAttention(nn.Module, ConfigurableModule):
             Must be negative in non-debug mode. Lower values = more aggressive skipping.
         max_batch_size (int, optional): Maximum batch size to pre-allocate memory for.
             Defaults to 2. Actual batch size can be smaller but not larger.
-        reverse_skip_list (bool, optional): Whether to use reversed skip list format.
-            Defaults to True. Affects the ordering of ranges in skip lists.
         config (LiteAttentionRunConfig | LiteAttentionCalibConfig, optional): Configuration
             for threshold or calibration. Supports per-timestep configs via ConfigList.
             If LiteAttentionCalibConfig, runs calibration to find optimal threshold.
@@ -183,7 +168,6 @@ class LiteAttention(nn.Module, ConfigurableModule):
         enable_skipping: bool = True,
         threshold: float | None = None,
         max_batch_size: int = 2,
-        reverse_skip_list: bool = True,
         use_int8: bool = False,
         config: LiteAttentionRunConfig | LiteAttentionCalibConfig | None = None,
     ):
@@ -196,7 +180,6 @@ class LiteAttention(nn.Module, ConfigurableModule):
         # Internal skip list management
         self._skip_list = None  # Shape: [2, max_batch_size, heads, qtiles, ktiles+1]
         self._phase = 0  # Alternates between 0 and 1 for double-buffering
-        self.reverse_skip_list = reverse_skip_list  # Controls skip list format
         self.use_int8 = use_int8  # Whether using int8 quantization
         
         # Cache of last tensor properties (used to detect when reinitialization is needed)
@@ -365,7 +348,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
         return kBlockM, kBlockN
 
     @staticmethod
-    def init_skip_list(batch, seq_len, heads, head_dim, v_colmajor, dtype, device, must_skip_list: list = None, reverse_skip_list: bool = True) -> torch.Tensor:
+    def init_skip_list(batch, seq_len, heads, head_dim, v_colmajor, dtype, device, must_skip_list: list = None) -> torch.Tensor:
         """
         Initialize skip list tensors with default "compute all tiles" configuration.
         
@@ -500,7 +483,6 @@ class LiteAttention(nn.Module, ConfigurableModule):
             dtype,
             device,
             must_skip_list,
-            self.reverse_skip_list,
         )
     
     
@@ -825,8 +807,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
                     attn_write_list=write_list,
                     thr=curr_th,
                     return_softmax_lse=return_softmax_lse,
-                    reverse_skip_list=self.reverse_skip_list,
-                    phase=(self._phase == 1) if self.reverse_skip_list else False,
+                    phase=(self._phase == 1),
                     use_int8=self.use_int8,
                 )
                 # we switch read <-> write manually; we remember to flip phase
@@ -841,8 +822,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
                     attn_write_list=temp_list,  # we will drop this result
                     thr=curr_th,
                     return_softmax_lse=return_softmax_lse,
-                    reverse_skip_list=self.reverse_skip_list,
-                    phase=(self._phase == 1) if self.reverse_skip_list else False,
+                    phase=(self._phase == 1),
                     use_int8=self.use_int8,
                 )
                 # and we must flip back
@@ -899,9 +879,8 @@ class LiteAttention(nn.Module, ConfigurableModule):
             attn_write_list=write_list,
             thr=threshold,
             return_softmax_lse=return_softmax_lse,
-            reverse_skip_list=self.reverse_skip_list,
             # self._phase == 1 because we changed it in _get_read_write_lists!
-            phase=(self._phase == 1) if self.reverse_skip_list else False,
+            phase=(self._phase == 1),
             use_int8=self.use_int8,
         )
 
@@ -1197,7 +1176,6 @@ class LiteAttention(nn.Module, ConfigurableModule):
         Note:
         ----
         Only includes data for the actual batch size used (not max_batch_size).
-        The skip list format depends on the reverse_skip_list flag.
         """
         if self._skip_list is None:
             return None
@@ -1218,7 +1196,6 @@ class LiteAttention(nn.Module, ConfigurableModule):
         Note:
         ----
         Only includes data for the actual batch size used (not max_batch_size).
-        The skip list format depends on the reverse_skip_list flag.
         """
         if self._skip_list is None:
             return None

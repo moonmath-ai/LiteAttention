@@ -150,8 +150,8 @@ namespace flash
     template <bool ReverseMustDoList>
     using MustDoListReader = ListReader<false, ReverseMustDoList, !ReverseMustDoList>;
 
-    template <bool ReverseSkipList, bool Phase = true>
-    using SkipListReader = ListReader<true, ReverseSkipList, Phase>;
+    template <bool Phase = true>
+    using SkipListReader = ListReader<true, /*Reverse=*/true, Phase>;
 
     // ============================================================================
     // Helper struct for writing skip lists
@@ -276,7 +276,7 @@ namespace flash
     // Buffers operations and replays them after a specified delay
     // This allows the writer to lag behind the reader by DelayAmount iterations
     // ============================================================================
-    template <int DelayAmount, bool ReverseSkipList, bool Phase, bool HasMustDoList>
+    template <int DelayAmount, bool Phase, bool HasMustDoList>
     struct DelayedSkipListWriter
     {
         static constexpr int BufferSize = DelayAmount * 2;
@@ -287,7 +287,6 @@ namespace flash
         int (*skip_tests)[4];
 
         //should reside in thread registers.
-        // SkipListWriter<ReverseSkipList && !Phase, HasMustDoList> writer;
         SkipListWriter<(Phase == false), HasMustDoList> writer;
         bool replayed_skip;
         int record_idx = -1;
@@ -421,15 +420,15 @@ namespace flash
         }
     };
 
-    template <const int BufferSize, bool ReverseSkipList, bool Phase, bool HasMustDoList>
+    template <int BufferSize, bool Phase, bool HasMustDoList>
     struct SkipListStorage
     {
         alignas(16) int n_blocks_buffer[BufferSize]; // 4
         alignas(16) int end_range_buffer[BufferSize]; // 4
         alignas(16) int skip_tests[BufferSize][4]; // 16
         int last_n_block[1]; // 4
-        SkipListReader<ReverseSkipList, Phase> reader;
-        // DelayedSkipListWriter<BufferSize / 2, ReverseSkipList, Phase, HasMustDoList> writer;  // BufferSize = DelayAmount * 2, so DelayAmount = BufferSize / 2
+        SkipListReader<Phase> reader;
+        // DelayedSkipListWriter<BufferSize / 2, Phase, HasMustDoList> writer;  // BufferSize = DelayAmount * 2, so DelayAmount = BufferSize / 2
         MustDoListReader<!Phase> must_do_reader;  // Lives in shared memory similar to reader
     };
 

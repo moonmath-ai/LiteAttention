@@ -232,7 +232,6 @@ def LiteAttention(
     enable_skipping: bool = True, 
     threshold: float | None = None, 
     max_batch_size: int = 2, 
-    reverse_skip_list: bool = True, 
     use_int8: bool = False
 )
 ```
@@ -240,7 +239,6 @@ def LiteAttention(
 **Parameters:**
 - `enable_skipping` (bool): Whether to enable skip list optimizations. Defaults to `True`. When `False`, performs standard Flash Attention.
 - `max_batch_size` (int): Maximum batch size to pre-allocate memory for. Defaults to `2`. The actual batch size used during inference can be smaller than this value, but not larger.
-- `reverse_skip_list` (bool): Whether to use the reversed skip list format (internal optimization). Defaults to `True`.
 - `use_int8` (bool): Whether to use Int8 quantization for Q and K. Defaults to `False`. Enables per-block quantization for Q and channel-smoothed per-block quantization for K.
 - `threshold` (float): Log-space threshold for skipping tiles. Controlled from the Regstry (see below). Change here only for testing.
 

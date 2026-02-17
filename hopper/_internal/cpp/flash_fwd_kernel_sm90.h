@@ -68,7 +68,6 @@ namespace flash
         using SeqlenInfo_t = typename CollectiveMainloop::SeqlenInfo_t;
 
         static constexpr bool Is_skipable = CollectiveMainloop::Is_skipable;
-        static constexpr bool ReverseSkipList = CollectiveMainloop::ReverseSkipList;
         static constexpr bool Phase = CollectiveMainloop::Phase;
         static constexpr bool HasMustDoList = CollectiveMainloop::HasMustDoList;
 
@@ -158,7 +157,7 @@ namespace flash
             } pipelines;
 
             // SkipListStorage<BufferSize> skip_list_storage;
-            SkipListStorage<BufferSize, ReverseSkipList, Phase, HasMustDoList> skip_list_storage;
+            SkipListStorage<BufferSize, Phase, HasMustDoList> skip_list_storage;
         };
 
         static constexpr int SharedStorageSize = sizeof(SharedStorage);
@@ -422,14 +421,14 @@ namespace flash
 
                 // // Initialize skip_writer in shared memory with shared memory buffers
                 // // Use placement new to initialize the writer that resides in shared memory
-                // new (&shared_storage.skip_list_storage.writer) DelayedSkipListWriter<CollectiveMainloop::kStages, ReverseSkipList, Phase, HasMustDoList>(
+                // new (&shared_storage.skip_list_storage.writer) DelayedSkipListWriter<CollectiveMainloop::kStages, Phase, HasMustDoList>(
                 //     shared_storage.skip_list_storage.n_blocks_buffer,
                 //     shared_storage.skip_list_storage.end_range_buffer,
                 //     shared_storage.skip_list_storage.skip_tests
                 // );
                 // consider: move this to shared memory to reduce register pressure + not needing to worry about which thread been elected
                 // Initialize skip_writer with shared memory buffers
-                DelayedSkipListWriter<CollectiveMainloop::kStagesForSkips, ReverseSkipList, Phase, HasMustDoList> skip_writer(
+                DelayedSkipListWriter<CollectiveMainloop::kStagesForSkips, Phase, HasMustDoList> skip_writer(
                     shared_storage.skip_list_storage.n_blocks_buffer,
                     shared_storage.skip_list_storage.end_range_buffer,
                     shared_storage.skip_list_storage.skip_tests

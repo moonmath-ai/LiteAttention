@@ -51,7 +51,7 @@ using namespace cute; // Import CuTe namespace for tensor operations and layout 
  */
 template <int Arch, int kHeadDim, int kHeadDimV, int ClusterM, typename Element, typename ElementOut,
           bool Is_causal, bool Is_local, bool Has_softcap, bool Varlen, bool PagedKVNonTMA, bool AppendKV, bool HasQv,
-          bool PackGQA, bool Split, bool V_colmajor, bool Is_skipable, bool ReverseSkipList=false, bool Phase=true, bool HasMustDoList=false>
+          bool PackGQA, bool Split, bool V_colmajor, bool Is_skipable, bool Phase=true, bool HasMustDoList=false>
 void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream)
 {
     // Compile-time validation of template parameter combinations
@@ -129,7 +129,6 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream)
             Split,               // 0
             V_colmajor,          // 0
             Is_skipable,         // 0
-            ReverseSkipList,     // 0
             Phase,               // 0
             HasMustDoList>,      // 0
         // SM80-89 mainloop: Traditional warp-level cooperation with manual shared memory management
@@ -388,8 +387,8 @@ void run_mha_fwd_(Flash_fwd_params &params, cudaStream_t stream)
                                            {
             static constexpr bool V_colmajor = V_colmajor_ && sizeof(T) == 1;
             VARLEN_SWITCH(params.cu_seqlens_q || params.cu_seqlens_k || params.seqused_q || params.seqused_k || params.leftpad_k, Varlen, [&] {
-                // Reorder switches: HasQV_ -> AppendKV -> Is_skipable -> HasMustDoList -> ReverseSkipList -> Phase
-                // This ensures invalid combinations (HasMustDoList or ReverseSkipList true when Is_skipable false) are never generated
+                // Reorder switches: HasQV_ -> AppendKV -> Is_skipable -> HasMustDoList -> Phase
+                // This ensures invalid combinations (HasMustDoList true when Is_skipable false) are never generated
                 BOOL_SWITCH(params.qv_ptr, HasQV_, [&] {
                     static constexpr bool HasQv = HasQV_ && Arch == 90 && !Is_8Bit && kHeadDim == 64 && kHeadDimV >= 256;
                     APPENDKV_SWITCH(params.knew_ptr, AppendKV, [&] {
@@ -404,16 +403,13 @@ void run_mha_fwd_(Flash_fwd_params &params, cudaStream_t stream)
                                 if constexpr (!Is_skipable) {
                                     // When Is_skipable is disabled, use default values
                                     static constexpr bool HasMustDoList = false;
-                                    static constexpr bool ReverseSkipList = false;
                                     static constexpr bool Phase = true;
-                                    run_flash_fwd<Arch, kHeadDim, kHeadDimV, ClusterM, T, T_out, Is_causal, Is_local, Has_softcap, Varlen, PagedKVNonTMA, AppendKV && Varlen, HasQv, PackGQA, Split, V_colmajor, Is_skipable, ReverseSkipList, Phase, HasMustDoList>(params, stream);
+                                    run_flash_fwd<Arch, kHeadDim, kHeadDimV, ClusterM, T, T_out, Is_causal, Is_local, Has_softcap, Varlen, PagedKVNonTMA, AppendKV && Varlen, HasQv, PackGQA, Split, V_colmajor, Is_skipable, Phase, HasMustDoList>(params, stream);
                                 } else {
-                                    // When Is_skipable is enabled, check HasMustDoList, ReverseSkipList, and Phase
+                                    // When Is_skipable is enabled, check HasMustDoList and Phase
                                     BOOL_SWITCH(params.has_must_do_list, HasMustDoList, [&] {
-                                        BOOL_SWITCH(params.reverse_skip_list, ReverseSkipList, [&] {
-                                            BOOL_SWITCH(params.phase, Phase, [&] {
-                                                run_flash_fwd<Arch, kHeadDim, kHeadDimV, ClusterM, T, T_out, Is_causal, Is_local, Has_softcap, Varlen, PagedKVNonTMA, AppendKV && Varlen, HasQv, PackGQA, Split, V_colmajor, Is_skipable, ReverseSkipList, Phase, HasMustDoList>(params, stream);
-                                            });
+                                        BOOL_SWITCH(params.phase, Phase, [&] {
+                                            run_flash_fwd<Arch, kHeadDim, kHeadDimV, ClusterM, T, T_out, Is_causal, Is_local, Has_softcap, Varlen, PagedKVNonTMA, AppendKV && Varlen, HasQv, PackGQA, Split, V_colmajor, Is_skipable, Phase, HasMustDoList>(params, stream);
                                         });
                                     });
                                 }
