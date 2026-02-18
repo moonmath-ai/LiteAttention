@@ -7,7 +7,7 @@ name = "lite-attention"
 dynamic = ["version"]
 description = "Lite Attention: Temporal Sparse Attention for Video Diffusion Models"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: Apache Software License",
