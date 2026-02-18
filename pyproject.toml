@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lite-attention"
-dynamic = ["version"]
+version = "0.4.0"
 description = "Lite Attention: Temporal Sparse Attention for Video Diffusion Models"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -34,6 +34,9 @@ explicit = true
 name = "pytorch-cu129"
 url = "https://download.pytorch.org/whl/cu129"
 explicit = true
+
+[tool.uv]
+no-build-isolation-package = ["lite-attention"]
 
 [tool.uv.sources]
 torch = { index = "pytorch-cu128" }
