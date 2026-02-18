@@ -94,7 +94,7 @@ def test_correctness():
         print("  PASSED\n")
     else:
         print(f"  WARNING: Outputs differ beyond tolerance (rtol={rtol}, atol={atol})")
-        print("  PASSED (with note: skip list state differences expected)\n")
+        print("  PASSED (with note: keep list state differences expected)\n")
 
 
 def test_module_integration(q, k, v):

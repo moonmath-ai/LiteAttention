@@ -1,13 +1,13 @@
 """
-LiteAttention: A lightweight Flash Attention 3 wrapper with skip list optimization.
+LiteAttention: A lightweight Flash Attention 3 wrapper with skip optimization.
 
 This module provides a clean interface for Flash Attention 3 with internal management
-of read and write skip lists, hiding the complexity from users.
+of read and write keep lists, hiding the complexity from users.
 
-Skip List Data Structure:
+Keep List Data Structure:
 =========================
-The skip list is a key optimization that tracks which attention tiles can be skipped
-during computation. It uses a compact representation to store ranges of tiles to compute.
+The keep list is a key optimization that tracks which attention tiles to compute
+(and thus which can be skipped). It uses a compact representation to store ranges of tiles to keep.
 
 Format:
 -------
@@ -18,7 +18,7 @@ Shape: [2, batch, heads, qtiles, ktiles + 1]
 - Dimension 3: Query tiles (rows of the attention matrix)
 - Dimension 4: Key tiles + 1 (the +1 is for storing the list length)
 
-Format (reverse skip list, always):
+Format (reverse keep list, always):
 Each entry format: [length, end_n, start_n, ..., end_1, start_1, end_0, start_0, uninitialized...]
 
 The relationship between start and end depends on the phase:
@@ -33,7 +33,7 @@ for tile_idx in range(start=start_x + step, end=end_x + step, step=step):
 ```
 
 Example (phase=1):
-skip_list[0, 0, 0, 0, :] = [4, 99, 50, 30, 0, ?, ?, ...]
+keep_list[0, 0, 0, 0, :] = [4, 99, 50, 30, 0, ?, ?, ...]
 - Range 1: start=50, end=99, step=1 → compute tiles 51, 52, ..., 99 (49 tiles)
 - Range 0: start=0, end=30, step=1 → compute tiles 1, 2, ..., 30 (30 tiles)
 
@@ -111,8 +111,8 @@ class LiteAttention(nn.Module, ConfigurableModule):
     """
     A lightweight attention class that encapsulates Flash Attention 3 with optimized skip lists.
     
-    This class manages read and write skip lists internally, providing a clean interface for users.
-    The skip list optimization allows the attention computation to skip tiles (blocks) of the 
+    This class manages read and write keep lists internally, providing a clean interface for users.
+    The skip optimization allows the attention computation to skip tiles (blocks) of the 
     attention matrix that have low contribution, significantly reducing computation time.
     
     How It Works:
@@ -125,7 +125,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
     6. The process alternates between two buffers for efficiency
     
     Args:
-        enable_skipping (bool, optional): Whether to enable skip list optimizations. 
+        enable_skipping (bool, optional): Whether to enable skip optimizations. 
             Defaults to True. When False, performs standard Flash Attention.
         threshold (float, optional): Log-space threshold for skipping tiles. Defaults to -10.0.
             Tiles with max(log-attention-score) < threshold will be skipped.
@@ -139,8 +139,8 @@ class LiteAttention(nn.Module, ConfigurableModule):
     Attributes:
         enable_skipping (bool): Current state of skip optimization
         threshold (float): Current threshold value
-        read_list (torch.Tensor): Current read skip list (read-only property)
-        write_list (torch.Tensor): Current write skip list (read-only property)
+        read_list (torch.Tensor): Current read keep list (read-only property)
+        write_list (torch.Tensor): Current write keep list (read-only property)
         
     Example:
         >>> # in the common case, the config is managed with the LiteAttentionRegistry
@@ -177,14 +177,14 @@ class LiteAttention(nn.Module, ConfigurableModule):
         if threshold is not None:
             config = LiteAttentionRunConfig(threshold=threshold)
         ConfigurableModule.__init__(self, config)
-        # Internal skip list management
-        self._skip_list = None  # Shape: [2, max_batch_size, heads, qtiles, ktiles+1]
+        # Internal keep list management
+        self._keep_list = None  # Shape: [2, max_batch_size, heads, qtiles, ktiles+1]
         self._phase = 0  # Alternates between 0 and 1 for double-buffering
         self.use_int8 = use_int8  # Whether using int8 quantization
         
         # Cache of last tensor properties (used to detect when reinitialization is needed)
         self._last_batch_size = None  # Actual batch size used (not max_batch_size)
-        # Sequence lengths used to size the skip list.
+        # Sequence lengths used to size the keep list.
         # For self-attention: (q_len, k_len) == (seq_len, seq_len)
         # For rectangular attention (e.g. KV-sharded sequence parallel): q_len != k_len
         self._last_seq_len = None  # Tuple[int, int] = (q_len, k_len)
@@ -212,12 +212,12 @@ class LiteAttention(nn.Module, ConfigurableModule):
         """
         Calculate the percentage of non-skipped (computed) attention tiles per head.
         
-        This function analyzes the skip list to determine what fraction of attention tiles
-        were actually computed vs. skipped. The skip list stores ranges of tiles to compute,
+        This function analyzes the keep list to determine what fraction of attention tiles
+        were actually computed vs. skipped. The keep list stores ranges of tiles to compute,
         and this function calculates the total number of tiles covered by those ranges.
         
         Args:
-            read_list (torch.Tensor): Skip list of shape [batch, heads, qtiles, ktiles + 1]
+            read_list (torch.Tensor): Keep list of shape [batch, heads, qtiles, ktiles + 1]
                 Each entry: [length, start_0, end_0, start_1, end_1, ...]
         
         Returns:
@@ -227,7 +227,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
         
         Algorithm:
         ----------
-        1. Remove the length field (first element) from each skip list entry
+        1. Remove the length field (first element) from each keep list entry
         2. Reshape pairs of (start, end) indices into explicit ranges
         3. Calculate the size of each range (end - start)
         4. Sum up all range sizes to get total computed tiles
@@ -235,7 +235,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
         """
 
         read_list = read_list.to(torch.int64)
-        # Remove the first element (the length of the skip list)
+        # Remove the first element (the length of the keep list)
         # [batch, heads, qtiles, ktiles + 1] -> [batch, heads, qtiles, ktiles]
         reshaped_read_list = read_list[..., 1:] # [batch, heads, qtiles, ktiles]
 
@@ -267,13 +267,13 @@ class LiteAttention(nn.Module, ConfigurableModule):
         not_skipped_per_head = range_sizes.cumsum(dim=-1)
         
         # Get the actual number of valid ranges from the length field
-        # skip_list_sizes: [batch, heads, qtiles]
+        # keep_list_sizes: [batch, heads, qtiles]
         # Length is always even, divide by 2 to get number of (start, end) pairs
-        skip_list_sizes = (read_list[:, :, :, 0] - 1) // 2
+        keep_list_sizes = (read_list[:, :, :, 0] - 1) // 2
         
         # Extract the cumulative sum at the last valid range position
         # real_not_skipped_per_head: [batch, heads, qtiles, num_ranges] -> [batch, heads, qtiles]
-        real_not_skipped_per_head = torch.gather(not_skipped_per_head, dim=-1, index=skip_list_sizes.unsqueeze(-1)).squeeze(-1)
+        real_not_skipped_per_head = torch.gather(not_skipped_per_head, dim=-1, index=keep_list_sizes.unsqueeze(-1)).squeeze(-1)
         
         # Calculate percentage: (tiles computed) / (total tiles)
         num_of_k_tiles = read_list.shape[-1] - 1        #fixme: this is wrong when we use max_len
@@ -285,7 +285,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
         Calculate the average percentage of non-skipped attention computations.
         
         Args:
-            read_list (torch.Tensor): Skip list of shape [batch, heads, qtiles, ktiles + 1]
+            read_list (torch.Tensor): Keep list of shape [batch, heads, qtiles, ktiles + 1]
         
         Returns:
             float: Average percentage across all query tiles, heads, and batches.
@@ -348,11 +348,11 @@ class LiteAttention(nn.Module, ConfigurableModule):
         return kBlockM, kBlockN
 
     @staticmethod
-    def init_skip_list(batch, seq_len, heads, head_dim, v_colmajor, dtype, device, must_skip_list: list = None) -> torch.Tensor:
+    def init_keep_list(batch, seq_len, heads, head_dim, v_colmajor, dtype, device, must_skip_list: list = None) -> torch.Tensor:
         """
-        Initialize skip list tensors with default "compute all tiles" configuration.
+        Initialize keep list tensors with default "compute all tiles" configuration.
         
-        The skip list is initialized to compute all tiles by default. As the forward pass
+        The keep list is initialized to compute all tiles by default. As the forward pass
         executes, it will be updated based on which tiles exceed the threshold.
         
         Tile Dimensions:
@@ -373,13 +373,13 @@ class LiteAttention(nn.Module, ConfigurableModule):
             device (torch.device): Device to allocate tensors on
             must_skip_list (list, optional): List of sequence ranges to always skip.
         Returns:
-            torch.Tensor: Initialized skip list of shape [2, batch, heads, qtiles, ktiles + 1]
+            torch.Tensor: Initialized keep list of shape [2, batch, heads, qtiles, ktiles + 1]
                 where qtiles and ktiles are the number of tiles along query and key dimensions.
                 Dtype: torch.int16
         
         Initial Configuration:
         ---------------------
-        The skip list is initialized with a single range covering all tiles:
+        The keep list is initialized with a single range covering all tiles:
         [2, ktiles-1, -1, ?, ?, ...]
         
         Where:
@@ -410,14 +410,14 @@ class LiteAttention(nn.Module, ConfigurableModule):
         # ktiles: number of tiles along key dimension (columns of Q@K^T)
         ktiles = LiteAttention.ceil_div(k_len, kBlockN)
         
-        # Allocate memory for skip list data structure
+        # Allocate memory for keep list data structure
         # Shape explained:
         #   [0]: Size 2 for double-buffering (alternates between read_list and write_list)
         #   [1]: Batch dimension
         #   [2]: Head dimension  
         #   [3]: Query tiles dimension
         #   [4]: ktiles + 1 (the +1 stores the list length at index 0)
-        skip_list = torch.empty(2, batch, heads, qtiles, ktiles + 1, dtype=torch.int16, device=device)
+        keep_list = torch.empty(2, batch, heads, qtiles, ktiles + 1, dtype=torch.int16, device=device)
 
         if must_skip_list is not None:
             tile_indices = LiteAttention.convert_sequence_indices_to_tile_indices(
@@ -432,22 +432,22 @@ class LiteAttention(nn.Module, ConfigurableModule):
             tile_indices.pop() if tile_indices[-1] == ktiles else tile_indices.append(ktiles)
 
             tile_indices = [len(tile_indices)] + list(reversed(tile_indices))
-            skip_list[0, :, :, :, :len(tile_indices)] = torch.tensor(tile_indices, dtype=torch.int16, device=device)
+            keep_list[0, :, :, :, :len(tile_indices)] = torch.tensor(tile_indices, dtype=torch.int16, device=device)
         else:
             # Initialize first buffer with "compute all tiles" configuration
             # [2, ktiles-1, -1] means: length=2, one range from ktiles-1 down to 0 (via -1)
-            skip_list[0, :, :, :, 0:3] = torch.tensor([2, ktiles - 1, -1], dtype=torch.int16, device=device) 
+            keep_list[0, :, :, :, 0:3] = torch.tensor([2, ktiles - 1, -1], dtype=torch.int16, device=device) 
 
-            # Note: Second buffer (skip_list[1]) is left uninitialized and will be populated
+            # Note: Second buffer (keep_list[1]) is left uninitialized and will be populated
             # during the first forward pass
         
-        return skip_list
+        return keep_list
 
-    def _init_skip_list(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, must_skip_list: list = None) -> torch.Tensor:
+    def _init_keep_list(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, must_skip_list: list = None) -> torch.Tensor:
         """
-        Initialize skip list tensors based on query and value tensor shapes.
+        Initialize keep list tensors based on query and value tensor shapes.
         
-        This is a wrapper around the static init_skip_list method that extracts
+        This is a wrapper around the static init_keep_list method that extracts
         all necessary parameters from the input tensors.
         
         Args:
@@ -455,10 +455,10 @@ class LiteAttention(nn.Module, ConfigurableModule):
             value (torch.Tensor): Value tensor (used to determine memory layout)
             must_skip_list (list, optional): List of sequence ranges to always skip.
         Returns:
-            torch.Tensor: Initialized skip list
+            torch.Tensor: Initialized keep list
             
         Note:
-            The skip list is allocated with max_batch_size (not actual batch size) to
+            The keep list is allocated with max_batch_size (not actual batch size) to
             avoid reallocation when batch size varies across forward passes.
         """
         batch = value.shape[0]
@@ -474,7 +474,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
         device = query.device
         
         # Allocate for max_batch_size to avoid reallocation on batch size changes.
-        return LiteAttention.init_skip_list(
+        return LiteAttention.init_keep_list(
             self.max_batch_size,
             (q_len, k_len),
             heads,
@@ -488,9 +488,9 @@ class LiteAttention(nn.Module, ConfigurableModule):
     
     def _get_read_write_lists(self, query: torch.Tensor, key: torch.Tensor, value: Optional[torch.Tensor] = None, must_skip_list: list = None) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
         """
-        Get the current read and write skip lists for this attention forward pass.
+        Get the current read and write keep lists for this attention forward pass.
         
-        This method manages the double-buffering of skip lists, alternating between
+        This method manages the double-buffering of keep lists, alternating between
         two buffers to enable read/write in a single pass. It also handles initialization
         and reinitialization when tensor properties change.
         
@@ -500,8 +500,8 @@ class LiteAttention(nn.Module, ConfigurableModule):
             must_skip_list (list, optional): List of sequence ranges to always skip.
         Returns:
             tuple[Optional[torch.Tensor], Optional[torch.Tensor]]: 
-                - read_list: Skip list from previous pass (what to compute this pass)
-                - write_list: Skip list to write to (for next pass)
+                - read_list: Keep list from previous pass (what to compute this pass)
+                - write_list: Keep list to write to (for next pass)
                 Returns (None, None) if skipping is disabled.
         
         Double-Buffering Mechanism:
@@ -512,7 +512,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
         
         Reinitialization Triggers:
         -------------------------
-        Skip list is reinitialized if any of these change:
+        Keep list is reinitialized if any of these change:
         - Sequence length
         - Number of heads
         - Head dimension
@@ -531,7 +531,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
             value = key
             key = value
             
-        # attributes we check in the decision to REINITIALIZE the skip list
+        # attributes we check in the decision to REINITIALIZE the keep list
         current_seq_len = (int(query.shape[1]), int(key.shape[1]))
         head_dim = query.shape[-1]
         current_head_dim = head_dim
@@ -540,9 +540,9 @@ class LiteAttention(nn.Module, ConfigurableModule):
         dtype = torch.int8 if self.use_int8 else query.dtype
         device = query.device
 
-        should_reinitialize = (self._skip_list is None or 
+        should_reinitialize = (self._keep_list is None or 
             self._last_seq_len != current_seq_len or 
-            self._skip_list.device != query.device or
+            self._keep_list.device != query.device or
             self._last_head_dim != current_head_dim or
             self._last_v_colmajor != v_colmajor or
             self._last_dtype != dtype or
@@ -553,12 +553,12 @@ class LiteAttention(nn.Module, ConfigurableModule):
             should_reinitialize = LiteAttention.get_MN(head_dim, torch.int8, v_colmajor) != LiteAttention.get_MN(head_dim, dtype, v_colmajor)
             self._last_use_int8 = self.use_int8
 
-        # Initialize or reinitialize skip list if needed
+        # Initialize or reinitialize keep list if needed
         # we always enter this in the first call
         if should_reinitialize:
-            # initialize the skip list (actually allocate the memory)
-            self._skip_list = self._init_skip_list(query, key, value, must_skip_list)
-            # ditermines which part of self._skip_list to use for read_list and write_list
+            # initialize the keep list (actually allocate the memory)
+            self._keep_list = self._init_keep_list(query, key, value, must_skip_list)
+            # ditermines which part of self._keep_list to use for read_list and write_list
             self._phase = 0
 
             # update the last attributes to the current values
@@ -572,17 +572,17 @@ class LiteAttention(nn.Module, ConfigurableModule):
             self._last_use_int8 = self.use_int8
 
             if os.getenv("LITE_ATTENTION_VERBOSE", "FALSE") != "FALSE":
-                print(f"[Warning]: reinitialized skip list during the forward pass")
+                print(f"[Warning]: reinitialized keep list during the forward pass")
         
-        # Alternate between the two skip list buffers
+        # Alternate between the two keep list buffers
         if self._phase == 0:
-            read_list = self._skip_list[0]
-            write_list = self._skip_list[1]
+            read_list = self._keep_list[0]
+            write_list = self._keep_list[1]
             # switch so the current read_list and write_list roles would switch
             self._phase = 1
         else:
-            read_list = self._skip_list[1]
-            write_list = self._skip_list[0]
+            read_list = self._keep_list[1]
+            write_list = self._keep_list[0]
             # switch so the current read_list and write_list roles would switch
             self._phase = 0
             
@@ -606,7 +606,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
                 where end indices are EXCLUSIVE (Python-style ranges).
                 Example: [0, 128, 500, 640] means compute positions [0, 128) and [500, 640)
                          which is positions 0-127 and 500-639.
-            list_shape (tuple): Shape of the skip list (not used in current implementation)
+            list_shape (tuple): Shape of the keep list (not used in current implementation)
             query (torch.Tensor): Query tensor (used for device and dimension info)
             value (torch.Tensor): Value tensor (used to determine memory layout)
         
@@ -639,7 +639,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
         
         This means tile ranges [0, 1) and [3, 5), i.e., tile 0 and tiles 3-4
         
-        The kernel will merge this with the skip list to ensure these tile ranges
+        The kernel will merge this with the keep list to ensure these tile ranges
         are always computed.
         """
         
@@ -722,7 +722,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
         must_skip_list: list = None,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """
-        Perform Flash Attention 3 computation with optional skip list optimization.
+        Perform Flash Attention 3 computation with optional skip optimization.
         
         This is the main forward pass method. It handles:
         1. Skip list management (read/write alternation)
@@ -760,9 +760,9 @@ class LiteAttention(nn.Module, ConfigurableModule):
         
         Notes:
         -----
-        - The skip list is updated during each forward pass based on tile scores
+        - The keep list is updated during each forward pass based on tile scores
         - Set LITE_ATTENTION_VERBOSE=1 environment variable to see skip statistics
-        - The method automatically manages skip list initialization and reinitialization
+        - The method automatically manages keep list initialization and reinitialization
         
         Example:
         -------
@@ -898,26 +898,26 @@ class LiteAttention(nn.Module, ConfigurableModule):
     
     def reset_skip_state(self):
         """
-        Reset the internal skip list state to force reinitialization.
+        Reset the internal keep list state to force reinitialization.
         
-        This method clears all cached state, forcing the skip list to be reinitialized
+        This method clears all cached state, forcing the keep list to be reinitialized
         on the next forward pass. Useful when:
         - Manually changing sequence lengths between forward passes
         - Switching to a different model/configuration
-        - Debugging skip list behavior
+        - Debugging keep list behavior
         - Starting a new sequence (e.g., in autoregressive generation)
         
         After calling this method, the next forward pass will:
-        1. Allocate new skip list buffers
+        1. Allocate new keep list buffers
         2. Initialize with "compute all tiles" configuration
         3. Reset phase to 0
         
         Note:
         ----
-        In most cases, you don't need to call this manually. The skip list will
+        In most cases, you don't need to call this manually. The keep list will
         automatically reinitialize when tensor properties change (seq_len, dtype, etc.)
         """
-        self._skip_list = None
+        self._keep_list = None
         self._phase = 0
         self._last_seq_len = None
         self._last_head_dim = None
@@ -964,7 +964,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
         
         Note:
         ----
-        Changing the threshold does not reset the skip list state. The new threshold
+        Changing the threshold does not reset the keep list state. The new threshold
         will be applied starting from the next forward pass.
         """
         warnings.warn("usage of `LiteAttention.threshold = value` and `LiteAttention.set_threshold` is deprecated. Please use a module registry")
@@ -988,7 +988,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
         
         Note:
         ----
-        The skip list state is preserved when toggling this flag, so you can
+        The keep list state is preserved when toggling this flag, so you can
         switch between optimized and non-optimized modes without reinitializing.
         
         Example:
@@ -1017,8 +1017,8 @@ class LiteAttention(nn.Module, ConfigurableModule):
         Visualize which tiles are being computed vs skipped in the attention matrix.
         
         Creates visualization images showing the attention pattern with overlays indicating
-        which tiles are skipped (based on the current skip list). Useful for debugging
-        and understanding the skip list behavior.
+        which tiles are skipped (based on the current keep list). Useful for debugging
+        and understanding the keep list behavior.
         
         Args:
             query (torch.Tensor): Query tensor of shape [batch, seq_len, heads, head_dim]
@@ -1041,14 +1041,14 @@ class LiteAttention(nn.Module, ConfigurableModule):
         Example:
         -------
         >>> lite_attn = LiteAttention(enable_skipping=True, threshold=-8.0)
-        >>> output = lite_attn(q, k, v)  # Run forward pass to populate skip list
+        >>> output = lite_attn(q, k, v)  # Run forward pass to populate keep list
         >>> # Visualize heads 0 and 1
         >>> lite_attn.visualize_skips(q, k, torch.tensor([0, 1]), 
         ...                           scale=0.125, save_path="./vis/")
         
         Note:
         ----
-        This method reads from the current skip list, so it should be called after
+        This method reads from the current keep list, so it should be called after
         at least one forward pass has been executed.
         """
         import matplotlib.pyplot as plt
@@ -1059,10 +1059,10 @@ class LiteAttention(nn.Module, ConfigurableModule):
         batch = query.shape[0]
         seq_len_q = query.shape[1]
         seq_len_k = key.shape[1]
-        skip_list = self._skip_list[self._phase]
+        keep_list = self._keep_list[self._phase]
 
-        # find out if the skip list is reversed or not
-        r1, r2 = skip_list[0, 0, 0, 1:3]
+        # find out if the keep list is reversed or not
+        r1, r2 = keep_list[0, 0, 0, 1:3]
         if r1 > r2:
             step = 1
         else:
@@ -1116,8 +1116,8 @@ class LiteAttention(nn.Module, ConfigurableModule):
                 
                 attn_map = attn_down[0, 0]  # (max_res, max_res)
                 
-                current_skip_list = skip_list[b, h][None, None, ...]
-                percentage = self.calc_percentage(current_skip_list)
+                current_keep_list = keep_list[b, h][None, None, ...]
+                percentage = self.calc_percentage(current_keep_list)
 
                 plt.figure(figsize=(6, 6))
                 attn_cpu = attn_map.detach().float().cpu()
@@ -1133,13 +1133,13 @@ class LiteAttention(nn.Module, ConfigurableModule):
                     plt.axvline(x=x-0.5, color='black', linewidth=0.2, alpha=0.7)
 
                 if dims is None:
-                    # plot the skip list
-                    for i, row_skip_list in enumerate(current_skip_list[0, 0]):
-                        # print(row_skip_list.shape)
-                        l_row = row_skip_list[0]
+                    # plot the keep list
+                    for i, row_keep_list in enumerate(current_keep_list[0, 0]):
+                        # print(row_keep_list.shape)
+                        l_row = row_keep_list[0]
                         # end0, start1, end1, start2, ...
-                        # width_ranges = (row_skip_list[1 : l_row + 1] + 1) * grid_width
-                        width_ranges = (row_skip_list[1 : l_row + 1] + step) * grid_width
+                        # width_ranges = (row_keep_list[1 : l_row + 1] + 1) * grid_width
+                        width_ranges = (row_keep_list[1 : l_row + 1] + step) * grid_width
                         # height
                         row_height = i * grid_height
 
@@ -1164,42 +1164,42 @@ class LiteAttention(nn.Module, ConfigurableModule):
     @property
     def read_list(self) -> Optional[torch.Tensor]:
         """
-        Get the current read skip list (what was computed in the last forward pass).
+        Get the current read keep list (what was computed in the last forward pass).
         
         The read list contains the tile ranges that were computed in the most recent
         forward pass. This can be used to analyze which tiles were skipped.
         
         Returns:
-            Optional[torch.Tensor]: Skip list tensor of shape [batch, heads, qtiles, ktiles+1]
-                Returns None if skip list hasn't been initialized yet.
+            Optional[torch.Tensor]: Keep list tensor of shape [batch, heads, qtiles, ktiles+1]
+                Returns None if keep list hasn't been initialized yet.
         
         Note:
         ----
         Only includes data for the actual batch size used (not max_batch_size).
         """
-        if self._skip_list is None:
+        if self._keep_list is None:
             return None
-        return self._skip_list[self._phase, :self._last_batch_size]
+        return self._keep_list[self._phase, :self._last_batch_size]
     
     @property
     def write_list(self) -> Optional[torch.Tensor]:
         """
-        Get the current write skip list (where results will be written this pass).
+        Get the current write keep list (where results will be written this pass).
         
         The write list is being populated during the current forward pass and will
         become the read list for the next forward pass.
         
         Returns:
-            Optional[torch.Tensor]: Skip list tensor of shape [batch, heads, qtiles, ktiles+1]
-                Returns None if skip list hasn't been initialized yet.
+            Optional[torch.Tensor]: Keep list tensor of shape [batch, heads, qtiles, ktiles+1]
+                Returns None if keep list hasn't been initialized yet.
         
         Note:
         ----
         Only includes data for the actual batch size used (not max_batch_size).
         """
-        if self._skip_list is None:
+        if self._keep_list is None:
             return None
-        return self._skip_list[1 - self._phase, :self._last_batch_size]
+        return self._keep_list[1 - self._phase, :self._last_batch_size]
 
 class SeqParallelLiteAttention:
     """
@@ -1211,7 +1211,7 @@ class SeqParallelLiteAttention:
     
     Args:
         num_nodes (int): Number of nodes in the sequence-parallel setup
-        enable_skipping (bool, optional): Whether to enable skip list optimizations.
+        enable_skipping (bool, optional): Whether to enable skip optimizations.
             Defaults to True.
         threshold (float, optional): Log-space threshold for skipping tiles.
             Defaults to -10.0.
@@ -1280,7 +1280,7 @@ class SeqParallelLiteAttention:
 
     def reset_skip_state(self):
         """
-        Reset skip list state for all nodes.
+        Reset keep list state for all nodes.
         
         Calls reset_skip_state() on each LiteAttention instance.
         """

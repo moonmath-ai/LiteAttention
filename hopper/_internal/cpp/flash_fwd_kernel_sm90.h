@@ -19,7 +19,7 @@
 #include "seqlen.h"
 #include "utils.h"
 #include "softmax.h"
-#include "skip_list.h"
+#include "keep_list.h"
 
 namespace flash
 {
@@ -156,8 +156,7 @@ namespace flash
                 alignas(16) typename TileScheduler::SharedStorage smem_scheduler;
             } pipelines;
 
-            // SkipListStorage<BufferSize> skip_list_storage;
-            SkipListStorage<BufferSize, Phase, HasMustDoList> skip_list_storage;
+            KeepListStorage<BufferSize, Phase, HasMustDoList> keep_list_storage;
         };
 
         static constexpr int SharedStorageSize = sizeof(SharedStorage);
@@ -419,19 +418,12 @@ namespace flash
 
                 cutlass::arch::wait_on_dependent_grids();
 
-                // // Initialize skip_writer in shared memory with shared memory buffers
-                // // Use placement new to initialize the writer that resides in shared memory
-                // new (&shared_storage.skip_list_storage.writer) DelayedSkipListWriter<CollectiveMainloop::kStages, Phase, HasMustDoList>(
-                //     shared_storage.skip_list_storage.n_blocks_buffer,
-                //     shared_storage.skip_list_storage.end_range_buffer,
-                //     shared_storage.skip_list_storage.skip_tests
-                // );
                 // consider: move this to shared memory to reduce register pressure + not needing to worry about which thread been elected
                 // Initialize skip_writer with shared memory buffers
-                DelayedSkipListWriter<CollectiveMainloop::kStagesForSkips, Phase, HasMustDoList> skip_writer(
-                    shared_storage.skip_list_storage.n_blocks_buffer,
-                    shared_storage.skip_list_storage.end_range_buffer,
-                    shared_storage.skip_list_storage.skip_tests
+                DelayedKeepListWriter<CollectiveMainloop::kStagesForSkips, Phase, HasMustDoList> skip_writer(
+                    shared_storage.keep_list_storage.n_blocks_buffer,
+                    shared_storage.keep_list_storage.end_range_buffer,
+                    shared_storage.keep_list_storage.skip_tests
                 );
 
                 bool should_load_KV=false;
@@ -462,9 +454,7 @@ namespace flash
                             smem_pipe_write_new, shared_storage, seqlen_info, block_coord, work_idx);
                         if (tile_new_valid)
                         {
-                            // if (threadIdx.x == 0) { printf("Producer: Before sync\n"); }
                             cutlass::arch::NamedBarrier::sync(NumMmaThreads + NumProducerThreads, static_cast<uint32_t>(FwdNamedBarriers::AppendKV) /*id*/);
-                            // if (threadIdx.x == 0) { printf("Producer: After sync\n"); }
                         }
                     }
                     auto scheduler_prefetch = [&scheduler, &params, &work_tile_info]()
@@ -474,12 +464,9 @@ namespace flash
 
                     should_load_KV = mainloop.load(params.mainloop, pipeline_k, pipeline_v, pipeline_vt, smem_pipe_write,
                                 shared_storage, scheduler_prefetch, seqlen_info, block_coord, work_idx, skip_writer);
-                                // shared_storage, scheduler_prefetch, seqlen_info, block_coord, work_idx, shared_storage.skip_list_storage.writer);
-                                // shared_storage, scheduler_prefetch, seqlen_info, block_coord, work_idx, skip_reader, skip_writer);
 
                 }
                 mainloop.load_tail(pipeline_k, pipeline_v, pipeline_vt, smem_pipe_write, shared_storage, work_idx, skip_writer, should_load_KV);
-                // mainloop.load_tail(pipeline_k, pipeline_v, pipeline_vt, smem_pipe_write, shared_storage, work_idx, shared_storage.skip_list_storage.writer, should_load_KV);
             }
             else
             { // Consumer

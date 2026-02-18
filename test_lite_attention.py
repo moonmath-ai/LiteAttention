@@ -38,64 +38,64 @@ def print_skip_percentage(attn, q):
     skip_percentage = attn.calc_percentage(attn.read_list)
     print(f"    Skip percentage: {skip_percentage:.2%}", f"raw percentage: {skip_percentage}")
 
-# not valid in the new skip list format!!!
-def check_first_element_is_last_block(skip_list):
+# not valid in the new keep list format!!!
+def check_first_element_is_last_block(keep_list):
     """
-    Check that the first element in the skip list is the last block (ktiles - 1).
+    Check that the first element in the keep list is the last block (ktiles - 1).
     
     Args:
-        skip_list: Skip list tensor of shape [batch, heads, qtiles, ktiles]
+        keep_list: Keep list tensor of shape [batch, heads, qtiles, ktiles]
     
     Returns:
         bool: True if all first elements equal the last block index, False otherwise.
     """
-    last_n_block = skip_list.shape[-1] - 2
-    is_n_block = skip_list[..., 1] == last_n_block
+    last_n_block = keep_list.shape[-1] - 2
+    is_n_block = keep_list[..., 1] == last_n_block
     is_all_n_blocks = is_n_block.all()
     if not is_all_n_blocks:
-        print(f"     ⚠️  First Element is not ktiles - 1!, it's: {skip_list[..., 1]} != {last_n_block}")
+        print(f"     ⚠️  First Element is not ktiles - 1!, it's: {keep_list[..., 1]} != {last_n_block}")
     return is_all_n_blocks
 
-def check_skip_list_length_valid(skip_list):
+def check_keep_list_length_valid(keep_list):
     """
     Check that the list length isn't bigger than ktiles + 1.
     
     Args:
-        skip_list: Skip list tensor of shape [batch, heads, qtiles, ktiles]
+        keep_list: Keep list tensor of shape [batch, heads, qtiles, ktiles]
     
     Returns:
         bool: True if all list lengths are valid, False otherwise.
     """
-    passed = (skip_list.shape[-1] > skip_list[..., 0]).all()
+    passed = (keep_list.shape[-1] > keep_list[..., 0]).all()
     if not passed:
-        print(f"      ⚠️  List length is bigger than the length of the skip list: {skip_list[..., 0]} <= {skip_list.shape[-1]}")
+        print(f"      ⚠️  List length is bigger than the length of the keep list: {keep_list[..., 0]} <= {keep_list.shape[-1]}")
     return passed
 
-def check_no_empty_or_negative_ranges(skip_list):
+def check_no_empty_or_negative_ranges(keep_list):
     """
-    Check that we don't have empty or negative ranges in the skip list.
+    Check that we don't have empty or negative ranges in the keep list.
     
     Args:
-        skip_list: Skip list tensor of shape [batch, heads, qtiles, ktiles]
+        keep_list: Keep list tensor of shape [batch, heads, qtiles, ktiles]
     
     Returns:
         bool: True if no empty or negative ranges exist, False otherwise.
     """
     # Check that all ranges are positive (start < end)
     # [start0 - end0, end0 - start1, start1 - end1, end1 - start2, ..., start_n - end_n]
-    diff = (skip_list[..., 1:-1] - skip_list[..., 2:])
+    diff = (keep_list[..., 1:-1] - keep_list[..., 2:])
     # correct the sign according to the first difference
     sign = torch.sign(diff.flatten()[0])
     diff = (diff * sign) > 0
 
-    arange = torch.arange(diff.shape[-1], device=skip_list.device).view(1, 1, 1, -1) >= skip_list[..., 0:1] - 1
+    arange = torch.arange(diff.shape[-1], device=keep_list.device).view(1, 1, 1, -1) >= keep_list[..., 0:1] - 1
     # Only check ranges that are within the valid list length
     passed_individually = (arange + diff) > 0
     passed_individually = passed_individually.all(-1)
     passed = passed_individually.all()
     if not passed:
         print(f"     ⚠️  Empty or negative ranges found!")
-        not_passed = skip_list[~passed_individually]
+        not_passed = keep_list[~passed_individually]
         max_len = (not_passed[..., 0].flatten().max() + 1).item()
         print(f"    Failed items: {not_passed[..., :max_len]}")
     return passed
@@ -103,36 +103,36 @@ def check_no_empty_or_negative_ranges(skip_list):
 def test_skip_all(q, k, v, head_dim, use_int8=False):
     """
     Test that when threshold is inf, all tiles are skipped except one range.
-    Expected: skip_list should contain exactly 2 entries (one range of length 1).
+    Expected: keep_list should contain exactly 2 entries (one range of length 1).
     """
     attn = LiteAttention(use_int8=use_int8, threshold = float('inf'))
     
     # Warm up
     run_attention_warmup(attn, q, k, v)
     
-    skip_list = attn._skip_list[attn._phase, :q.shape[0]]  # [batch, heads, qtiles, ktiles]
+    keep_list = attn._keep_list[attn._phase, :q.shape[0]]  # [batch, heads, qtiles, ktiles]
     
-    # Test that skip lists include only 1 range (skip_list[..., 0] == 2 means 1 range)
-    passed = (skip_list[..., 0] == 2).all()
+    # Test that keep lists include only 1 range (keep_list[..., 0] == 2 means 1 range)
+    passed = (keep_list[..., 0] == 2).all()
     if not passed:
-        print("      ⚠️  Skip list length is not 2")
+        print("      ⚠️  Keep list length is not 2")
     
     # Test that the only range has length 1
-    diff = (skip_list[..., 1] - skip_list[..., 2]).abs()
+    diff = (keep_list[..., 1] - keep_list[..., 2]).abs()
     mpassed = (diff == 1)
     passed &= mpassed.all()
 
     # # Test that the only block we don't skip is the last one
-    # passed &= check_first_element_is_last_block(skip_list)
+    # passed &= check_first_element_is_last_block(keep_list)
     
     prefix = "INT8 " if use_int8 else ""
     print(f"  {prefix}Skip all test: {'✅ PASSED' if passed else '❌ FAILED'}")
     if not passed:
-        print(f"    Skip list shape: {skip_list.shape}")
+        print(f"    Keep list shape: {keep_list.shape}")
         print_skip_percentage(attn, q)
         mdiff = diff[~mpassed]
         print(f"    Mismatched diffs: {mdiff}, shape: {mdiff.shape}")
-        print(f"    Sample skip_list[0, 1, :, 1:3]:\n{skip_list[0, 1, :, 1:3]}")
+        print(f"    Sample keep_list[0, 1, :, 1:3]:\n{keep_list[0, 1, :, 1:3]}")
     
     return passed
 
@@ -140,7 +140,7 @@ def test_skip_all(q, k, v, head_dim, use_int8=False):
 def test_skip_nothing(q, k, v, head_dim, use_int8=False):
     """
     Test that when threshold is -inf, no tiles are skipped.
-    Expected: skip lists should remain consistent between read and write phases.
+    Expected: keep lists should remain consistent between read and write phases.
     """
     attn = LiteAttention(use_int8=use_int8, threshold = float('-inf'))
     read_list_original, _ = attn._get_read_write_lists(q, v)
@@ -150,9 +150,9 @@ def test_skip_nothing(q, k, v, head_dim, use_int8=False):
     # Warm up
     run_attention_warmup(attn, q, k, v, 2)
     
-    # read_list = attn._skip_list[attn._phase, :q.shape[0]]  # [batch, heads, qtiles, ktiles]
+    # read_list = attn._keep_list[attn._phase, :q.shape[0]]  # [batch, heads, qtiles, ktiles]
     read_list = attn.read_list  # [batch, heads, qtiles, ktiles+1]
-    # write_list = attn._skip_list[1 - attn._phase, :q.shape[0]]  # [batch, heads, qtiles, ktiles]
+    # write_list = attn._keep_list[1 - attn._phase, :q.shape[0]]  # [batch, heads, qtiles, ktiles]
     # write_list = attn.write_list  # [batch, heads, qtiles, ktiles+1]
     
     # Check if read and write lists match
@@ -311,8 +311,8 @@ def test_rectangular_attention_correctness(head_dim, batch=1, q_len=1024, k_len=
 def test_rectangular_attention_skipping_twice(head_dim, batch=1, q_len=240, k_len=208, heads=4, use_int8=False):
     """
     Test rectangular attention with skipping enabled.
-    Runs LiteAttention twice to ensure skip-list state is exercised across passes,
-    and asserts the skip list is non-empty.
+    Runs LiteAttention twice to ensure keep-list state is exercised across passes,
+    and asserts the keep list is non-empty.
     """
     # Construct deterministic Q/K to reliably exercise skipping for rectangular attention.
     # Intuition: make one key-tile "high" (K ~= +Q) and another "low" (K ~= -Q) so that
@@ -367,7 +367,7 @@ def test_rectangular_attention_skipping_twice(head_dim, batch=1, q_len=240, k_le
 
     passed = True
 
-    # Pass 1 (initializes skip list and produces a computed read_list)
+    # Pass 1 (initializes keep list and produces a computed read_list)
     torch.cuda.synchronize()
     _ = attn(q, k, v, scale=scale)
     torch.cuda.synchronize()
@@ -376,12 +376,12 @@ def test_rectangular_attention_skipping_twice(head_dim, batch=1, q_len=240, k_le
     if read_list_1 is None:
         passed = False
     else:
-        # Ensure skip list isn't empty (at least one non-empty entry).
+        # Ensure keep list isn't empty (at least one non-empty entry).
         passed &= (read_list_1[..., 0].max().item() > 0)
-        passed &= bool(check_skip_list_length_valid(read_list_1).item())
+        passed &= bool(check_keep_list_length_valid(read_list_1).item())
         passed &= bool(check_no_empty_or_negative_ranges(read_list_1).item())
 
-    # Pass 2 (uses previous pass skip list and updates it again)
+    # Pass 2 (uses previous pass keep list and updates it again)
     torch.cuda.synchronize()
     output_2 = attn(q, k, v, scale=scale)
     torch.cuda.synchronize()
@@ -391,7 +391,7 @@ def test_rectangular_attention_skipping_twice(head_dim, batch=1, q_len=240, k_le
         passed = False
     else:
         passed &= (read_list_2[..., 0].max().item() > 0)
-        passed &= bool(check_skip_list_length_valid(read_list_2).item())
+        passed &= bool(check_keep_list_length_valid(read_list_2).item())
         passed &= bool(check_no_empty_or_negative_ranges(read_list_2).item())
 
     # Output should be finite
@@ -414,11 +414,11 @@ def test_rectangular_attention_skipping_twice(head_dim, batch=1, q_len=240, k_le
     return passed
 
 def consistency_test(q, k, v, head_dim, num_iters=10):
-    """Test that the skip list is consistent between reads and writes."""
+    """Test that the keep list is consistent between reads and writes."""
     attn = LiteAttention(threshold = float(0.0))
 
-    previous_skip_list = None
-    skip_list = None
+    previous_keep_list = None
+    keep_list = None
     percentage = float('inf')
     for i in range(num_iters):
         q, k, v = generate_test_tensors(batch=q.shape[0], seq_len=q.shape[1], heads=q.shape[2], head_dim=q.shape[3])
@@ -426,12 +426,12 @@ def consistency_test(q, k, v, head_dim, num_iters=10):
         output = attn(q, k, v)
         torch.cuda.synchronize()
 
-        previous_skip_list = skip_list
-        # skip_list = attn._skip_list[attn._phase, :q.shape[0]]
-        skip_list = attn.read_list
+        previous_keep_list = keep_list
+        # keep_list = attn._keep_list[attn._phase, :q.shape[0]]
+        keep_list = attn.read_list
 
         # check new percentage is not bigger than the previous one
-        new_percentage = attn.calc_percentage(skip_list)
+        new_percentage = attn.calc_percentage(keep_list)
         if new_percentage > percentage:
             print(f"  Consistency test: {'✅ PASSED' if False else '❌ FAILED'}")
             print(f"    Failed on iteration {i}")
@@ -439,20 +439,20 @@ def consistency_test(q, k, v, head_dim, num_iters=10):
             return False
         percentage = new_percentage
         
-        # # Check that the first element in the skip list is the last block
-        # if not check_first_element_is_last_block(skip_list):
+        # # Check that the first element in the keep list is the last block
+        # if not check_first_element_is_last_block(keep_list):
         #     print(f"  Consistency test: {'✅ PASSED' if False else '❌ FAILED'}")
         #     print(f"    Failed on iteration {i}")
         #     return False
         
         # Check that the list length isn't bigger than ktiles + 1
-        if not check_skip_list_length_valid(skip_list):
+        if not check_keep_list_length_valid(keep_list):
             print(f"  Consistency test: {'✅ PASSED' if False else '❌ FAILED'}")
             print(f"    Failed on iteration {i}")
             return False
 
         # Check that we don't have empty or negative ranges
-        if not check_no_empty_or_negative_ranges(skip_list):
+        if not check_no_empty_or_negative_ranges(keep_list):
             print(f"  Consistency test: {'✅ PASSED' if False else '❌ FAILED'}")
             print(f"    Failed on iteration {i}")
             return False
@@ -594,7 +594,7 @@ def stress_test(q, k, v, head_dim, num_iters=10, use_int8=False):
         new_percentage_per_head = attn.calc_percentage_per_head(attn.read_list)
         
         if (new_percentage - percentage).abs() > percentage_tol:
-            print(f"  Skip list: {attn._skip_list[attn._phase, 0,0,0,:n]}, ktiles: {attn._skip_list.shape[-1] - 1}")
+            print(f"  Keep list: {attn._keep_list[attn._phase, 0,0,0,:n]}, ktiles: {attn._keep_list.shape[-1] - 1}")
             # print(f"  percentage changed from {percentage:.2%} to {new_percentage:.2%} at iteration {i}")
             print(f"  percentage changed from {percentage} to {new_percentage} at iteration {i}")
             prefix = "INT8 " if use_int8 else ""
@@ -692,7 +692,7 @@ def test_int8_with_skipping(q, k, v, head_dim, tolerance_max_abs=0.15, tolerance
     
     # Create BF16 reference with skipping
     attn_bf16 = LiteAttention(enable_skipping=True, use_int8=False, threshold=threshold)
-    # Warm up to stabilize skip lists
+    # Warm up to stabilize keep lists
     run_attention_warmup(attn_bf16, q, k, v, num_iters=2)
     torch.cuda.synchronize()
     output_bf16 = attn_bf16(q, k, v, scale=scale)
@@ -700,7 +700,7 @@ def test_int8_with_skipping(q, k, v, head_dim, tolerance_max_abs=0.15, tolerance
     
     # Create INT8 version with skipping
     attn_int8 = LiteAttention(enable_skipping=True, use_int8=True, threshold=threshold)
-    # Warm up to stabilize skip lists
+    # Warm up to stabilize keep lists
     run_attention_warmup(attn_int8, q, k, v, num_iters=2)
     torch.cuda.synchronize()
     output_int8 = attn_int8(q, k, v, scale=scale)
