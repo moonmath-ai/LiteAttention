@@ -9,8 +9,11 @@ git submodule update --init
 
 Build the project and create a virtual environment that includes it:
 ```bash
-CUDA_HOME=/usr/local/cuda-12.8 CXX=g++ uv sync
+CUDA_HOME=/usr/local/cuda-12.8 CXX=g++ uv sync --no-install-project
+CUDA_HOME=/usr/local/cuda-12.8 CXX=g++ uv pip install -e . --no-build-isolation
 ```
+
+The two-step process is needed because `uv sync` alone builds the C extension under build isolation, which may resolve a different PyTorch version than the one in the venv, causing ABI mismatches. The first command installs all dependencies; the second builds and installs the project against the venv's PyTorch.
 
 `CUDA_HOME` and `CXX` must match the compiler and CUDA version used to build PyTorch. To target a different CUDA version, update the PyTorch index in `pyproject.toml` (`tool.uv.sources` / `tool.uv.index`) accordingly.
 
@@ -47,9 +50,12 @@ After building, use `uv run pytest` to run tests inside the virtual environment 
 
 LiteAttention is a CUDA extension and must be built against the consuming project's PyTorch to ensure ABI compatibility.
 
-for `CUDA_HOME`, use the directory that match the version used to compile PyTorch for that project
+`CUDA_HOME` must point to the CUDA version that matches the consuming project's PyTorch. All options below support the same optional environment variables described in [Optional Build Flags](#optional-build-flags).
 
-All options below support the same optional environment variables described in [Optional Build Flags](#optional-build-flags).
+Options 1 and 2 require the build dependencies (`packaging`, `ninja`, `wheel`) to be installed in the target virtual environment beforehand:
+```bash
+pip install packaging ninja wheel
+```
 
 ## Option 1: With setup.py (legacy)
 
@@ -58,21 +64,20 @@ From the root of this repo, with the target project's virtual environment activa
 CUDA_HOME=/usr/local/cuda-12.9 CXX=g++ python setup.py install
 ```
 
+> **Note:** You must run this from the LiteAttention directory.
+
 ## Option 2: With pip
 
-From the root of this repo, with the target project's virtual environment activated:
+With the target project's virtual environment activated:
 ```bash
-CUDA_HOME=/usr/local/cuda-12.9 CXX=g++ pip install .
+CUDA_HOME=/usr/local/cuda-12.9 CXX=g++ pip install --no-build-isolation /path/to/LiteAttention
 ```
 
-It may also be possible to install from an arbitrary directory:
-```bash
-CUDA_HOME=/usr/local/cuda-12.9 CXX=g++ pip install /path/to/LiteAttention
-```
+`--no-build-isolation` ensures the extension is compiled against the venv's PyTorch rather than a potentially different version resolved by pip's build isolation.
 
 ## Option 3: With uv (recommended)
 
-This approach uses `no-build-isolation-package` so the build runs inside the project environment, against the exact Python, CUDA, and PyTorch versions already installed. Because build isolation is disabled, the build dependencies (`setuptools`, `packaging`, `ninja`) must be listed as regular project dependencies so they are available when LiteAttention is built. See the [uv docs on disabling build isolation](https://docs.astral.sh/uv/concepts/projects/config/#disabling-build-isolation).
+This approach uses `no-build-isolation-package` so the build runs inside the project environment, against the exact Python, CUDA, and PyTorch versions already installed. Because build isolation is disabled, the build dependencies (`setuptools`, `packaging`, `ninja`) must be listed as regular project dependencies so they are available when LiteAttention is built. Additionally, static dependency metadata must be provided so uv can resolve dependencies without executing LiteAttention's `setup.py` (which imports `torch`). See the [uv docs on disabling build isolation](https://docs.astral.sh/uv/concepts/projects/config/#disabling-build-isolation).
 
 The consuming project's `pyproject.toml` likely already has `torch` and a PyTorch index configured. Add the LiteAttention-specific parts (marked with `# <-- add` below):
 ```toml
@@ -100,6 +105,12 @@ torch = { index = "pytorch-cu129" }
 lite-attention = { path = "../LiteAttention" }
 # lite-attention = { path = "../LiteAttention", editable = true }
 # lite-attention = { git = "https://github.com/moonmath-ai/LiteAttention" }
+
+# Static metadata so uv can resolve without building:  # <-- add
+[[tool.uv.dependency-metadata]]
+name = "lite-attention"
+version = "0.4.0"
+requires-dist = ["torch>=2.2", "einops", "structlog", "tomli-w"]
 ```
 
 Then sync with the appropriate CUDA environment variables:
