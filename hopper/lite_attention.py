@@ -80,11 +80,11 @@ import os
 import math
 from typing import Optional, Tuple, Union
 
-from ._internal.flash_attn_interface import flash_attn_func, flash_attn_3_cuda
+from ._internal.flash_attn_interface import flash_attn_func
 
 # Import the C++ extension to register operators with PyTorch
-# import lite_attention._C  # noqa: F401
-# _lite_attention_ops = torch.ops.lite_attention
+import lite_attention._C as _C  # noqa: F401
+_lite_attention_ops = _C
 
 
 class LiteAttention:
@@ -285,7 +285,7 @@ class LiteAttention:
         # Arguments: headdim, headdim_v, is_causal, is_local, element_size, 
         #            v_colmajor, paged_kv_non_TMA, softcap, is_skipable, is_int8
         # Returns: [kBlockM, kBlockN, MmaPV_is_RS, IntraWGOverlap]
-        result = flash_attn_3_cuda.get_tile_size_fwd_sm90(
+        result = _lite_attention_ops.get_tile_size_fwd_sm90(
             head_dim,           # headdim
             head_dim,           # headdim_v (same as headdim for standard attention)
             False,              # is_causal (not relevant for skipable case)

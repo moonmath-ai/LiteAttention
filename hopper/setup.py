@@ -423,6 +423,7 @@ feature_args = (
     + (["-DFLASHATTENTION_ENABLE_VCOLMAJOR"] if ENABLE_VCOLMAJOR else [])
     + (["-DFLASHATTENTION_DISABLE_HDIMDIFF64"] if DISABLE_HDIMDIFF64 else [])
     + (["-DFLASHATTENTION_DISABLE_HDIMDIFF192"] if DISABLE_HDIMDIFF192 else [])
+    + ["-DCK_TILE_FMHA_FWD_FAST_EXP2=1"]
 )
 
 is_rocm = torch.version.hip is not None
@@ -439,15 +440,15 @@ if is_rocm:
     if not generated_dir.exists():
         generated_dir.mkdir(parents=True)
 
-    # Generate LiteAttention kernels (d128, fp16, batch mode)
-    # Adjust filter as needed. Using the one that worked for the test.
+    # Generate LiteAttention kernels (d128, fp16, batch mode) AND Standard kernels (for baseline)
+    # Use a single generate call with pipe-separated filters to ensure both are in the API file
     print(f"Generating FWD kernels to {generated_dir}...")
     subprocess.run([
         sys.executable, str(generate_script),
         "--api", "fwd",
         "--optdim", "128",
         "--output_dir", str(generated_dir),
-        "--filter", "*d128_fp16_batch*lite*" 
+        "--filter", "*d128_fp16_batch*lite*|*d128_fp16_batch*qr*nbias*nmask*" 
     ], check=True)
 
     # Generate BWD kernels (d128, fp16) - needed for linking mha_bwd
