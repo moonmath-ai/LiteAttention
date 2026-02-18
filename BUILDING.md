@@ -19,18 +19,26 @@ The two-step process is needed because `uv sync` alone builds the C extension un
 
 ## Optional Build Flags
 
-Prepend any of the following environment variables to disable specific build components:
+Prepend the following environment variables to disable unused features and speed up the build:
 ```bash
+FLASH_ATTENTION_DISABLE_SOFTCAP=TRUE \
+FLASH_ATTENTION_DISABLE_CLUSTER=TRUE \
 FLASH_ATTENTION_DISABLE_SM80=TRUE \
+FLASH_ATTENTION_DISABLE_HDIMDIFF64=TRUE \
+FLASH_ATTENTION_DISABLE_HDIMDIFF192=TRUE \
+FLASH_ATTENTION_DISABLE_PACKGQA=TRUE \
+FLASH_ATTENTION_DISABLE_PAGEDKV=TRUE \
+```
+
+Additionally, disable any of the following if not needed:
+```bash
 FLASH_ATTENTION_DISABLE_FP16=TRUE \
 FLASH_ATTENTION_DISABLE_FP8=TRUE \
+FLASH_ATTENTION_DISABLE_BACKWARD=TRUE \
 FLASH_ATTENTION_DISABLE_HDIM64=TRUE \
 FLASH_ATTENTION_DISABLE_HDIM96=TRUE \
 FLASH_ATTENTION_DISABLE_HDIM192=TRUE \
 FLASH_ATTENTION_DISABLE_HDIM256=TRUE \
-FLASH_ATTENTION_DISABLE_HDIMDIFF64=TRUE \
-FLASH_ATTENTION_DISABLE_HDIMDIFF192=TRUE \
-FLASH_ATTENTION_DISABLE_BACKWARD=TRUE \
 ```
 
 To control build parallelism for nvcc/ninja, prepend:
