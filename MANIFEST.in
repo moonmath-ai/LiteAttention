@@ -3,6 +3,7 @@ recursive-include csrc *.h
 recursive-include csrc *.cuh
 recursive-include csrc *.cpp
 recursive-include csrc *.hpp
+recursive-include csrc *.inl
 recursive-include csrc *.py
 
 recursive-include hopper *.cu
@@ -10,3 +11,4 @@ recursive-include hopper *.h
 recursive-include hopper *.cuh
 recursive-include hopper *.cpp
 recursive-include hopper *.hpp
+recursive-include hopper *.py
