@@ -56,7 +56,7 @@ packages = ["lite_attention", "lite_attention._internal", "lite_attention.utils"
 license-files = ["LICENSE", "LICENSE-BSD", "LICENSE-MIT"]
 
 [tool.setuptools.package-dir]
-lite_attention = "."
+lite_attention = "hopper"
 
 [tool.setuptools.dynamic]
 version = {attr = "lite_attention.__version__"}

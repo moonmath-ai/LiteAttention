@@ -25,6 +25,9 @@ import torch
 from torch.utils.cpp_extension import BuildExtension, CppExtension, CUDAExtension, CUDA_HOME
 
 
+# Source directory for the lite_attention package
+SRC_DIR = "hopper"
+
 # ninja build does not work unless include_dirs are abs path
 this_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -353,7 +356,7 @@ def download_and_copy(name, src_func, dst_path, version, url_func):
     url = url_func(supported[system], arch, version)
     src_path = src_func(supported[system], arch, version)
     tmp_path = os.path.join(flashattn_cache_path, "nvidia", name)  # path to cache the download
-    dst_path = os.path.join(base_dir, os.pardir, "third_party", "nvidia", "backend", dst_path)  # final binary path
+    dst_path = os.path.join(base_dir, "third_party", "nvidia", "backend", dst_path)  # final binary path
     src_path = os.path.join(tmp_path, src_path)
     download = not os.path.exists(src_path)
     if download:
@@ -384,7 +387,7 @@ ext_modules = []
 
 # We want this even if SKIP_CUDA_BUILD because when we run python setup.py sdist we want the .hpp
 # files included in the source distribution, in case the user compiles from source.
-subprocess.run(["git", "submodule", "update", "--init", "../csrc/cutlass"])
+subprocess.run(["git", "submodule", "update", "--init", "csrc/cutlass"])
 
 if not SKIP_CUDA_BUILD:
     print("\n\ntorch.__version__  = {}\n\n".format(torch.__version__))
@@ -426,7 +429,7 @@ if not SKIP_CUDA_BUILD:
             f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/{system}-{arch}/cuda_nvcc-{system}-{arch}-{version}-archive.tar.xz",
         )
         base_dir = os.path.dirname(__file__)
-        ctk_path_new = os.path.abspath(os.path.join(base_dir, os.pardir, "third_party", "nvidia", "backend", "bin"))
+        ctk_path_new = os.path.abspath(os.path.join(base_dir, "third_party", "nvidia", "backend", "bin"))
         nvcc_path_new = os.path.join(ctk_path_new, f"nvcc{exe_extension}")
         # Need to append to path otherwise nvcc can't find cicc in nvvm/bin/cicc
         # nvcc 12.8 seems to hard-code looking for cicc in ../nvvm/bin/cicc
@@ -444,7 +447,7 @@ if not SKIP_CUDA_BUILD:
     # https://github.com/pytorch/pytorch/blob/8472c24e3b5b60150096486616d98b7bea01500b/torch/utils/cpp_extension.py#L920
     if FORCE_CXX11_ABI:
         torch._C._GLIBCXX_USE_CXX11_ABI = True
-    repo_dir = Path(this_dir).parent
+    repo_dir = Path(this_dir)
     cutlass_dir = repo_dir / "csrc" / "cutlass"
 
     feature_args = (
@@ -503,38 +506,38 @@ if not SKIP_CUDA_BUILD:
     SOFTCAP_ALL = [""] if DISABLE_SOFTCAP else ["_softcapall"]
     PACKGQA = [""] + (["_packgqa"] if not DISABLE_PACKGQA else [])
     # We already always hard-code PackGQA=true for Sm8x
-    sources_fwd_sm80 = [f"instantiations/flash_fwd_hdim{hdim}_{dtype}{paged}{split}{softcap}_sm80.cu"
+    sources_fwd_sm80 = [f"{SRC_DIR}/instantiations/flash_fwd_hdim{hdim}_{dtype}{paged}{split}{softcap}_sm80.cu"
                         for hdim, dtype, split, paged, softcap in itertools.product(HEAD_DIMENSIONS_FWD_SM80, DTYPE_FWD_SM80, SPLIT, PAGEDKV, SOFTCAP_ALL)]
     # We already always hard-code PackGQA=true for Sm9x if PagedKV or Split
-    sources_fwd_sm90 = [f"instantiations/flash_fwd_hdim{hdim}_{dtype}{paged}{split}{softcap}{packgqa}_sm90.cu"
+    sources_fwd_sm90 = [f"{SRC_DIR}/instantiations/flash_fwd_hdim{hdim}_{dtype}{paged}{split}{softcap}{packgqa}_sm90.cu"
                         for hdim, dtype, split, paged, softcap, packgqa in itertools.product(HEAD_DIMENSIONS_FWD, DTYPE_FWD_SM90, SPLIT, PAGEDKV, SOFTCAP, PACKGQA)
                         if not (packgqa and (paged or split))]
     if not DISABLE_HDIMDIFF64:
-        sources_fwd_sm90 += [f"instantiations/flash_fwd_hdim{hdim}_{dtype}{paged}{split}{softcap}{packgqa}_sm90.cu"
+        sources_fwd_sm90 += [f"{SRC_DIR}/instantiations/flash_fwd_hdim{hdim}_{dtype}{paged}{split}{softcap}{packgqa}_sm90.cu"
                              for hdim, dtype, split, paged, softcap, packgqa in itertools.product(HEAD_DIMENSIONS_DIFF64_FWD, HALF_DTYPE_FWD_SM90, SPLIT, PAGEDKV, SOFTCAP, PACKGQA)
                              if not (packgqa and (paged or split))]
     if not DISABLE_HDIMDIFF192:
-        sources_fwd_sm90 += [f"instantiations/flash_fwd_hdim{hdim}_{dtype}{paged}{split}{softcap}{packgqa}_sm90.cu"
+        sources_fwd_sm90 += [f"{SRC_DIR}/instantiations/flash_fwd_hdim{hdim}_{dtype}{paged}{split}{softcap}{packgqa}_sm90.cu"
                             for hdim, dtype, split, paged, softcap, packgqa in itertools.product(HEAD_DIMENSIONS_DIFF192_FWD, DTYPE_FWD_SM90, SPLIT, PAGEDKV, SOFTCAP, PACKGQA)
                             if not (packgqa and (paged or split))]
-    sources_bwd_sm80 = [f"instantiations/flash_bwd_hdim{hdim}_{dtype}{softcap}_sm80.cu"
+    sources_bwd_sm80 = [f"{SRC_DIR}/instantiations/flash_bwd_hdim{hdim}_{dtype}{softcap}_sm80.cu"
                         for hdim, dtype, softcap in itertools.product(HEAD_DIMENSIONS_BWD, DTYPE_BWD, SOFTCAP)]
-    sources_bwd_sm90 = [f"instantiations/flash_bwd_hdim{hdim}_{dtype}{softcap}_sm90.cu"
+    sources_bwd_sm90 = [f"{SRC_DIR}/instantiations/flash_bwd_hdim{hdim}_{dtype}{softcap}_sm90.cu"
                         for hdim, dtype, softcap in itertools.product(HEAD_DIMENSIONS_BWD, DTYPE_BWD, SOFTCAP_ALL)]
     if DISABLE_BACKWARD:
         sources_bwd_sm90 = []
         sources_bwd_sm80 = []
     sources = (
-        ["_internal/cpp/flash_api.cpp"]
+        [f"{SRC_DIR}/_internal/cpp/flash_api.cpp"]
         + (sources_fwd_sm80 if not DISABLE_SM8x else []) + sources_fwd_sm90
         + (sources_bwd_sm80 if not DISABLE_SM8x else []) + sources_bwd_sm90
     )
     if not DISABLE_SPLIT:
-        sources += ["_internal/cpp/flash_fwd_combine.cu"]
-    sources += ["_internal/cpp/flash_prepare_scheduler.cu"]
+        sources += [f"{SRC_DIR}/_internal/cpp/flash_fwd_combine.cu"]
+    sources += [f"{SRC_DIR}/_internal/cpp/flash_prepare_scheduler.cu"]
     # Add quantization kernels for INT8 support
     if not DISABLE_INT8:
-        sources += ["_internal/cpp/quant.cu"]
+        sources += [f"{SRC_DIR}/_internal/cpp/quant.cu"]
     nvcc_flags = [
         "-O3",
         # "-g",
@@ -560,8 +563,8 @@ if not SKIP_CUDA_BUILD:
             ]
         )
     include_dirs = [
-        Path(this_dir),
-        Path(this_dir) / "_internal" / "cpp",
+        Path(this_dir) / SRC_DIR,
+        Path(this_dir) / SRC_DIR / "_internal" / "cpp",
         cutlass_dir / "include",
     ]
 
@@ -580,7 +583,7 @@ if not SKIP_CUDA_BUILD:
 
 
 def get_package_version():
-    with open(Path(this_dir) / "__init__.py", "r") as f:
+    with open(Path(this_dir) / SRC_DIR / "__init__.py", "r") as f:
         version_match = re.search(r"^__version__\s*=\s*(.*)$", f.read(), re.MULTILINE)
     public_version = ast.literal_eval(version_match.group(1))
     local_version = os.environ.get("FLASH_ATTN_LOCAL_VERSION")
