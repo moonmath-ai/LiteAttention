@@ -79,7 +79,8 @@ uv run --extra dev pytest
 
 LiteAttention is a CUDA extension and must be built against the consuming project's PyTorch to ensure ABI compatibility.
 
-`CUDA_HOME` must point to the CUDA version that matches the consuming project's PyTorch. All options below support the same optional environment variables described in [Optional Build Flags](#optional-build-flags).
+`CUDA_HOME` must point to the CUDA version that matches the consuming project's PyTorch.
+All options below support the same optional environment variables described in [Optional Build Flags](#optional-build-flags).
 
 Options 1 and 2 require the build dependencies (`packaging`, `ninja`, `wheel`) to be installed in the target virtual environment beforehand:
 ```bash
@@ -106,9 +107,13 @@ CUDA_HOME=/usr/local/cuda-12.9 CXX=g++ pip install --no-build-isolation /path/to
 
 ## Option 3: With uv (recommended)
 
-This approach uses `no-build-isolation-package` so the build runs inside the project environment, against the exact Python, CUDA, and PyTorch versions already installed. Because build isolation is disabled, the build dependencies (`setuptools`, `packaging`, `ninja`) must be listed as regular project dependencies so they are available when LiteAttention is built. Additionally, static dependency metadata must be provided so uv can resolve dependencies without executing LiteAttention's `setup.py` (which imports `torch`). See the [uv docs on disabling build isolation](https://docs.astral.sh/uv/concepts/projects/config/#disabling-build-isolation).
+This approach uses `no-build-isolation-package` so the build runs inside the project environment, against the exact Python, CUDA, and PyTorch versions already installed.
+Because build isolation is disabled, the build dependencies (`setuptools`, `packaging`, `ninja`) must be listed as regular project dependencies so they are available when LiteAttention is built.
+Additionally, static dependency metadata must be provided so uv can resolve dependencies without executing LiteAttention's `setup.py` (which imports `torch`).
+See the [uv docs on disabling build isolation](https://docs.astral.sh/uv/concepts/projects/config/#disabling-build-isolation).
 
-The consuming project's `pyproject.toml` likely already has `torch` and a PyTorch index configured. Add the LiteAttention-specific parts (marked with `# <-- add` below):
+The consuming project's `pyproject.toml` likely already has `torch` and a PyTorch index configured.
+Add the LiteAttention-specific parts (marked with `# <-- add` below):
 ```toml
 [project]
 dependencies = [
