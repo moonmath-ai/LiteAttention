@@ -58,7 +58,7 @@ lite_attention = "hopper"
 py-limited-api = "cp39"
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["hopper/tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
