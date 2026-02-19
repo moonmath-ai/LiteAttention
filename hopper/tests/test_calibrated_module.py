@@ -111,11 +111,11 @@ def test_from_dict_unknown_type_raises():
         CalibratedConfig.from_dict({"_type": "Nonexistent"}, CONFIG_TYPES)
 
 
-def test_from_dict_mutates_input():
-    """from_dict uses pop('_type') which mutates the input dict. Document this behavior."""
+def test_from_dict_does_not_mutate_input():
     original = {"_type": "DummyRunConfig", "threshold": -5.0}
+    original_copy = dict(original)
     CalibratedConfig.from_dict(original, CONFIG_TYPES)
-    assert "_type" not in original, "from_dict pops _type from the input dict"
+    assert original == original_copy
 
 
 def test_default_works():
@@ -208,15 +208,10 @@ def test_calibrated_config_dict_to_dict_from_dict_roundtrip():
 
 
 def test_calibrated_config_dict_from_dict_does_not_mutate_raw():
-    """CalibratedConfigDict.from_dict delegates to CalibratedConfig.from_dict
-    which pops _type. Verify mutation behavior for non-list branch."""
     raw = {"mod": {"_type": "DummyRunConfig", "threshold": -3.0}}
     raw_copy = copy.deepcopy(raw)
     CalibratedConfigDict.from_dict(raw, CONFIG_TYPE_LIST)
-    # This documents that the nested dict IS mutated (pop removes _type).
-    assert "_type" not in raw["mod"], "from_dict mutates nested dict via pop"
-    # The outer structure is preserved.
-    assert "mod" in raw
+    assert raw == raw_copy
 
 
 def test_calibrated_config_dict_collect():
