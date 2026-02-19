@@ -283,6 +283,7 @@ def test_calibrated_config_dict_from_dict_with_list_of_dicts():
 # ===========================================================================
 
 
+@pytest.mark.filterwarnings("ignore:Module has both local config")
 def test_config_resolution_instance_over_registry():
     instance_cfg = DummyRunConfig(threshold=-1.0)
     mod = DummyModule(config=instance_cfg)
@@ -300,6 +301,7 @@ def test_config_resolution_registry_over_default():
     assert mod.config.threshold == -5.0
 
 
+@pytest.mark.filterwarnings("ignore:Module has no registry config")
 def test_config_resolution_falls_to_default():
     mod = DummyModule()
     _ = ModuleRegistry(iter([("mod", mod)]))  # registers mod

@@ -15,6 +15,9 @@ from lite_attention.lite_attention import (
     LiteAttentionRunConfig,
 )
 
+pytestmark = [
+    pytest.mark.filterwarnings("ignore:Module has no registry"),
+]
 
 
 # ---------------------------------------------------------------------------
@@ -175,6 +178,7 @@ def test_registry_from_model_const_default_warns(simple_model):
         assert mod._registry_config.threshold == LiteAttentionRunConfig.default().threshold
 
 
+@pytest.mark.filterwarnings("ignore:no 'threshold'")
 def test_registry_from_model_default_mode_warns(simple_model):
     with pytest.warns(UserWarning, match="No 'mode'"):
         LiteAttentionRegistry.from_model(simple_model)
