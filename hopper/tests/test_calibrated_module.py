@@ -251,7 +251,11 @@ def test_calibrated_config_dict_toml_roundtrip_with_collect(tmp_path):
     )
     path = tmp_path / "config.toml"
     import tomli_w
-    import tomllib
+
+    try:
+        import tomllib
+    except ImportError:
+        import tomli as tomllib
 
     with path.open("wb") as f:
         tomli_w.dump(ccd.collect(), f)
