@@ -16,7 +16,7 @@
 #include "flash.h"
 #include "tile_size.h"
 #include "tile_scheduler.hpp"
-#include "flash_fwd_kernel_sm90.h"
+#include "light_fwd_kernel_sm90.h"
 #include "flash_fwd_kernel_sm80.h"
 #include "mainloop_fwd_sm90_tma_gmma_ws.hpp"
 #include "mainloop_fwd_sm80.hpp"
@@ -52,7 +52,7 @@ using namespace cute; // Import CuTe namespace for tensor operations and layout 
 template <int Arch, int kHeadDim, int kHeadDimV, int ClusterM, typename Element, typename ElementOut,
           bool Is_causal, bool Is_local, bool Has_softcap, bool Varlen, bool PagedKVNonTMA, bool AppendKV, bool HasQv,
           bool PackGQA, bool Split, bool V_colmajor, bool Is_skipable, bool Phase=true, bool HasMustDoList=false>
-void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream)
+void run_light_fwd(Flash_fwd_params &params, cudaStream_t stream)
 {
     // Compile-time validation of template parameter combinations
     static_assert(!(Is_causal && Is_local), "Causal and Local cannot be enabled at the same time");
@@ -184,7 +184,7 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream)
     using AttnKernel = std::conditional_t<
         Arch >= 90,
         // SM90+ kernel with advanced CuTe features: TMA, cluster cooperation, warpgroup specialization
-        flash::enable_sm90_or_later<flash::FlashAttnFwdSm90<CollectiveMainloop, CollectiveEpilogue, Scheduler>>,
+        flash::enable_sm90_or_later<flash::LightAttnFwdSm90<CollectiveMainloop, CollectiveEpilogue, Scheduler>>,
         // SM80-89 kernel with traditional CuTe tensor operations and manual memory management
         flash::enable_sm80_to_sm89<flash::FlashAttnFwdSm80<CollectiveMainloop, CollectiveEpilogue, Scheduler>>>;
 
@@ -404,12 +404,12 @@ void run_mha_fwd_(Flash_fwd_params &params, cudaStream_t stream)
                                     // When Is_skipable is disabled, use default values
                                     static constexpr bool HasMustDoList = false;
                                     static constexpr bool Phase = true;
-                                    run_flash_fwd<Arch, kHeadDim, kHeadDimV, ClusterM, T, T_out, Is_causal, Is_local, Has_softcap, Varlen, PagedKVNonTMA, AppendKV && Varlen, HasQv, PackGQA, Split, V_colmajor, Is_skipable, Phase, HasMustDoList>(params, stream);
+                                    run_light_fwd<Arch, kHeadDim, kHeadDimV, ClusterM, T, T_out, Is_causal, Is_local, Has_softcap, Varlen, PagedKVNonTMA, AppendKV && Varlen, HasQv, PackGQA, Split, V_colmajor, Is_skipable, Phase, HasMustDoList>(params, stream);
                                 } else {
                                     // When Is_skipable is enabled, check HasMustDoList and Phase
                                     BOOL_SWITCH(params.has_must_do_list, HasMustDoList, [&] {
                                         BOOL_SWITCH(params.phase, Phase, [&] {
-                                            run_flash_fwd<Arch, kHeadDim, kHeadDimV, ClusterM, T, T_out, Is_causal, Is_local, Has_softcap, Varlen, PagedKVNonTMA, AppendKV && Varlen, HasQv, PackGQA, Split, V_colmajor, Is_skipable, Phase, HasMustDoList>(params, stream);
+                                            run_light_fwd<Arch, kHeadDim, kHeadDimV, ClusterM, T, T_out, Is_causal, Is_local, Has_softcap, Varlen, PagedKVNonTMA, AppendKV && Varlen, HasQv, PackGQA, Split, V_colmajor, Is_skipable, Phase, HasMustDoList>(params, stream);
                                         });
                                     });
                                 }

@@ -28,7 +28,7 @@ namespace flash
 
     /*
     void device_kernel<enable_sm90_or_later<
-    FlashAttnFwdSm90<
+    LightAttnFwdSm90<
     CollectiveMainloopFwdSm90<2, tuple<C<1>, C<1>, C<1>>, tuple<C<128>, C<176>, C<128>>,
     128,
     bfloat16_t,
@@ -38,7 +38,7 @@ namespace flash
     StaticPersistentTileScheduler<0>>>>(Params)
     */
     template <class CollectiveMainloop_, class CollectiveEpilogue_, class TileScheduler_>
-    class FlashAttnFwdSm90
+    class LightAttnFwdSm90
     {
 
     public:
