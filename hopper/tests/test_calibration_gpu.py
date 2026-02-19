@@ -15,7 +15,6 @@ from lite_attention.lite_attention import (
     LiteAttentionRunConfig,
 )
 
-pytestmark = [pytest.mark.gpu]
 
 
 # ---------------------------------------------------------------------------

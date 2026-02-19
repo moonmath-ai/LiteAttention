@@ -1,35 +1,20 @@
-"""CPU-only tests for the calibration/configuration framework (hopper/calibrated_module.py).
-
-WORKAROUND: Imports calibrated_module directly from file to avoid hopper/__init__.py
-which eagerly imports CUDA-dependent modules. This allows running these tests on
-CPU-only machines. If calibrated_module gains dependencies on other hopper submodules,
-this approach will need updating.
-"""
+"""Tests for the calibration/configuration framework (calibrated_module)."""
 
 import copy
-import importlib
-import sys
 from dataclasses import dataclass
-from pathlib import Path
 
 import pytest
 import torch.nn as nn
 
-_spec = importlib.util.spec_from_file_location(
-    "hopper.calibrated_module",
-    Path(__file__).resolve().parent.parent / "hopper" / "calibrated_module.py",
+from lite_attention.calibrated_module import (
+    CalibratedCalibConfig,
+    CalibratedConfig,
+    CalibratedConfigDict,
+    CalibratedRunConfig,
+    ConfigList,
+    ConfigurableModule,
+    ModuleRegistry,
 )
-_mod = importlib.util.module_from_spec(_spec)
-sys.modules[_spec.name] = _mod
-_spec.loader.exec_module(_mod)
-
-CalibratedCalibConfig = _mod.CalibratedCalibConfig
-CalibratedConfig = _mod.CalibratedConfig
-CalibratedConfigDict = _mod.CalibratedConfigDict
-CalibratedRunConfig = _mod.CalibratedRunConfig
-ConfigList = _mod.ConfigList
-ConfigurableModule = _mod.ConfigurableModule
-ModuleRegistry = _mod.ModuleRegistry
 
 
 # ---------------------------------------------------------------------------
