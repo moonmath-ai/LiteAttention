@@ -4,7 +4,7 @@ import sys
 import warnings
 import os
 
-# Force build for MI300X only as requested
+# Force build for MI300X only
 os.environ["PYTORCH_ROCM_ARCH"] = "gfx942"
 os.environ["TORCH_ROCM_ARCH_LIST"] = "gfx942"
 os.environ["ROCM_ARCH"] = "gfx942"
@@ -430,7 +430,11 @@ is_rocm = torch.version.hip is not None
 
 if is_rocm:
     print("\n\nBuilding for AMD ROCm...\n\n")
-    
+
+    # Head dims to generate for ROCm (same set as typical NVIDIA build for parity)
+    ROCM_HDIMS = [64, 96, 128, 192, 256]
+    rocm_optdim = ",".join(str(h) for h in ROCM_HDIMS)
+
     # 1. Generate Kernels
     repo_root = Path(this_dir).parent
     ck_dir = repo_root / "csrc" / "composable_kernel"
@@ -440,25 +444,34 @@ if is_rocm:
     if not generated_dir.exists():
         generated_dir.mkdir(parents=True)
 
-    # Generate LiteAttention kernels (d128, fp16, batch mode) AND Standard kernels (for baseline)
-    # Use a single generate call with pipe-separated filters to ensure both are in the API file
-    print(f"Generating FWD kernels to {generated_dir}...")
+    # Build FWD filter: for each head dim, lite + baseline (qr nbias nmask) for fp16 and bf16
+    fwd_filter_parts = []
+    for h in ROCM_HDIMS:
+        fwd_filter_parts.append(f"*d{h}_fp16_batch*lite*|*d{h}_fp16_batch*qr*nbias*nmask*|*d{h}_bf16_batch*lite*|*d{h}_bf16_batch*qr*nbias*nmask*")
+    fwd_filter = "|".join(fwd_filter_parts)
+
+    # Generate LiteAttention kernels (multiple head dims, fp16/bf16, batch mode) AND Standard kernels (for baseline)
+    print(f"Generating FWD kernels to {generated_dir} (head_dims={ROCM_HDIMS})...")
     subprocess.run([
         sys.executable, str(generate_script),
         "--api", "fwd",
-        "--optdim", "128",
+        "--optdim", rocm_optdim,
         "--output_dir", str(generated_dir),
-        "--filter", "*d128_fp16_batch*lite*|*d128_fp16_batch*qr*nbias*nmask*" 
+        "--filter", fwd_filter
     ], check=True)
 
-    # Generate BWD kernels (d128, fp16) - needed for linking mha_bwd
-    print(f"Generating BWD kernels to {generated_dir}...")
+    # Build BWD filter: for each head dim, fp16 and bf16
+    bwd_filter_parts = [f"*d{h}_fp16_batch*|*d{h}_bf16_batch*" for h in ROCM_HDIMS]
+    bwd_filter = "|".join(bwd_filter_parts)
+
+    # Generate BWD kernels (multiple head dims, fp16 and bf16) - needed for linking mha_bwd
+    print(f"Generating BWD kernels to {generated_dir} (head_dims={ROCM_HDIMS})...")
     subprocess.run([
         sys.executable, str(generate_script),
         "--api", "bwd",
-        "--optdim", "128",
+        "--optdim", rocm_optdim,
         "--output_dir", str(generated_dir),
-        "--filter", "*d128_fp16_batch*" 
+        "--filter", bwd_filter
     ], check=True)
     
     # Rename generated .cpp files to .hip so they are compiled with hipcc as device code
