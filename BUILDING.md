@@ -9,13 +9,26 @@ git submodule update --init
 
 Build the project and create a virtual environment that includes it:
 ```bash
-CUDA_HOME=/usr/local/cuda-12.8 CXX=g++ uv sync --no-install-project
+CUDA_HOME=/usr/local/cuda-12.8 CXX=g++ uv sync --extra dev
+```
+
+This single command creates the venv, installs all dependencies (including dev extras like pytest), and builds the CUDA extension.
+The `no-build-isolation-package` setting in `pyproject.toml` ensures the extension is compiled against the venv's PyTorch.
+
+`CUDA_HOME` and `CXX` must match the compiler and CUDA version used to build PyTorch.
+To target a different CUDA version, update the PyTorch index in `pyproject.toml` (`tool.uv.sources` / `tool.uv.index`) accordingly.
+
+The `--extra dev` is not needed in production.
+
+### Alternative: two-step build
+
+If the single-step method has issues, you can split it into two steps:
+```bash
+CUDA_HOME=/usr/local/cuda-12.8 CXX=g++ uv sync --no-install-project --extra dev
 CUDA_HOME=/usr/local/cuda-12.8 CXX=g++ uv pip install -e . --no-build-isolation
 ```
 
-The two-step process is needed because `uv sync` alone builds the C extension under build isolation, which may resolve a different PyTorch version than the one in the venv, causing ABI mismatches. The first command installs all dependencies; the second builds and installs the project against the venv's PyTorch.
-
-`CUDA_HOME` and `CXX` must match the compiler and CUDA version used to build PyTorch. To target a different CUDA version, update the PyTorch index in `pyproject.toml` (`tool.uv.sources` / `tool.uv.index`) accordingly.
+The first command installs all dependencies; the second builds and installs the project against the venv's PyTorch.
 
 ## Optional Build Flags
 
@@ -48,11 +61,19 @@ MAX_JOBS=$(nproc) NVCC_THREADS=4 \
 
 To display build output, append `-v`.
 
+> **Note:** `CUDA_HOME=... CXX=... uv build --no-build-isolation` should work in theory but is currently broken.
+
 ## Running Tests
 
-After building, use `uv run pytest` to run tests inside the virtual environment that includes the compiled LiteAttention module.
+Run tests with:
+```bash
+uv run pytest
+```
 
-> **Note:** `CUDA_HOME=... CXX=... uv build --no-build-isolation` should work in theory but is currently broken.
+If you built without `--extra dev`, install it first:
+```bash
+uv run --extra dev pytest
+```
 
 # Using LiteAttention as a Dependency in Another Project
 
