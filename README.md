@@ -100,8 +100,8 @@ The near-linear scaling between sparsity and runtime improvement demonstrates th
 ## 🔧 Installation
 
 ### Requirements
-- H100 / H200 GPU
-- CUDA >= 12.8
+- H100 / H200 GPU (or AMD's MI300X)
+- CUDA >= 12.8 (or ROCm >= 7.0.0)
 - CUDA toolkit
 - C++ 20
 - PyTorch 2.2 and above
@@ -110,6 +110,8 @@ The near-linear scaling between sparsity and runtime improvement demonstrates th
 - Linux
 
 \* Make sure that `ninja` is installed and that it works correctly (e.g. `ninja --version` then `echo $?` should return exit code 0). If not (sometimes `ninja --version` then `echo $?` returns a nonzero exit code), uninstall then reinstall `ninja` (`pip uninstall -y ninja && pip install ninja`). Without `ninja`, compiling can take a very long time (2h) since it does not use multiple CPU cores. With `ninja` compiling takes 3-5 minutes on a 64-core machine using CUDA toolkit.
+
+Note: NVIDIA and AMD have different supported features (head dimensions, data types etc.). See more in the [NVIDIA (CUDA) vs AMD (ROCm) support](#nvidia-cuda-vs-amd-rocm-support) section.
 
 ### Build from Source
 
@@ -369,6 +371,23 @@ Lastly, update the forward function to call the lite_attention instance:
               k_lens=seq_lens,
               window_size=self.window_size)
 ```
+
+## NVIDIA (CUDA) vs AMD (ROCm) support
+
+LiteAttention on **AMD (ROCm)** uses the Composable Kernel (CK) backend and does not support the exact same options as the **NVIDIA (CUDA)** build, which uses the full FlashAttention-3 stack.
+
+| Feature | NVIDIA (CUDA) | AMD (ROCm) |
+|--------|----------------|------------|
+| **dtypes** | fp16, bf16; optionally fp8, int8 (build flags) | fp16, bf16 only |
+| **head_dim** | 64, 96, 128, 192, 256 (depending on build) | 64, 96, 128, 192, 256 |
+| **Skip lists** (read/write, threshold, reverse_skip_list) | ✅ | ✅ |
+| **must_do_list** | ✅ | ❌ Not in HIP API; argument is ignored |
+| **phase** (for reverse_skip_list) | ✅ | ❌ Not passed to HIP kernel |
+| **return_softmax_lse** | ✅ | ⚠️ With skip lists, LSE is not computed by the lite kernel; returned tensor may be undefined |
+| **Dropout** | Supported in API | Passed as 0 in Python; not used |
+| **Varlen / KV-cache / paged KV** | Available in full FA3 API | Only batch fwd used; varlen/kvcache not wired in Python for ROCm |
+
+When writing code that runs on both backends, avoid relying on `must_do_list`, and use `return_softmax_lse=True` only when not using skip lists (or only on CUDA).
 
 ## 🐛 Debugging
 
