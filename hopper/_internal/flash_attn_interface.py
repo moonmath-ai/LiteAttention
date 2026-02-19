@@ -19,23 +19,11 @@ try:
 except ImportError as e:
     # Fallback: check if _C is already available in lite_attention module (e.g. injected by test script)
     import sys
-    if "lite_attention" in sys.modules:
-        if hasattr(sys.modules["lite_attention"], "_C"):
-            _C = sys.modules["lite_attention"]._C
-            if is_rocm:
-                flash_attn_3_cuda = _C
-            else:
-                flash_attn_3_cuda = torch.ops.lite_attention
-        else:
-             try:
-                import flash_attn_2_cuda as flash_attn_3_cuda
-             except ImportError:
-                flash_attn_3_cuda = None
+    _C = sys.modules["lite_attention"]._C
+    if is_rocm:
+        flash_attn_3_cuda = _C
     else:
-        try:
-            import flash_attn_2_cuda as flash_attn_3_cuda
-        except ImportError:
-            flash_attn_3_cuda = None
+        flash_attn_3_cuda = torch.ops.lite_attention
 
 # isort: on
 

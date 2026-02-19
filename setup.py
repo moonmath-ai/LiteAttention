@@ -67,7 +67,7 @@ SKIP_CK_BUILD = os.getenv("FLASH_ATTENTION_SKIP_CK_BUILD", "TRUE") == "TRUE" if 
 
 @functools.lru_cache(maxsize=None)
 def cuda_archs() -> str:
-    return os.getenv("FLASH_ATTN_CUDA_ARCHS", "80;90;100;110;120").split(";")
+    return os.getenv("FLASH_ATTN_CUDA_ARCHS", "80;90;100;120").split(";")
 
 
 def get_platform():
@@ -212,9 +212,8 @@ ext_modules = []
 # files included in the source distribution, in case the user compiles from source.
 if os.path.isdir(".git"):
     if not SKIP_CK_BUILD:
-        # subprocess.run(["git", "submodule", "update", "--init", "csrc/composable_kernel"], check=True)
-        # subprocess.run(["git", "submodule", "update", "--init", "csrc/cutlass"], check=True)
-        pass
+        subprocess.run(["git", "submodule", "update", "--init", "csrc/composable_kernel"], check=True)
+        subprocess.run(["git", "submodule", "update", "--init", "csrc/cutlass"], check=True)
 else:
     if IS_ROCM:
         if not SKIP_CK_BUILD:
@@ -449,21 +448,6 @@ elif not SKIP_CUDA_BUILD and IS_ROCM:
             # Exclude files that have 'alibi'
             sources = [s for s in sources if "_alibi_" not in s]
         if os.getenv("FLASH_ATTENTION_DISABLE_MASK", "FALSE") == "TRUE":
-            # Exclude files that have '_mask_' but not '_nmask_'
-            # We use '_mask_' to avoid matching 'nmask' which is a substring of 'mask'
-            # But we must be careful: '_nmask_' contains '_mask_'? No, '_nmask_' has 'n' before.
-            # Filenames are like ..._mask_... or ..._nmask_...
-            # So checking for "_mask_" will match both if we are not careful about boundaries,
-            # but usually it's `_mask` or `nmask`.
-            # Let's assume standard naming: `..._mask_...` vs `..._nmask_...`.
-            # If we exclude `_mask_` we exclude `_nmask_` too?
-            # 'nmask' string contains 'mask'.
-            # '_nmask_' string contains '_mask_'? No. 'n' is not part of '_'.
-            # Example: "a_nmask_b". "_mask_" is NOT in it. "mask" IS in it.
-            # So looking for `_mask_` is safe to exclude generic mask kernels without excluding nmask kernels.
-            # BUT, we must verify the crashing file format.
-            # Crashing file: ..._nbias_mask_lse_... -> contains "_mask_"
-            # Nmask file: ..._nbias_nmask_lse_... -> contains "_nmask_" but NOT "_mask_" (it has "_nm...").
             sources = [s for s in sources if "_mask_" not in s]
 
         # Check if torch is using hipify v2. Until CK is updated with HIPIFY_V2 macro,
@@ -584,7 +568,7 @@ elif not SKIP_CUDA_BUILD and IS_ROCM:
         # cxx_debug_flags = ["-g"] if DEBUG_BUILD else []
         
         extra_compile_args = {
-            "cxx": [cxx_opt_level, "-std=c++20"] + cxx_debug_flags + generator_flag + maybe_hipify_v2_flag,
+            "cxx": [cxx_opt_level, "-std=c++17"] + cxx_debug_flags + generator_flag + maybe_hipify_v2_flag,
             "nvcc": cc_flag + generator_flag + maybe_hipify_v2_flag,
         }
 
