@@ -25,11 +25,6 @@ import torch
 from torch.utils.cpp_extension import BuildExtension, CppExtension, CUDAExtension, CUDA_HOME
 
 
-# with open("../README.md", "r", encoding="utf-8") as fh:
-with open("../README.md", "r", encoding="utf-8") as fh:
-    long_description = fh.read()
-
-
 # ninja build does not work unless include_dirs are abs path
 this_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -653,35 +648,11 @@ class CachedWheelsCommand(_bdist_wheel):
             super().run()
 
 setup(
-    name=PACKAGE_NAME,
     version=get_package_version(),
-    packages=["lite_attention", "lite_attention._internal"],
-    package_dir={"lite_attention": "."},
-    description="Lite Attention",
-    long_description=long_description,
-    long_description_content_type="text/markdown",
-    classifiers=[
-        "Programming Language :: Python :: 3",
-        "License :: OSI Approved :: Apache Software License",
-        "Operating System :: Unix",
-    ],
     ext_modules=ext_modules,
     cmdclass={"bdist_wheel": CachedWheelsCommand, "build_ext": BuildExtension}
     if ext_modules
     else {
         "bdist_wheel": CachedWheelsCommand,
     },
-    python_requires=">=3.8",
-    install_requires=[
-        "torch",
-        "einops",
-        "structlog",
-        "tomli-w",
-    ],
-    setup_requires=[
-        "torch",
-        "packaging",
-        "ninja",
-    ],
-    options={"bdist_wheel": {"py_limited_api": "cp39"}},
 )

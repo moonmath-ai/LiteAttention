@@ -1,0 +1,73 @@
+[build-system]
+requires = [
+    "torch",
+    "setuptools>=49.0",
+    "wheel",
+    "packaging",
+    "ninja",
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lite_attention"
+description = "Lite Attention"
+readme = {file = "./README.md", content-type = "text/markdown"}
+requires-python = ">=3.8"
+license = {file = "LICENSE"}
+authors = [
+    {name = "Tri Dao", email = "trid@cs.stanford.edu"},
+    {name = "Moonmath AI"},
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: BSD License",
+    "Operating System :: Unix",
+]
+dynamic = ["version"]
+
+dependencies = [
+    "torch",
+    "setuptools",
+    "packaging",
+    "wheel",
+    "ninja",
+    "einops",
+    "structlog",
+    "tomli-w",
+    "tomli; python_version < '3.11'",
+    "typing_extensions; python_version < '3.11'",
+]
+
+[project.optional-dependencies]
+dev = [
+    "numpy",
+    "pytest>=7.0",
+    "ruff",
+    "einops",
+]
+
+[project.urls]
+Homepage = "https://moonmath-ai.github.io/LiteAttention/"
+Repository = "https://github.com/moonmath-ai/LiteAttention"
+
+[tool.setuptools]
+packages = ["lite_attention", "lite_attention._internal", "lite_attention.utils", "lite_attention.calibrated_module"]
+license-files = ["LICENSE", "LICENSE-BSD", "LICENSE-MIT"]
+
+[tool.setuptools.package-dir]
+lite_attention = "."
+
+[tool.setuptools.dynamic]
+version = {attr = "lite_attention.__version__"}
+
+[tool.bdist_wheel]
+py-limited-api = "cp39"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = ["-v", "--tb=short"]
+
