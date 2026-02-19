@@ -371,8 +371,7 @@ class LiteAttention:
         #   [3]: Query tiles dimension
         #   [4]: ktiles + 1 (the +1 stores the list length at index 0)
         # Ensure at least size 3 to hold [length, start, end] for initial full range
-        list_size = max(ktiles + 1, 3)
-        skip_list = torch.empty(2, batch, heads, qtiles, list_size, dtype=torch.int16, device=device)
+        skip_list = torch.empty(2, batch, heads, qtiles, ktiles + 1, dtype=torch.int16, device=device)
 
         if must_skip_list is not None:
             tile_indices = LiteAttention.convert_sequence_indices_to_tile_indices(
@@ -390,9 +389,9 @@ class LiteAttention:
             skip_list[0, :, :, :, :len(tile_indices)] = torch.tensor(tile_indices, dtype=torch.int16, device=device)
         else:
             # Initialize first buffer with "compute all tiles" configuration
-            # [2, -1, ktiles-1] means: length=2, range from 0 to ktiles (val1=-1, val2=ktiles-1 -> start=0, end=ktiles)
-            # This also sets write_reversed=True (since -1 < ktiles-1)
-            skip_list[0, :, :, :, 0:3] = torch.tensor([2, -1, ktiles - 1], dtype=torch.int16, device=device) 
+            # [2, ktiles, 0] means: length=2, range from 0 to ktiles (val1=ktiles, val2=0 -> start=0, end=ktiles)
+            # This also sets write_reversed=False (since ktiles > 0)
+            skip_list[0, :, :, :, 0:3] = torch.tensor([2, ktiles, 0], dtype=torch.int16, device=device)
 
             # Note: Second buffer (skip_list[1]) is left uninitialized and will be populated
             # during the first forward pass
