@@ -6,18 +6,36 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 LiteAttention is a CUDA extension built on top of Flash Attention 3 that adds temporal sparse attention for video diffusion models. It skips redundant attention tiles across diffusion timesteps. The source code lives in `hopper/` but installs as the `lite_attention` Python package (mapped via `pyproject.toml`'s `[tool.setuptools.package-dir]`).
 
+Key concepts:
+- **Skip lists**: Track which attention tiles can be skipped. Double-buffered (read/write alternate each forward pass).
+- **Threshold-based skipping**: Tiles are skipped when their max score is too far below the running max (compared in log2 scale). Threshold must be negative in non-debug mode.
+- **Must-do/must-skip lists**: Force computation or skipping of specific sequence ranges (e.g., text tokens vs video tokens).
+
 ## Build Commands
 
 Requires an H100/H200 GPU, CUDA >= 12.3, and a C++20 compiler.
 
 ```bash
 git submodule update --init
+MAX_JOBS=$(nproc) NVCC_THREADS=4 \
+FLASH_ATTENTION_DISABLE_BACKWARD=TRUE \
+FLASH_ATTENTION_DISABLE_FP16=TRUE \
+FLASH_ATTENTION_DISABLE_FP8=TRUE \
+FLASH_ATTENTION_DISABLE_SM80=TRUE \
+FLASH_ATTENTION_DISABLE_SOFTCAP=TRUE \
+FLASH_ATTENTION_DISABLE_CLUSTER=TRUE \
+FLASH_ATTENTION_DISABLE_HDIMDIFF64=TRUE \
+FLASH_ATTENTION_DISABLE_HDIMDIFF192=TRUE \
+FLASH_ATTENTION_DISABLE_PACKGQA=TRUE \
+FLASH_ATTENTION_DISABLE_PAGEDKV=TRUE \
 CUDA_HOME=/usr/local/cuda-12.8 CXX=g++ uv sync --extra dev
 ```
 
-This creates a venv, installs all deps, and compiles the CUDA extension. Build isolation is disabled (`no-build-isolation-package` in pyproject.toml) so the extension links against the venv's PyTorch.
+Full build is very slow — the disable flags above skip unused kernel variants. Build isolation is disabled (`no-build-isolation-package` in pyproject.toml) so the extension links against the venv's PyTorch.
 
-See `BUILDING.md` for alternative methods (pip, setup.py, two-step uv) and optional build flags to disable unused features and speed up compilation.
+Stale `.so` files in `hopper/` can shadow the installed package — clean before rebuilding: `rm -rf build hopper/*.so`
+
+See `BUILDING.md` for all optional flags, alternative methods (pip, setup.py, two-step uv), and consuming-project setup.
 
 ## Running Tests
 
@@ -28,6 +46,34 @@ uv run pytest -k test_flash_attn_output  # single test by name
 ```
 
 Tests require a GPU. pytest config is in `pyproject.toml` (`testpaths = ["hopper/tests"]`).
+
+## Remote Development
+
+This project requires a GPU to build and test. Develop locally, rsync to a remote GPU machine:
+
+```bash
+rsync -avz --delete --exclude='.venv' --exclude='build/' --exclude='*.so' \
+  --exclude='__pycache__' --exclude='.git' --exclude='csrc/cutlass' --exclude='csrc/composable_kernel' \
+  ~/code/LiteAttention/ <remote>:~/code/LiteAttention/
+```
+
+On the remote, build and test:
+```bash
+cd ~/code/LiteAttention
+MAX_JOBS=$(nproc) NVCC_THREADS=4 \
+FLASH_ATTENTION_DISABLE_BACKWARD=TRUE \
+FLASH_ATTENTION_DISABLE_FP16=TRUE \
+FLASH_ATTENTION_DISABLE_FP8=TRUE \
+FLASH_ATTENTION_DISABLE_SM80=TRUE \
+FLASH_ATTENTION_DISABLE_SOFTCAP=TRUE \
+FLASH_ATTENTION_DISABLE_CLUSTER=TRUE \
+FLASH_ATTENTION_DISABLE_HDIMDIFF64=TRUE \
+FLASH_ATTENTION_DISABLE_HDIMDIFF192=TRUE \
+FLASH_ATTENTION_DISABLE_PACKGQA=TRUE \
+FLASH_ATTENTION_DISABLE_PAGEDKV=TRUE \
+CUDA_HOME=/usr/local/cuda-12.8 CXX=g++ uv sync --extra dev
+uv run pytest
+```
 
 ## Architecture
 
@@ -47,3 +93,9 @@ Tests require a GPU. pytest config is in `pyproject.toml` (`testpaths = ["hopper
 ### Upstream relationship
 
 `csrc/cutlass` (NVIDIA CUTLASS, git submodule) provides the CUDA template library. `flash_attn/` contains upstream Flash Attention code. LiteAttention adds the skip list optimization, INT8 quantization support, and the calibration framework on top.
+
+## Debugging
+
+- `LITE_ATTENTION_VERBOSE=TRUE` — enable debug logging
+- `LITE_ATTENTION_DEBUG=TRUE` — allow positive thresholds for testing
+- `visualize_skips()` method on `LiteAttention` instances creates attention pattern visualizations showing computed vs skipped tiles
