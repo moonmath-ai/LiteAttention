@@ -36,14 +36,14 @@ SPLIT = [False, True]
 SOFTCAP = [False, True]
 PACKGQA = [False, True]
 
-KERNEL_IMPL_TEMPLATE_FWD_SM90 = """#include "light_fwd_launch_template.h"
+KERNEL_IMPL_TEMPLATE_FWD_SM90 = """#include "lite_fwd_launch_template.h"
 
 #ifndef FLASHATTENTION_DISABLE_HDIM{HEAD_DIM}
 template void run_mha_fwd_<{ARCH}, {DTYPE}, {HEAD_DIM}, {HEAD_DIM_V}, {SPLIT}, {PAGEDKV}, {SOFTCAP}, {PACKGQA}>(Flash_fwd_params &params, cudaStream_t stream);
 #endif
 """
 
-KERNEL_IMPL_TEMPLATE_FWD_SM8x = """#include "light_fwd_launch_template.h"
+KERNEL_IMPL_TEMPLATE_FWD_SM8x = """#include "lite_fwd_launch_template.h"
 
 #ifndef FLASHATTENTION_DISABLE_SM8x
 #ifndef FLASHATTENTION_DISABLE_HDIM{HEAD_DIM}
@@ -126,7 +126,8 @@ class Kernel:
 
     @property
     def filename(self) -> str:
-        return f"flash_{self.direction}_hdim{self.head_dim}{f'_{self.head_dim_v}' if self.head_dim_v != self.head_dim else ''}_{self.dtype}{'_paged' if self.paged_kv else ''}{'_split' if self.split else ''}{'_softcap' if self.softcap else ''}{'_packgqa' if self.packgqa else ''}_sm{self.sm}.cu"
+        prefix = "lite" if self.direction == "fwd" else "flash"
+        return f"{prefix}_{self.direction}_hdim{self.head_dim}{f'_{self.head_dim_v}' if self.head_dim_v != self.head_dim else ''}_{self.dtype}{'_paged' if self.paged_kv else ''}{'_split' if self.split else ''}{'_softcap' if self.softcap else ''}{'_packgqa' if self.packgqa else ''}_sm{self.sm}.cu"
 
 
 def get_all_kernels() -> List[Kernel]:
@@ -153,13 +154,13 @@ def batch_hdim(kernels_all) -> List[KERNEL_BATCH]:
         # Same hdim and hdimv
         kernels = [k for k in kernels_all if k.direction == "fwd" and k.dtype == dtype and k.split == split and k.paged_kv == paged_kv and k.softcap == softcap and k.packgqa == packgqa and k.sm == sm and k.head_dim == k.head_dim_v]
         if len(kernels) > 0:
-            filename = f"flash_fwd_hdimall_{dtype}{'_paged' if paged_kv else ''}{'_split' if split else ''}{'_softcap' if softcap else ''}{'_packgqa' if packgqa else ''}_sm{sm}.cu"
+            filename = f"lite_fwd_hdimall_{dtype}{'_paged' if paged_kv else ''}{'_split' if split else ''}{'_softcap' if softcap else ''}{'_packgqa' if packgqa else ''}_sm{sm}.cu"
             template = "\n".join([f"#include \"{k.filename}\"" for k in kernels])
             yield KERNEL_BATCH(template, filename)
         # Different hdim and hdimv
         kernels = [k for k in kernels_all if k.direction == "fwd" and k.dtype == dtype and k.split == split and k.paged_kv == paged_kv and k.softcap == softcap and k.packgqa == packgqa and k.sm == sm and k.head_dim != k.head_dim_v]
         if len(kernels) > 0:
-            filename = f"flash_fwd_hdimdiff_{dtype}{'_paged' if paged_kv else ''}{'_split' if split else ''}{'_softcap' if softcap else ''}{'_packgqa' if packgqa else ''}_sm{sm}.cu"
+            filename = f"lite_fwd_hdimdiff_{dtype}{'_paged' if paged_kv else ''}{'_split' if split else ''}{'_softcap' if softcap else ''}{'_packgqa' if packgqa else ''}_sm{sm}.cu"
             template = "\n".join([f"#include \"{k.filename}\"" for k in kernels])
             yield KERNEL_BATCH(template, filename)
 
@@ -170,7 +171,7 @@ def batch_softcap(kernels_all) -> List[KERNEL_BATCH]:
             continue
         kernels = [k for k in kernels_all if k.direction == "fwd" and k.dtype == dtype and k.head_dim == head_dim and k.split == split and k.paged_kv == paged_kv and k.packgqa == packgqa and k.sm == sm]
         if len(kernels) > 0:
-            filename = f"flash_fwd_hdim{head_dim}_{dtype}{'_paged' if paged_kv else ''}{'_split' if split else ''}_softcapall{'_packgqa' if packgqa else ''}_sm{sm}.cu"
+            filename = f"lite_fwd_hdim{head_dim}_{dtype}{'_paged' if paged_kv else ''}{'_split' if split else ''}_softcapall{'_packgqa' if packgqa else ''}_sm{sm}.cu"
             template = "\n".join([f"#include \"{k.filename}\"" for k in kernels])
             yield KERNEL_BATCH(template, filename)
 
