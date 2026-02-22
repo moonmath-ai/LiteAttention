@@ -1559,6 +1559,8 @@ class LiteAttentionRegistry(ModuleRegistry):
             timesteps: Timestep indices to capture, or None for all.
             batch_indices: Batch indices to capture. Defaults to [0].
             attn_map_res: Resolution for downsampled attention maps.
+                Set to 0 to skip attention map capture entirely (avoids
+                materializing the full Q*K^T matrix on GPU).
         """
         self._capture_path = Path(save_path)
 
