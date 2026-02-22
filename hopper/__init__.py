@@ -1,6 +1,7 @@
 __version__ = "0.4.0"
 
 # Public API - only import what users should access
+from .debug_capture import load_capture, render_skip_images
 from .lite_attention import (
     LiteAttention,
     LiteAttentionCalibConfig,
@@ -15,4 +16,6 @@ __all__ = [
     "LiteAttentionRunConfig",
     "LiteAttentionCalibConfig",
     "LiteAttentionRegistry",
+    "load_capture",
+    "render_skip_images",
 ]
