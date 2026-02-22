@@ -46,6 +46,9 @@ dev = [
     "ruff",
     "einops",
 ]
+vis = [
+    "matplotlib",
+]
 
 [project.urls]
 Homepage = "https://moonmath-ai.github.io/LiteAttention/"
