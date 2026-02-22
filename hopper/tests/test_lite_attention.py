@@ -71,11 +71,15 @@ def assert_skip_list_length_valid(skip_list):
 
 def assert_no_empty_or_negative_ranges(skip_list):
     """All ranges in the skip list must be non-empty and positive."""
+    # Check that all ranges are positive (start < end)
+    # [start0 - end0, end0 - start1, start1 - end1, end1 - start2, ..., start_n - end_n]
     diff = skip_list[..., 1:-1] - skip_list[..., 2:]
+    # correct the sign according to the first difference
     sign = torch.sign(diff.flatten()[0])
     diff = (diff * sign) > 0
 
     arange = torch.arange(diff.shape[-1], device=skip_list.device).view(1, 1, 1, -1) >= skip_list[..., 0:1] - 1
+    # Only check ranges that are within the valid list length
     assert ((arange + diff) > 0).all(-1).all()
 
 
@@ -220,6 +224,12 @@ def test_rectangular_attention_skipping_twice(head_dim, q_len, k_len, use_int8):
     Runs LiteAttention twice to ensure skip-list state is exercised across passes,
     and asserts the skip list is non-empty.
     """
+    # Construct deterministic Q/K to reliably exercise skipping for rectangular attention.
+    # Intuition: make one key-tile "high" (K ~= +Q) and another "low" (K ~= -Q) so that
+    # after the running max is established by the high tile, the low tile's max scores
+    # are far below it and should be skipped.
+    #
+    # We align the K layout to tile boundaries to make the effect stable across runs.
     batch, heads = 1, 4
     tile_dtype = torch.int8 if use_int8 else torch.bfloat16
     kBlockM, kBlockN = LiteAttention.get_MN(head_dim, tile_dtype, v_colmajor=False)
@@ -361,10 +371,11 @@ def test_stress(qkv, use_int8):
     """Skip percentage stays stable across repeated forward passes."""
     q, k, v = qkv
     attn = LiteAttention(use_int8=use_int8, threshold=0.0)
+    # only after 2 iters we stabilize due to bi-direction
     run_attention_warmup(attn, q, k, v, 2)
 
     percentage = attn.calc_percentage(attn.read_list).item()
-    tol = 1e-4
+    tol = 1e-4  # allow small drift due to numerical nondeterminism
 
     for _pass_num in range(10):
         torch.cuda.synchronize()
@@ -433,6 +444,7 @@ def test_int8_with_skipping(qkv_short, head_dim):
     torch.testing.assert_close(output_int8.float(), output_bf16.float(), atol=0.15, rtol=0)
     assert cosine_sim(output_int8, output_bf16) >= 0.98
 
+    # Also check skip percentages are similar
     pct_bf16 = attn_bf16.calc_percentage(attn_bf16.read_list).item()
     pct_int8 = attn_int8.calc_percentage(attn_int8.read_list).item()
     assert pct_bf16 == pytest.approx(pct_int8, abs=0.05)
