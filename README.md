@@ -1,6 +1,5 @@
 # LiteAttention: Transforming Video Diffusion with Temporal Sparse Attention
 
-![LiteAttention Hero Image](assets/wan_outputs/baseline.gif) *Sample output demonstrating video quality retention.*
 
 ### [Project Page](https://moonmath-ai.github.io/LiteAttention/) | [arXiv](https://arxiv.org/abs/2511.11062) | [HuggingFace](https://huggingface.co/papers/2511.11062) | [MoonMath.ai](https://moonmath.ai)
 
@@ -88,9 +87,11 @@ LiteAttention achieves state-of-the-art speeds while maintaining top-tier visual
 
 ## 🔧 Installation
 
-**Requirements:** H100/H200 GPU, CUDA >= 12.8, C++ 20, PyTorch 2.2+, Linux.
+**Requirements:** Hopper H100/H200 GPU, CUDA >= 12.8, C++ 20, PyTorch 2.2+, Linux.
 
-LiteAttention is built on top of FlashAttention3 and requires ninja for fast compilation.
+LiteAttention requires ninja for fast compilation.
+
+> **Note:** Pre-built wheels for common environments will be added soon to simplify installation.
 ```bash
 # Ensure ninja is working properly
 pip uninstall -y ninja && pip install ninja
@@ -113,6 +114,26 @@ pip install --no-build-isolation .
 LiteAttention is designed as a drop-in replacement for standard flash attention modules in DiT (Diffusion Transformer) models. 
 
 ### 1. Basic Substitution
+
+#### API Details
+The complete initialization API for the core module is as follows:
+```python
+def LiteAttention(
+    enable_skipping: bool = True, 
+    threshold: float | None = None, 
+    max_batch_size: int = 2, 
+    reverse_skip_list: bool = True, 
+    use_int8: bool = False
+)
+```
+
+**Parameters:**
+- `enable_skipping` (bool): Whether to enable skip list optimizations. Defaults to `True`. When `False`, performs standard Flash Attention.
+- `max_batch_size` (int): Maximum batch size to pre-allocate memory for. Defaults to `2`. The actual batch size used during inference can be smaller than this value, but not larger.
+- `reverse_skip_list` (bool): Whether to use the reversed skip list format (internal optimization). Defaults to `True`.
+- `use_int8` (bool): Whether to use Int8 quantization for Q and K. Defaults to `False`. Enables per-block quantization for Q and channel-smoothed per-block quantization for K.
+- `threshold` (float): Log-space threshold for skipping tiles. Controlled from the Registry. Change here only for testing.
+
 Replace your standard attention call with a `LiteAttention` instance. **Crucially, instantiate a separate `LiteAttention` object for each layer** so they maintain independent skip states.
 
 ```python
