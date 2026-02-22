@@ -152,14 +152,65 @@ class MyDiTBlock(nn.Module):
         return x
 ```
 
-> ⚠️ **Important:** Skip optimization should *only* be enabled for **video-to-video self-attention**. For cross-attention or text-to-video partial computations, disable skipping using `self.attn.enable_skip_optimization(enable=False)`.
+#### Advanced Sequence Profiling: `must_do_list` and `must_skip_list`
+
+For parts of the sequence that should explicitly be computed or skipped, you can pass the `must_do_list` and `must_skip_list` parameters during the forward pass:
+
+```python
+output = self.lite_attention(query, key, value, must_do_list=must_do_list, must_skip_list=must_skip_list)
+```
+
+These lists define ranges of tokens. The format is a flat list of start and end indices:
+`[start_0, end_0, start_1, end_1, ...]`
+- `start_i`: Start index of the range (inclusive).
+- `end_i`: End index of the range (exclusive).
+- **Important:** Indices must be in strict ascending order: `start_i < end_i < start_(i+1) < end_(i+1)`.
+
+**Example:** If you have a sequence of length 100, and you want to ensure tokens 2-11, 40-44, and 60-79 are *always* computed, and tokens 80-99 are *always* skipped:
+```python
+must_do_list = [2, 12, 40, 45, 60, 80]
+must_skip_list = [80, 100]
+```
+
+> ⚠️ **Important:** Skip optimization should *only* be enabled for **video-to-video self-attention**. For cross-attention or text-to-video partial computations, disable skipping using `self.lite_attention.enable_skip_optimization(enable=False)`.
 
 ### 2. Multi-GPU Sequence Parallelism
-For scaled inference across nodes, utilize `SeqParallelLiteAttention`. You must pass the `split_idx` indicating the K/V split being processed by the current node.
+When using multi-GPU with sequence parallelism, use `SeqParallelLiteAttention`:
+
+#### API Details
+```python
+def SeqParallelLiteAttention(
+    num_nodes: int, 
+    enable_skipping: bool = True, 
+    max_batch_size: int = 2, 
+    use_int8: bool = False
+)
+```
+
+**Parameters:**
+- `num_nodes` (int): Number of GPUs/nodes across which the sequence is split.
+- `enable_skipping` (bool): Whether to enable skip list optimizations. Defaults to `True`.
+- `max_batch_size` (int): Maximum batch size to pre-allocate memory for. Defaults to `2`.
+- `use_int8` (bool): Whether to use Int8 quantization for Q and K. Defaults to `False`.
+
+#### Example Usage
+
+Replace your standard attention call with a `SeqParallelLiteAttention` instance. You must pass the `split_idx` indicating the K/V split being processed by the current node (0 to num_nodes-1), **not** the current GPU index. 
+
 ```python
 from lite_attention import SeqParallelLiteAttention
-self.attn = SeqParallelLiteAttention(num_nodes=8)
-x = self.attn(query, key, value, split_idx, scale)
+
+class MySeqParDiTBlock(nn.Module):
+    def __init__(self, num_nodes=8, **kwargs):
+        super().__init__()
+        # Initialize with the number of nodes
+        self.attn = SeqParallelLiteAttention(num_nodes=num_nodes, enable_skipping=True)
+
+    def forward(self, query, key, value, split_idx, scale=None):
+        # ...
+        # Pass split_idx to indicate which split of K and V we are processing
+        output = self.attn(query, key, value, split_idx, scale)
+        return output
 ```
 
 ### 3. Using the Calibration Registry (v0.4.0+)
