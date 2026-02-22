@@ -53,6 +53,25 @@ def run_attention_warmup(attn, q, k, v, num_iters=1):
     return output
 
 
+# not valid in the new skip list format!!!
+@pytest.mark.skip(reason="Not valid in the new skip list format")
+def check_first_element_is_last_block(skip_list):
+    """
+    Check that the first element in the skip list is the last block (ktiles - 1).
+
+    Args:
+        skip_list: Skip list tensor of shape [batch, heads, qtiles, ktiles]
+
+    Returns:
+        bool: True if all first elements equal the last block index, False otherwise.
+    """
+    last_n_block = skip_list.shape[-1] - 2
+    is_n_block = skip_list[..., 1] == last_n_block
+    is_all_n_blocks = is_n_block.all()
+    if not is_all_n_blocks:
+        print(f"     First Element is not ktiles - 1!, it's: {skip_list[..., 1]} != {last_n_block}")
+    return is_all_n_blocks
+
 def assert_skip_list_length_valid(skip_list):
     """List length field must not exceed the skip list dimension."""
     assert (skip_list.shape[-1] > skip_list[..., 0]).all()
@@ -70,26 +89,39 @@ def assert_no_empty_or_negative_ranges(skip_list):
 
 @pytest.mark.parametrize("use_int8", [False, True], ids=["bf16", "int8"])
 def test_skip_all(qkv, use_int8):
-    """threshold=inf: all tiles skipped except one range of length 1."""
+    """
+    Test that when threshold is inf, all tiles are skipped except one range.
+    Expected: skip_list should contain exactly 2 entries (one range of length 1).
+    """
     q, k, v = qkv
     attn = LiteAttention(use_int8=use_int8, threshold=float("inf"))
+
+    # Warm up
     run_attention_warmup(attn, q, k, v)
 
-    skip_list = attn._skip_list[attn._phase, : q.shape[0]]
+    skip_list = attn._skip_list[attn._phase, : q.shape[0]]  # [batch, heads, qtiles, ktiles]
+
+    # Test that skip lists include only 1 range (skip_list[..., 0] == 2 means 1 range)
     assert (skip_list[..., 0] == 2).all(), "Should contain exactly 1 range"
+
+    # Test that the only range has length 1
     diff = (skip_list[..., 1] - skip_list[..., 2]).abs()
     assert (diff == 1).all(), "Range length should be 1"
 
 
 @pytest.mark.parametrize("use_int8", [False, True], ids=["bf16", "int8"])
 def test_skip_nothing(qkv, use_int8):
-    """threshold=-inf: no tiles skipped, read list matches initial list."""
+    """
+    Test that when threshold is -inf, no tiles are skipped.
+    Expected: skip lists should remain consistent between read and write phases.
+    """
     q, k, v = qkv
     attn = LiteAttention(use_int8=use_int8, threshold=float("-inf"))
     read_list_original, _ = attn._get_read_write_lists(q, v)
     read_list_original = read_list_original.clone()
     attn._phase = 0
 
+    # Warm up
     run_attention_warmup(attn, q, k, v, 2)
 
     read_list = attn.read_list
@@ -144,14 +176,21 @@ def cosine_sim(a, b):
 
 @pytest.mark.parametrize("use_int8", [False, True], ids=["bf16", "int8"])
 def test_softmax_lse_correctness(qkv_short, head_dim, use_int8):
-    """Softmax LSE matches PyTorch reference."""
+    """
+    Test that softmax_lse output matches PyTorch reference implementation.
+    Uses qkv_short fixtures to avoid OOM in reference matmul (seq_len^2).
+    """
     q, k, v = qkv_short
     attn = LiteAttention(use_int8=use_int8, threshold=0.0)
+
     torch.cuda.synchronize()
     _, lse_lite = attn(q, k, v, return_softmax_lse=True)
     torch.cuda.synchronize()
 
+    # Compute reference LSE
     lse_ref = compute_reference_lse(q, k, head_dim)
+
+    # Adjust lse_lite shape if needed
     if lse_lite.dim() == 4 and lse_lite.shape[-1] == 1:
         lse_lite = lse_lite.squeeze(-1)
 
@@ -161,7 +200,9 @@ def test_softmax_lse_correctness(qkv_short, head_dim, use_int8):
 
 @pytest.mark.parametrize("use_int8", [False, True], ids=["bf16", "int8"])
 def test_rectangular_attention_correctness(head_dim, use_int8):
-    """Rectangular attention (Lq != Lk) matches PyTorch reference."""
+    """
+    Test rectangular attention (Lq != Lk) output against a PyTorch reference.
+    """
     tol_abs = 0.1 if use_int8 else 1e-2
     tol_cos = 0.99 if use_int8 else 0.999
     batch, q_len, k_len, heads = 1, 1024, 256, 4
