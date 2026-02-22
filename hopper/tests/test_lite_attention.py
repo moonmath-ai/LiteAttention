@@ -28,11 +28,6 @@ DO_CASES = [
 ]
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
 def generate_test_tensors(batch, seq_len, heads, head_dim):
     """Generate random Q, K, V tensors for testing."""
     q = torch.randn(batch, seq_len, heads, head_dim, device="cuda", dtype=torch.bfloat16)
@@ -70,6 +65,38 @@ def assert_no_empty_or_negative_ranges(skip_list):
     diff = (diff * sign) > 0
     arange = torch.arange(diff.shape[-1], device=skip_list.device).view(1, 1, 1, -1) >= skip_list[..., 0:1] - 1
     assert ((arange + diff) > 0).all(-1).all()
+
+
+@pytest.mark.parametrize("use_int8", [False, True], ids=["bf16", "int8"])
+def test_skip_all(qkv, use_int8):
+    """threshold=inf: all tiles skipped except one range of length 1."""
+    q, k, v = qkv
+    attn = LiteAttention(use_int8=use_int8, threshold=float("inf"))
+    run_attention_warmup(attn, q, k, v)
+
+    skip_list = attn._skip_list[attn._phase, : q.shape[0]]
+    assert (skip_list[..., 0] == 2).all(), "Should contain exactly 1 range"
+    diff = (skip_list[..., 1] - skip_list[..., 2]).abs()
+    assert (diff == 1).all(), "Range length should be 1"
+
+
+@pytest.mark.parametrize("use_int8", [False, True], ids=["bf16", "int8"])
+def test_skip_nothing(qkv, use_int8):
+    """threshold=-inf: no tiles skipped, read list matches initial list."""
+    q, k, v = qkv
+    attn = LiteAttention(use_int8=use_int8, threshold=float("-inf"))
+    read_list_original, _ = attn._get_read_write_lists(q, v)
+    read_list_original = read_list_original.clone()
+    attn._phase = 0
+
+    run_attention_warmup(attn, q, k, v, 2)
+
+    read_list = attn.read_list
+    assert (read_list[..., 0] == 2).all(), "Should contain exactly 1 range"
+    rl_range = read_list[..., 1:3]
+    orig_range = read_list_original[..., 1:3]
+    assert torch.equal(rl_range.min(dim=-1).values, orig_range.min(dim=-1).values), "Range min should match initial"
+    assert torch.equal(rl_range.max(dim=-1).values, orig_range.max(dim=-1).values), "Range max should match initial"
 
 
 def compute_reference_lse(q, k, head_dim):
@@ -112,72 +139,6 @@ def cosine_sim(a, b):
     return torch.nn.functional.cosine_similarity(
         a.float().flatten().unsqueeze(0), b.float().flatten().unsqueeze(0)
     ).item()
-
-
-def count_tiles(ranges, kBlockN):
-    """Count tiles covered by [start0, end0, start1, end1, ...] ranges."""
-    return sum(LiteAttention.ceil_div(ranges[i + 1], kBlockN) - ranges[i] // kBlockN for i in range(0, len(ranges), 2))
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture(params=HEAD_DIMS, ids=[f"d{d}" for d in HEAD_DIMS])
-def head_dim(request):
-    return request.param
-
-
-@pytest.fixture
-def qkv(head_dim):
-    torch.manual_seed(0)
-    torch.cuda.manual_seed(0)
-    return generate_test_tensors(BATCH, SEQ_LEN, HEADS, head_dim)
-
-
-@pytest.fixture
-def qkv_short(head_dim):
-    torch.manual_seed(0)
-    torch.cuda.manual_seed(0)
-    return generate_test_tensors(BATCH, min(6143, SEQ_LEN), HEADS, head_dim)
-
-
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("use_int8", [False, True], ids=["bf16", "int8"])
-def test_skip_all(qkv, use_int8):
-    """threshold=inf: all tiles skipped except one range of length 1."""
-    q, k, v = qkv
-    attn = LiteAttention(use_int8=use_int8, threshold=float("inf"))
-    run_attention_warmup(attn, q, k, v)
-
-    skip_list = attn._skip_list[attn._phase, : q.shape[0]]
-    assert (skip_list[..., 0] == 2).all(), "Should contain exactly 1 range"
-    diff = (skip_list[..., 1] - skip_list[..., 2]).abs()
-    assert (diff == 1).all(), "Range length should be 1"
-
-
-@pytest.mark.parametrize("use_int8", [False, True], ids=["bf16", "int8"])
-def test_skip_nothing(qkv, use_int8):
-    """threshold=-inf: no tiles skipped, read list matches initial list."""
-    q, k, v = qkv
-    attn = LiteAttention(use_int8=use_int8, threshold=float("-inf"))
-    read_list_original, _ = attn._get_read_write_lists(q, v)
-    read_list_original = read_list_original.clone()
-    attn._phase = 0
-
-    run_attention_warmup(attn, q, k, v, 2)
-
-    read_list = attn.read_list
-    assert (read_list[..., 0] == 2).all(), "Should contain exactly 1 range"
-    rl_range = read_list[..., 1:3]
-    orig_range = read_list_original[..., 1:3]
-    assert torch.equal(rl_range.min(dim=-1).values, orig_range.min(dim=-1).values), "Range min should match initial"
-    assert torch.equal(rl_range.max(dim=-1).values, orig_range.max(dim=-1).values), "Range max should match initial"
 
 
 @pytest.mark.parametrize("use_int8", [False, True], ids=["bf16", "int8"])
@@ -279,22 +240,30 @@ def test_rectangular_attention_skipping_twice(head_dim, q_len, k_len, use_int8):
     assert 0.0 < pct < 1.0
 
 
-@pytest.mark.parametrize("use_int8", [False, True], ids=["bf16", "int8"])
-def test_stress(qkv, use_int8):
-    """Skip percentage stays stable across repeated forward passes."""
+@pytest.mark.skip(reason="Disabled in original test runner")
+def test_consistency(qkv):
+    """Skip percentage never increases and skip lists stay valid across random inputs."""
     q, k, v = qkv
-    attn = LiteAttention(use_int8=use_int8, threshold=0.0)
-    run_attention_warmup(attn, q, k, v, 2)
-
-    percentage = attn.calc_percentage(attn.read_list).item()
-    tol = 1e-4
+    attn = LiteAttention(threshold=0.0)
+    percentage = float("inf")
 
     for _pass_num in range(10):
+        q, k, v = generate_test_tensors(*q.shape)
         torch.cuda.synchronize()
         attn(q, k, v)
         torch.cuda.synchronize()
-        new_pct = attn.calc_percentage(attn.read_list).item()
-        assert new_pct == pytest.approx(percentage, abs=tol)
+
+        skip_list = attn.read_list
+        new_pct = attn.calc_percentage(skip_list).item()
+        assert new_pct <= percentage, "Percentage should not increase"
+        percentage = new_pct
+        assert_skip_list_length_valid(skip_list)
+        assert_no_empty_or_negative_ranges(skip_list)
+
+
+def count_tiles(ranges, kBlockN):
+    """Count tiles covered by [start0, end0, start1, end1, ...] ranges."""
+    return sum(LiteAttention.ceil_div(ranges[i + 1], kBlockN) - ranges[i] // kBlockN for i in range(0, len(ranges), 2))
 
 
 @pytest.mark.parametrize("use_int8", [False, True], ids=["bf16", "int8"])
@@ -338,6 +307,24 @@ def test_must_do_list(qkv, head_dim, use_int8, case_fn):
         expected = count_tiles(must_do, kBlockN) / ktiles
         actual = attn.calc_percentage(attn.read_list).item()
         assert actual == pytest.approx(expected, abs=0.01)
+
+
+@pytest.mark.parametrize("use_int8", [False, True], ids=["bf16", "int8"])
+def test_stress(qkv, use_int8):
+    """Skip percentage stays stable across repeated forward passes."""
+    q, k, v = qkv
+    attn = LiteAttention(use_int8=use_int8, threshold=0.0)
+    run_attention_warmup(attn, q, k, v, 2)
+
+    percentage = attn.calc_percentage(attn.read_list).item()
+    tol = 1e-4
+
+    for _pass_num in range(10):
+        torch.cuda.synchronize()
+        attn(q, k, v)
+        torch.cuda.synchronize()
+        new_pct = attn.calc_percentage(attn.read_list).item()
+        assert new_pct == pytest.approx(percentage, abs=tol)
 
 
 def test_int8_correctness(qkv_short, head_dim):
@@ -396,22 +383,22 @@ def test_int8_with_skipping(qkv_short, head_dim):
     assert pct_bf16 == pytest.approx(pct_int8, abs=0.05)
 
 
-@pytest.mark.skip(reason="Disabled in original test runner")
-def test_consistency(qkv):
-    """Skip percentage never increases and skip lists stay valid across random inputs."""
-    q, k, v = qkv
-    attn = LiteAttention(threshold=0.0)
-    percentage = float("inf")
+# Fixtures
 
-    for _pass_num in range(10):
-        q, k, v = generate_test_tensors(*q.shape)
-        torch.cuda.synchronize()
-        attn(q, k, v)
-        torch.cuda.synchronize()
+@pytest.fixture(params=HEAD_DIMS, ids=[f"d{d}" for d in HEAD_DIMS])
+def head_dim(request):
+    return request.param
 
-        skip_list = attn.read_list
-        new_pct = attn.calc_percentage(skip_list).item()
-        assert new_pct <= percentage, "Percentage should not increase"
-        percentage = new_pct
-        assert_skip_list_length_valid(skip_list)
-        assert_no_empty_or_negative_ranges(skip_list)
+
+@pytest.fixture
+def qkv(head_dim):
+    torch.manual_seed(0)
+    torch.cuda.manual_seed(0)
+    return generate_test_tensors(BATCH, SEQ_LEN, HEADS, head_dim)
+
+
+@pytest.fixture
+def qkv_short(head_dim):
+    torch.manual_seed(0)
+    torch.cuda.manual_seed(0)
+    return generate_test_tensors(BATCH, min(6143, SEQ_LEN), HEADS, head_dim)
