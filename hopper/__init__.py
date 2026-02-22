@@ -8,6 +8,7 @@ from .lite_attention import (
     LiteAttentionCalibConfig,
     LiteAttentionRegistry,
 )
+from .debug_capture import load_capture, render_skip_images
 
 __all__ = [
     "LiteAttention",
@@ -15,4 +16,6 @@ __all__ = [
     "LiteAttentionRunConfig",
     "LiteAttentionCalibConfig",
     "LiteAttentionRegistry",
+    "load_capture",
+    "render_skip_images",
 ]
