@@ -53,24 +53,16 @@ def run_attention_warmup(attn, q, k, v, num_iters=1):
     return output
 
 
-# not valid in the new skip list format!!!
 @pytest.mark.skip(reason="Not valid in the new skip list format")
-def check_first_element_is_last_block(skip_list):
+def test_first_element_is_last_block(skip_list):
     """
     Check that the first element in the skip list is the last block (ktiles - 1).
-
-    Args:
-        skip_list: Skip list tensor of shape [batch, heads, qtiles, ktiles]
-
-    Returns:
-        bool: True if all first elements equal the last block index, False otherwise.
     """
     last_n_block = skip_list.shape[-1] - 2
     is_n_block = skip_list[..., 1] == last_n_block
-    is_all_n_blocks = is_n_block.all()
-    if not is_all_n_blocks:
-        print(f"     First Element is not ktiles - 1!, it's: {skip_list[..., 1]} != {last_n_block}")
-    return is_all_n_blocks
+    assert is_n_block.all(), (
+        f"First element is not ktiles - 1: {skip_list[..., 1]} != {last_n_block}"
+    )
 
 def assert_skip_list_length_valid(skip_list):
     """List length field must not exceed the skip list dimension."""
@@ -223,7 +215,11 @@ def test_rectangular_attention_correctness(head_dim, use_int8):
 @pytest.mark.parametrize("use_int8", [False, True], ids=["bf16", "int8"])
 @pytest.mark.parametrize(("q_len", "k_len"), [(4096, 1024), (1024, 4096)], ids=["q4096_k1024", "q1024_k4096"])
 def test_rectangular_attention_skipping_twice(head_dim, q_len, k_len, use_int8):
-    """Two-pass rectangular attention with skipping produces valid skip lists."""
+    """
+    Test rectangular attention with skipping enabled.
+    Runs LiteAttention twice to ensure skip-list state is exercised across passes,
+    and asserts the skip list is non-empty.
+    """
     batch, heads = 1, 4
     tile_dtype = torch.int8 if use_int8 else torch.bfloat16
     kBlockM, kBlockN = LiteAttention.get_MN(head_dim, tile_dtype, v_colmajor=False)
@@ -231,12 +227,13 @@ def test_rectangular_attention_skipping_twice(head_dim, q_len, k_len, use_int8):
     device = "cuda"
     dtype = torch.bfloat16
 
+    # Base (existing) structured construction.
     q_base_len = 2 * kBlockM + 1  # ensure multiple q-tiles, keep Lq != Lk
     k_base_len = 4 * kBlockN
     assert q_len > q_base_len
     assert k_len > k_base_len
 
-    # Deterministic per-head unit vectors
+    # Per-head unit vectors (deterministic, avoids randomness in skip behavior).
     base = torch.zeros(heads, head_dim, device=device, dtype=torch.float32)
     for h in range(heads):
         base[h, h % head_dim] = 1.0
@@ -266,6 +263,8 @@ def test_rectangular_attention_skipping_twice(head_dim, q_len, k_len, use_int8):
     v = torch.cat([v_base, v_extra], dim=1).contiguous()
 
     scale = 1.0 / (head_dim ** 0.5)
+
+    # Keep this near 0 to make the skip decision robust across head dims.
     attn = LiteAttention(enable_skipping=True, use_int8=use_int8, threshold=-1.0)
 
     for _pass_num in range(2):
@@ -279,10 +278,12 @@ def test_rectangular_attention_skipping_twice(head_dim, q_len, k_len, use_int8):
         assert_skip_list_length_valid(rl)
         assert_no_empty_or_negative_ranges(rl)
 
+    # Output should be finite
     assert not torch.isnan(output).any()
     assert torch.isfinite(output.float()).all()
 
     pct = float(attn.calc_percentage(attn.read_list).item())
+    # Ensure we actually exercised skipping (not compute-all and not skip-all).
     assert 0.0 < pct < 1.0
 
 
@@ -384,11 +385,13 @@ def test_int8_correctness(qkv_short, head_dim):
 
     scale = 1.0 / (head_dim ** 0.5)
 
+    # Create BF16 reference (without skipping for fair comparison)
     attn_bf16 = LiteAttention(enable_skipping=False, use_int8=False)
     torch.cuda.synchronize()
     output_bf16 = attn_bf16(q, k, v, scale=scale)
     torch.cuda.synchronize()
 
+    # Create INT8 version (without skipping for fair comparison)
     attn_int8 = LiteAttention(enable_skipping=False, use_int8=True)
     torch.cuda.synchronize()
     output_int8 = attn_int8(q, k, v, scale=scale)
@@ -411,13 +414,17 @@ def test_int8_with_skipping(qkv_short, head_dim):
 
     threshold = 0.0
 
+    # Create BF16 reference with skipping
     attn_bf16 = LiteAttention(enable_skipping=True, use_int8=False, threshold=threshold)
+    # Warm up to stabilize skip lists
     run_attention_warmup(attn_bf16, q, k, v, num_iters=2)
     torch.cuda.synchronize()
     output_bf16 = attn_bf16(q, k, v, scale=scale)
     torch.cuda.synchronize()
 
+    # Create INT8 version with skipping
     attn_int8 = LiteAttention(enable_skipping=True, use_int8=True, threshold=threshold)
+    # Warm up to stabilize skip lists
     run_attention_warmup(attn_int8, q, k, v, num_iters=2)
     torch.cuda.synchronize()
     output_int8 = attn_int8(q, k, v, scale=scale)
