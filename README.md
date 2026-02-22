@@ -232,15 +232,13 @@ def LiteAttention(
     enable_skipping: bool = True, 
     threshold: float | None = None, 
     max_batch_size: int = 2, 
-    reverse_skip_list: bool = True, 
     use_int8: bool = False
 )
 ```
 
 **Parameters:**
-- `enable_skipping` (bool): Whether to enable skip list optimizations. Defaults to `True`. When `False`, performs standard Flash Attention.
+- `enable_skipping` (bool): Whether to enable skip optimizations. Defaults to `True`. When `False`, performs standard Flash Attention.
 - `max_batch_size` (int): Maximum batch size to pre-allocate memory for. Defaults to `2`. The actual batch size used during inference can be smaller than this value, but not larger.
-- `reverse_skip_list` (bool): Whether to use the reversed skip list format (internal optimization). Defaults to `True`.
 - `use_int8` (bool): Whether to use Int8 quantization for Q and K. Defaults to `False`. Enables per-block quantization for Q and channel-smoothed per-block quantization for K.
 - `threshold` (float): Log-space threshold for skipping tiles. Controlled from the Regstry (see below). Change here only for testing.
 
@@ -373,7 +371,7 @@ self.attn = SeqParallelLiteAttention(num_nodes=8, use_int8=True)
 LiteAttention provides a built-in method to visualize the attention patterns and skipped tiles. This is useful for debugging and understanding the effectiveness of the skip mask.
 
 ```python
-# Run a forward pass first to populate the skip list
+# Run a forward pass first to populate the keep list
 output = self.attn(query, key, value, scale)
 
 # Visualize specific heads (e.g., heads 0 and 2)

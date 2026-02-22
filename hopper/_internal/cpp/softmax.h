@@ -11,7 +11,7 @@
 #include <cutlass/numeric_types.h>
 
 #include "utils.h"
-#include "skip_list.h"
+#include "keep_list.h"
 
 namespace flash
 {

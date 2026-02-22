@@ -19,4 +19,4 @@ for head_dim in [32, 64, 96, 128, 192, 256]:
         q, k, v = init_qkv(head_dim)
         output = attn(q, k, v)
     torch.cuda.synchronize()
-    print(attn._skip_list.shape)
+    print(attn._keep_list.shape)

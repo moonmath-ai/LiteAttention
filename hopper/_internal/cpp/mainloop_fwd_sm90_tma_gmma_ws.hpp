@@ -34,7 +34,7 @@
 #include "rotary.h"
 #include "utils.h"
 #include "sm90_pipeline_no_cluster.hpp"
-#include "skip_list.h"
+#include "keep_list.h"
 
 namespace flash
 {
@@ -64,7 +64,7 @@ namespace flash
     // - V_colmajor_: Whether V matrix is stored in column-major layout
     template <int Stages, class ClusterShape_, class TileShape_MNK_, int kHeadDimV, class Element_, class ElementAccum_, class ArchTag_,
               bool Is_causal_, bool Is_local_, bool Has_softcap_, bool Varlen_, bool PagedKVNonTMA_, bool AppendKV_, bool HasQv_,
-              bool MmaPV_is_RS, bool IntraWGOverlap, bool PackGQA_, bool Split_, bool V_colmajor_, bool Is_skipable_, bool ReverseSkipList_=false, bool Phase_= true, bool HasMustDoList_=false>
+              bool MmaPV_is_RS, bool IntraWGOverlap, bool PackGQA_, bool Split_, bool V_colmajor_, bool Is_skipable_, bool Phase_= true, bool HasMustDoList_=false>
     struct CollectiveMainloopFwdSm90
     {
 
@@ -112,17 +112,14 @@ namespace flash
         static constexpr bool SameHeadDim = get<2>(TileShape_MNK{}) == kHeadDimV;
         static constexpr bool LargeHeadDimV = kHeadDimV > 256;
         static constexpr bool Is_skipable = Is_skipable_;
-        static constexpr bool ReverseSkipList = ReverseSkipList_;
         static constexpr bool Phase = Phase_;
         static constexpr bool HasMustDoList = HasMustDoList_;
         static_assert(ArchTag::kMinComputeCapability >= 90);
 
         static_assert(!HasMustDoList || Is_skipable, "MustDoList is only supported when skipping is enabled");
-        static_assert(!ReverseSkipList || Is_skipable, "ReverseSkipList is only supported when skipping is enabled");
         static_assert(!(Is_INT8 && HasQv), "INT8 and HasQv cannot be enabled at the same time");
         static_assert(!(Is_INT8 && AppendKV), "INT8 and AppendKV cannot be enabled at the same time");
         static_assert(!(Is_INT8 && PagedKVNonTMA), "INT8 and PagedKVNonTMA cannot be enabled at the same time");
-        // static_assert(!Phase || !ReverseSkipList, "Phase is only supported when ReverseSkipList is enabled");
 
         static constexpr cute::GMMA::Major MmaMajorV = !Is_FP8 && !V_colmajor ? GMMA::Major::MN : GMMA::Major::K;
         static constexpr cute::GMMA::Major TmaMajorV = !V_colmajor ? GMMA::Major::MN : GMMA::Major::K;
@@ -701,7 +698,7 @@ namespace flash
              SeqlenInfo_t const &seqlen_info,
              cute::tuple<int32_t, int32_t, int32_t, int32_t> block_coord,
              int &work_idx,
-            //  SkipListReader &skip_reader,
+            //  KeepListReader &skip_reader,
              auto &skip_writer)
         {
             // some of these are captured in lambda so can't use structured binding
@@ -723,23 +720,22 @@ namespace flash
                 }
             }
 
-            // SkipListReader<ReverseSkipList, Phase> skip_reader;
-            auto &skip_reader = shared_storage.skip_list_storage.reader;
+            // KeepListReader<Phase> skip_reader;
+            auto &skip_reader = shared_storage.keep_list_storage.reader;
             
             // MustDoListReader: only used by producer (thread 0) to determine which blocks must be computed
             // Lives in shared memory similar to skip_reader
-            auto &must_do_reader = shared_storage.skip_list_storage.must_do_reader;
+            auto &must_do_reader = shared_storage.keep_list_storage.must_do_reader;
             
             if constexpr (Is_skipable)
             {
                 skip_reader.template init<TileShape_MNK>(params, bidb, bidh, m_block);
                 // very important!! this tells the consumer when to stop.
-                shared_storage.skip_list_storage.last_n_block[0] = skip_reader.last_n_block();
+                shared_storage.keep_list_storage.last_n_block[0] = skip_reader.last_n_block();
                 __threadfence_block();
                 // skip_writer.template init<TileShape_MNK>(params, bidb, bidh, m_block);
                 if constexpr (HasMustDoList)
                 {
-                    // must_do_reader.template init<TileShape_MNK>(params, 0, 0, skip_reader.start_idx);
                     must_do_reader.template init<TileShape_MNK>(params, 0, 0, 0);
                 }
             }
@@ -927,9 +923,6 @@ namespace flash
                 auto pipeline_v_load = cute::conditional_return<!Transpose_V>(pipeline_v, pipeline_vt);
                 pipeline_v_load.producer_acquire(smem_pipe_write);
                 if constexpr (Is_skipable){ 
-                    // skip_writer.
-                    // if (last_iter){ skip_writer.record_final_iter(); }
-                    // __threadfence_block();
                     skip_writer.replay(); 
                     __threadfence_block();
                 }
@@ -997,12 +990,7 @@ namespace flash
                 {
                     load_V(n_block, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/, skip_writer);
                 }
-                // if (thread_idx == 0) { printf("Producer: main load, before load_K, index = %d\n", smem_pipe_write.index());}
-                // we put it here so only 1 thread would write this value
-                // shared_storage.skip_list_storage.last_n_block[0] = skip_reader.last_n_block();
-                // __threadfence_block();
                 load_K(n_block, smem_pipe_write, cute::true_type{} /*Seqlenk_mask*/, skip_writer, is_must_do);
-                // if (thread_idx == 0) { printf("Producer: main load, after load K, index = %d\n", smem_pipe_write.index());}
             }
 
             if constexpr (Use_TMA_Q)
@@ -1100,42 +1088,24 @@ namespace flash
             // load blocks in skippable kernel case
             if constexpr (Is_skipable){
                 // finish the first range
-                // ++n_block;
-                // --n_block;
                 n_block += skip_reader.step;
                 do{
-                    // for (; n_block > skip_reader.end_idx; n_block--)
-                    if constexpr (Phase){
-                        for (; n_block < skip_reader.end_idx; n_block += skip_reader.step)
-                        {
-                            if constexpr (HasMustDoList){
-                                is_must_do = must_do_reader.find_range(n_block);
-                            }
-                            PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
-                            ++smem_pipe_write;
-                            load_KV_for_block(n_block, n_block_prev, smem_pipe_write, smem_pipe_write_v, skip_writer, is_must_do);
-                            n_block_prev = n_block;
-                            if constexpr (Transpose_V){ copy_Vt_to_V(smem_pipe_write_v); }
+                    for (; skip_reader.in_range(n_block); n_block += skip_reader.step)
+                    {
+                        if constexpr (HasMustDoList){
+                            is_must_do = must_do_reader.find_range(n_block);
                         }
-                    }else{
-                        for (; n_block > skip_reader.end_idx; n_block += skip_reader.step)
-                        {
-                            if constexpr (HasMustDoList){
-                                is_must_do = must_do_reader.find_range(n_block);
-                            }
-                            PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
-                            ++smem_pipe_write;
-                            load_KV_for_block(n_block, n_block_prev, smem_pipe_write, smem_pipe_write_v, skip_writer, is_must_do);
-                            n_block_prev = n_block;
-                            if constexpr (Transpose_V){ copy_Vt_to_V(smem_pipe_write_v); }
-                        }
+                        PipelineState smem_pipe_write_v = smem_pipe_write; // copy the state, write_v is always 1 step behind
+                        ++smem_pipe_write;
+                        load_KV_for_block(n_block, n_block_prev, smem_pipe_write, smem_pipe_write_v, skip_writer, is_must_do);
+                        n_block_prev = n_block;
+                        if constexpr (Transpose_V){ copy_Vt_to_V(smem_pipe_write_v); }
                     }
 
                     if (should_load_KV){skip_writer.record_range_end(skip_reader.end_idx);}
                     if(!skip_reader.has_more()){ break; }
-                    skip_reader.load_range();
-                    n_block = skip_reader.start_idx;
                     skip_reader.advance();
+                    n_block = skip_reader.start_idx;
                 }while(true);
             }else{
                 --n_block;
@@ -1514,10 +1484,10 @@ namespace flash
             }
 
             // Initialize skip_reader with shared memory buffers
-            DelayedSkipListReader<kStagesForSkips, NumMmaWarpGroups> skip_reader(
-                shared_storage.skip_list_storage.n_blocks_buffer,
-                shared_storage.skip_list_storage.skip_tests,
-                shared_storage.skip_list_storage.last_n_block
+            DelayedKeepListReader<kStagesForSkips, NumMmaWarpGroups> skip_reader(
+                shared_storage.keep_list_storage.n_blocks_buffer,
+                shared_storage.keep_list_storage.skip_tests,
+                shared_storage.keep_list_storage.last_n_block
             );
 
             // Helper to convert QK accumulator to ElementAccum (only needed when tSrS is int32_t in INT8 mode)

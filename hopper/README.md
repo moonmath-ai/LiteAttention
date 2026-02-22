@@ -232,7 +232,6 @@ def LiteAttention(
     enable_skipping: bool = True, 
     threshold: float | None = None, 
     max_batch_size: int = 2, 
-    reverse_skip_list: bool = True, 
     use_int8: bool = False
 )
 ```

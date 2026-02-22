@@ -186,7 +186,6 @@ struct Flash_fwd_params : public Qkv_params
     // lite attention related
     QKSkipMaskArgs qk_skip_mask_args;
     bool is_skipable;
-    bool reverse_skip_list = false;
     bool phase = false;
     bool has_must_do_list = false;
     // ~~~~~~~~~~~~~~~~

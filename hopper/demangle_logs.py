@@ -55,7 +55,6 @@ def get_parameter_annotation(line, context_stack):
         "Split - Sequence parallelism",
         "V_colmajor - V column-major layout",
         "Is_skipable - Can skip computation",
-        "ReverseSkipList - Reverse skip list",
         "Phase - Phase flag",
         "HasMustDoList - Must-do list flag"
     ]
@@ -120,7 +119,6 @@ def format_demangled_signature(demangled):
         "Split",
         "V_colmajor",
         "Is_skipable",
-        "ReverseSkipList",
         "Phase",
         "HasMustDoList"
     ]
