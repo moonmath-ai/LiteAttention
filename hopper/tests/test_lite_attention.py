@@ -63,6 +63,7 @@ def assert_no_empty_or_negative_ranges(skip_list):
     diff = skip_list[..., 1:-1] - skip_list[..., 2:]
     sign = torch.sign(diff.flatten()[0])
     diff = (diff * sign) > 0
+
     arange = torch.arange(diff.shape[-1], device=skip_list.device).view(1, 1, 1, -1) >= skip_list[..., 0:1] - 1
     assert ((arange + diff) > 0).all(-1).all()
 
@@ -102,17 +103,17 @@ def test_skip_nothing(qkv, use_int8):
 def compute_reference_lse(q, k, head_dim):
     """Compute reference softmax log-sum-exp using PyTorch."""
     scale = 1.0 / (head_dim ** 0.5)
-
+    
     # Rearrange to [batch, num_heads, seq_len, head_dim]
     q_ref = q.transpose(1, 2).float()
     k_ref = k.transpose(1, 2).float()
-
+    
     # Compute attention scores: [batch, num_heads, seq_len, seq_len]
     scores = torch.matmul(q_ref, k_ref.transpose(-2, -1)) * scale
-
+    
     # Compute log-sum-exp along the last dimension
     lse_ref = torch.logsumexp(scores, dim=-1)  # [batch, num_heads, seq_len]
-
+    
     return lse_ref
 
 
@@ -170,12 +171,12 @@ def test_rectangular_attention_correctness(head_dim, use_int8):
 
     attn = LiteAttention(enable_skipping=False, use_int8=use_int8)
     torch.cuda.synchronize()
-    output = attn(q, k, v, scale=scale)
+    output_lite = attn(q, k, v, scale=scale)
     torch.cuda.synchronize()
 
     ref = compute_reference_attention_output(q, k, v, head_dim)
-    torch.testing.assert_close(output.float(), ref, atol=tol_abs, rtol=0)
-    assert cosine_sim(output, ref) >= tol_cos
+    torch.testing.assert_close(output_lite.float(), ref, atol=tol_abs, rtol=0)
+    assert cosine_sim(output_lite, ref) >= tol_cos
 
 
 @pytest.mark.parametrize("use_int8", [False, True], ids=["bf16", "int8"])
@@ -189,7 +190,7 @@ def test_rectangular_attention_skipping_twice(head_dim, q_len, k_len, use_int8):
     device = "cuda"
     dtype = torch.bfloat16
 
-    q_base_len = 2 * kBlockM + 1
+    q_base_len = 2 * kBlockM + 1  # ensure multiple q-tiles, keep Lq != Lk
     k_base_len = 4 * kBlockN
     assert q_len > q_base_len
     assert k_len > k_base_len
@@ -200,7 +201,8 @@ def test_rectangular_attention_skipping_twice(head_dim, q_len, k_len, use_int8):
         base[h, h % head_dim] = 1.0
     base = base.to(dtype)
 
-    q_vec = (4.0 * base).view(1, 1, heads, head_dim)
+    alpha = 4.0
+    q_vec = (alpha * base).view(1, 1, heads, head_dim)
     q_base = q_vec.repeat(batch, q_base_len, 1, 1).contiguous()
 
     # 4 key tiles: [+Q, -Q, -Q, +Q] — high tiles will be computed, low tiles skipped
@@ -210,7 +212,10 @@ def test_rectangular_attention_skipping_twice(head_dim, q_len, k_len, use_int8):
     k_base[:, 2 * kBlockN : 3 * kBlockN] = -q_vec
     k_base[:, 3 * kBlockN : 4 * kBlockN] = q_vec
 
+    # Values don't affect the skip decision; keep them small-ish for numerical comfort.
     v_base = (0.1 * torch.randn(batch, k_base_len, heads, head_dim, device=device, dtype=dtype)).contiguous()
+
+    # Expand with additional random vectors until (q_len, k_len).
     q_extra = (0.1 * torch.randn(batch, q_len - q_base_len, heads, head_dim, device=device, dtype=dtype)).contiguous()
     k_extra = (0.1 * torch.randn(batch, k_len - k_base_len, heads, head_dim, device=device, dtype=dtype)).contiguous()
     v_extra = (0.1 * torch.randn(batch, k_len - k_base_len, heads, head_dim, device=device, dtype=dtype)).contiguous()
@@ -340,16 +345,16 @@ def test_int8_correctness(qkv_short, head_dim):
 
     attn_bf16 = LiteAttention(enable_skipping=False, use_int8=False)
     torch.cuda.synchronize()
-    out_bf16 = attn_bf16(q, k, v, scale=scale)
+    output_bf16 = attn_bf16(q, k, v, scale=scale)
     torch.cuda.synchronize()
 
     attn_int8 = LiteAttention(enable_skipping=False, use_int8=True)
     torch.cuda.synchronize()
-    out_int8 = attn_int8(q, k, v, scale=scale)
+    output_int8 = attn_int8(q, k, v, scale=scale)
     torch.cuda.synchronize()
 
-    torch.testing.assert_close(out_int8.float(), out_bf16.float(), atol=0.1, rtol=0)
-    assert cosine_sim(out_int8, out_bf16) >= 0.99
+    torch.testing.assert_close(output_int8.float(), output_bf16.float(), atol=0.1, rtol=0)
+    assert cosine_sim(output_int8, output_bf16) >= 0.99
 
 
 def test_int8_with_skipping(qkv_short, head_dim):
@@ -363,20 +368,22 @@ def test_int8_with_skipping(qkv_short, head_dim):
 
     scale = 1.0 / (head_dim ** 0.5)
 
-    attn_bf16 = LiteAttention(enable_skipping=True, use_int8=False, threshold=0.0)
+    threshold = 0.0
+
+    attn_bf16 = LiteAttention(enable_skipping=True, use_int8=False, threshold=threshold)
     run_attention_warmup(attn_bf16, q, k, v, num_iters=2)
     torch.cuda.synchronize()
-    out_bf16 = attn_bf16(q, k, v, scale=scale)
+    output_bf16 = attn_bf16(q, k, v, scale=scale)
     torch.cuda.synchronize()
 
-    attn_int8 = LiteAttention(enable_skipping=True, use_int8=True, threshold=0.0)
+    attn_int8 = LiteAttention(enable_skipping=True, use_int8=True, threshold=threshold)
     run_attention_warmup(attn_int8, q, k, v, num_iters=2)
     torch.cuda.synchronize()
-    out_int8 = attn_int8(q, k, v, scale=scale)
+    output_int8 = attn_int8(q, k, v, scale=scale)
     torch.cuda.synchronize()
 
-    torch.testing.assert_close(out_int8.float(), out_bf16.float(), atol=0.15, rtol=0)
-    assert cosine_sim(out_int8, out_bf16) >= 0.98
+    torch.testing.assert_close(output_int8.float(), output_bf16.float(), atol=0.15, rtol=0)
+    assert cosine_sim(output_int8, output_bf16) >= 0.98
 
     pct_bf16 = attn_bf16.calc_percentage(attn_bf16.read_list).item()
     pct_int8 = attn_int8.calc_percentage(attn_int8.read_list).item()
