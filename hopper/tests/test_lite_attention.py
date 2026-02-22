@@ -34,6 +34,7 @@ DO_CASES = [
 
 
 def generate_test_tensors(batch, seq_len, heads, head_dim):
+    """Generate random Q, K, V tensors for testing."""
     q = torch.randn(batch, seq_len, heads, head_dim, device="cuda", dtype=torch.bfloat16)
     k = torch.randn(batch, seq_len, heads, head_dim, device="cuda", dtype=torch.bfloat16)
     v = torch.randn(batch, seq_len, heads, head_dim, device="cuda", dtype=torch.bfloat16)
@@ -41,13 +42,15 @@ def generate_test_tensors(batch, seq_len, heads, head_dim):
 
 
 def generate_rectangular_test_tensors(batch, q_len, k_len, heads, head_dim):
+    """Generate random Q (q_len) and K/V (k_len) tensors for testing rectangular attention."""
     q = torch.randn(batch, q_len, heads, head_dim, device="cuda", dtype=torch.bfloat16)
     k = torch.randn(batch, k_len, heads, head_dim, device="cuda", dtype=torch.bfloat16)
     v = torch.randn(batch, k_len, heads, head_dim, device="cuda", dtype=torch.bfloat16)
     return q, k, v
 
 
-def warmup(attn, q, k, v, num_iters=1):
+def run_attention_warmup(attn, q, k, v, num_iters=1):
+    """Run attention forward pass multiple times to warm up."""
     for _ in range(num_iters):
         torch.cuda.synchronize()
         output = attn(q, k, v)
@@ -70,21 +73,38 @@ def assert_no_empty_or_negative_ranges(skip_list):
 
 
 def compute_reference_lse(q, k, head_dim):
-    scale = 1.0 / (head_dim**0.5)
+    """Compute reference softmax log-sum-exp using PyTorch."""
+    scale = 1.0 / (head_dim ** 0.5)
+
+    # Rearrange to [batch, num_heads, seq_len, head_dim]
     q_ref = q.transpose(1, 2).float()
     k_ref = k.transpose(1, 2).float()
+
+    # Compute attention scores: [batch, num_heads, seq_len, seq_len]
     scores = torch.matmul(q_ref, k_ref.transpose(-2, -1)) * scale
-    return torch.logsumexp(scores, dim=-1)
+
+    # Compute log-sum-exp along the last dimension
+    lse_ref = torch.logsumexp(scores, dim=-1)  # [batch, num_heads, seq_len]
+
+    return lse_ref
 
 
 def compute_reference_attention_output(q, k, v, head_dim):
-    scale = 1.0 / (head_dim**0.5)
-    q_ref = q.transpose(1, 2).float()
-    k_ref = k.transpose(1, 2).float()
-    v_ref = v.transpose(1, 2).float()
-    scores = torch.matmul(q_ref, k_ref.transpose(-2, -1)) * scale
-    attn = torch.softmax(scores, dim=-1)
-    return torch.matmul(attn, v_ref).transpose(1, 2)
+    """Compute reference attention output using PyTorch matmul+softmax (supports rectangular)."""
+    scale = 1.0 / (head_dim ** 0.5)
+
+    # Rearrange to [batch, num_heads, seq_len, head_dim]
+    q_ref = q.transpose(1, 2).float()  # [B, H, Lq, D]
+    k_ref = k.transpose(1, 2).float()  # [B, H, Lk, D]
+    v_ref = v.transpose(1, 2).float()  # [B, H, Lk, D]
+
+    # Compute attention and output
+    scores = torch.matmul(q_ref, k_ref.transpose(-2, -1)) * scale  # [B, H, Lq, Lk]
+    attn = torch.softmax(scores, dim=-1)  # [B, H, Lq, Lk]
+    out = torch.matmul(attn, v_ref)  # [B, H, Lq, D]
+
+    # Back to [B, Lq, H, D]
+    return out.transpose(1, 2)
 
 
 def cosine_sim(a, b):
@@ -133,7 +153,7 @@ def test_skip_all(qkv, use_int8):
     """threshold=inf: all tiles skipped except one range of length 1."""
     q, k, v = qkv
     attn = LiteAttention(use_int8=use_int8, threshold=float("inf"))
-    warmup(attn, q, k, v)
+    run_attention_warmup(attn, q, k, v)
 
     skip_list = attn._skip_list[attn._phase, : q.shape[0]]
     assert (skip_list[..., 0] == 2).all(), "Should contain exactly 1 range"
@@ -150,7 +170,7 @@ def test_skip_nothing(qkv, use_int8):
     read_list_original = read_list_original.clone()
     attn._phase = 0
 
-    warmup(attn, q, k, v, 2)
+    run_attention_warmup(attn, q, k, v, 2)
 
     read_list = attn.read_list
     assert (read_list[..., 0] == 2).all(), "Should contain exactly 1 range"
@@ -185,7 +205,7 @@ def test_rectangular_attention_correctness(head_dim, use_int8):
     batch, q_len, k_len, heads = 1, 1024, 256, 4
 
     q, k, v = generate_rectangular_test_tensors(batch, q_len, k_len, heads, head_dim)
-    scale = 1.0 / (head_dim**0.5)
+    scale = 1.0 / (head_dim ** 0.5)
 
     attn = LiteAttention(enable_skipping=False, use_int8=use_int8)
     torch.cuda.synchronize()
@@ -238,7 +258,7 @@ def test_rectangular_attention_skipping_twice(head_dim, q_len, k_len, use_int8):
     k = torch.cat([k_base, k_extra], dim=1).contiguous()
     v = torch.cat([v_base, v_extra], dim=1).contiguous()
 
-    scale = 1.0 / (head_dim**0.5)
+    scale = 1.0 / (head_dim ** 0.5)
     attn = LiteAttention(enable_skipping=True, use_int8=use_int8, threshold=-1.0)
 
     for _pass_num in range(2):
@@ -264,7 +284,7 @@ def test_stress(qkv, use_int8):
     """Skip percentage stays stable across repeated forward passes."""
     q, k, v = qkv
     attn = LiteAttention(use_int8=use_int8, threshold=0.0)
-    warmup(attn, q, k, v, 2)
+    run_attention_warmup(attn, q, k, v, 2)
 
     percentage = attn.calc_percentage(attn.read_list).item()
     tol = 1e-4
@@ -329,7 +349,7 @@ def test_int8_correctness(qkv_short, head_dim):
     if tile_size_bf16 != tile_size_int8:
         pytest.skip(f"Tile sizes differ (BF16: {tile_size_bf16}, INT8: {tile_size_int8})")
 
-    scale = 1.0 / (head_dim**0.5)
+    scale = 1.0 / (head_dim ** 0.5)
 
     attn_bf16 = LiteAttention(enable_skipping=False, use_int8=False)
     torch.cuda.synchronize()
@@ -354,16 +374,16 @@ def test_int8_with_skipping(qkv_short, head_dim):
     if tile_size_bf16 != tile_size_int8:
         pytest.skip(f"Tile sizes differ (BF16: {tile_size_bf16}, INT8: {tile_size_int8})")
 
-    scale = 1.0 / (head_dim**0.5)
+    scale = 1.0 / (head_dim ** 0.5)
 
     attn_bf16 = LiteAttention(enable_skipping=True, use_int8=False, threshold=0.0)
-    warmup(attn_bf16, q, k, v, num_iters=2)
+    run_attention_warmup(attn_bf16, q, k, v, num_iters=2)
     torch.cuda.synchronize()
     out_bf16 = attn_bf16(q, k, v, scale=scale)
     torch.cuda.synchronize()
 
     attn_int8 = LiteAttention(enable_skipping=True, use_int8=True, threshold=0.0)
-    warmup(attn_int8, q, k, v, num_iters=2)
+    run_attention_warmup(attn_int8, q, k, v, num_iters=2)
     torch.cuda.synchronize()
     out_int8 = attn_int8(q, k, v, scale=scale)
     torch.cuda.synchronize()
