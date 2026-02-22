@@ -719,28 +719,27 @@
          std::optional<at::Tensor> rotary_cos_, // seqlen_ro x (rotary_dim / 2)
          std::optional<at::Tensor> rotary_sin_, // seqlen_ro x (rotary_dim / 2)
          std::optional<at::Tensor> seqlens_rotary_, // b
-         std::optional<at::Tensor> q_descale_,  // (b, h_k), not (b, h)
-         std::optional<at::Tensor> k_descale_,  // (b, h_k)
-         std::optional<at::Tensor> v_descale_,  // (b, h_k)
-         bool use_int8,
-         std::optional<double> softmax_scale_,
-         bool is_causal,
-         int64_t window_size_left,
-         int64_t window_size_right,
-         int64_t attention_chunk,
-         double softcap,
-         bool is_rotary_interleaved,   // if true, rotary combines indices 0 & 1, else indices 0 & rotary_dim / 2
-         std::optional<at::Tensor> scheduler_metadata_,  // (b + 1)
-         int64_t num_splits,
-         std::optional<bool> pack_gqa_,
-         int64_t sm_margin,
-         // std::optional<at::Tensor> qk_skip_mask_args_,
-         std::optional<at::Tensor> attn_read_list_,
-         std::optional<at::Tensor> attn_must_do_list_,
-         std::optional<at::Tensor> attn_write_list_,
-         double thr,
-         bool reverse_skip_list = false,
-         bool phase = false
+        std::optional<at::Tensor> q_descale_,  // (b, h_k), not (b, h)
+        std::optional<at::Tensor> k_descale_,  // (b, h_k)
+        std::optional<at::Tensor> v_descale_,  // (b, h_k)
+        std::optional<double> softmax_scale_,
+        bool is_causal,
+        int64_t window_size_left,
+        int64_t window_size_right,
+        int64_t attention_chunk,
+        double softcap,
+        bool is_rotary_interleaved,   // if true, rotary combines indices 0 & 1, else indices 0 & rotary_dim / 2
+        std::optional<at::Tensor> scheduler_metadata_,  // (b + 1)
+        int64_t num_splits,
+        std::optional<bool> pack_gqa_,
+        int64_t sm_margin,
+        bool use_int8 = false,
+        std::optional<at::Tensor> attn_read_list_ = std::nullopt,
+        std::optional<at::Tensor> attn_must_do_list_ = std::nullopt,
+        std::optional<at::Tensor> attn_write_list_ = std::nullopt,
+        double thr = -3.0,
+        bool reverse_skip_list = false,
+        bool phase = false
      ) {
      // params.reverse_skip_list = reverse_skip_list;
      // params.phase = phase;
@@ -1907,28 +1906,27 @@
          "Tensor? rotary_cos = None,"
          "Tensor? rotary_sin = None,"
          "Tensor? seqlens_rotary = None,"
-         "Tensor? q_descale = None,"
-         "Tensor? k_descale = None,"
-         "Tensor? v_descale = None,"
-         "bool use_int8 = False,"
-         "float? softmax_scale = None,"
-         "bool is_causal = False,"
-         "int window_size_left = -1,"
-         "int window_size_right = -1,"
-         "int attention_chunk = 0,"
-         "float softcap = 0.0,"
-         "bool is_rotary_interleaved = False,"
-         "Tensor? scheduler_metadata = None,"
-         "int num_splits = 0,"
-         "bool? pack_gqa = None,"
-         "int sm_margin = 0,"
-         // "Tensor? qk_skip_mask_args = None,"
-         "Tensor? attn_read_list = None,"
-         "Tensor? attn_must_do_list = None,"
-         "Tensor? attn_write_list = None,"
-         "float thr = -3.0,"
-         "bool reverse_skip_list = False,"
-         "bool phase = False) -> (Tensor(out!), Tensor, Tensor, Tensor)"
+        "Tensor? q_descale = None,"
+        "Tensor? k_descale = None,"
+        "Tensor? v_descale = None,"
+        "float? softmax_scale = None,"
+        "bool is_causal = False,"
+        "int window_size_left = -1,"
+        "int window_size_right = -1,"
+        "int attention_chunk = 0,"
+        "float softcap = 0.0,"
+        "bool is_rotary_interleaved = False,"
+        "Tensor? scheduler_metadata = None,"
+        "int num_splits = 0,"
+        "bool? pack_gqa = None,"
+        "int sm_margin = 0,"
+        "bool use_int8 = False,"
+        "Tensor? attn_read_list = None,"
+        "Tensor? attn_must_do_list = None,"
+        "Tensor? attn_write_list = None,"
+        "float thr = -3.0,"
+        "bool reverse_skip_list = False,"
+        "bool phase = False) -> (Tensor(out!), Tensor, Tensor, Tensor)"
      );
      m.def("bwd("
          "Tensor dout,"

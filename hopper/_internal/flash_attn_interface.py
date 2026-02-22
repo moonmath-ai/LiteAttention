@@ -119,7 +119,6 @@ def _flash_attn_forward(
         q_descale,
         k_descale,
         v_descale,
-        use_int8,
         softmax_scale,
         causal,
         window_size[0],
@@ -131,13 +130,13 @@ def _flash_attn_forward(
         num_splits,
         pack_gqa,
         sm_margin,
-        # qk_skip_mask_args,
+        use_int8,
         attn_read_list,
         attn_must_do_list,
         attn_write_list,
-        thr=thr,
-        reverse_skip_list=reverse_skip_list,
-        phase=phase,
+        thr,
+        reverse_skip_list,
+        phase,
     )
     return out, softmax_lse, *rest
 

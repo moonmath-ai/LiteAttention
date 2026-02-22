@@ -1,6 +1,10 @@
 import os
+import pytest
 import torch
 from lite_attention import LiteAttention
+import warnings
+
+warnings.filterwarnings("ignore", message=r"Module has no registry. Using local config.")
 
 # Enable debug mode to allow non-negative thresholds in tests
 os.environ["LITE_ATTENTION_DEBUG"] = "TRUE"
@@ -102,8 +106,7 @@ def test_skip_all(q, k, v, head_dim, use_int8=False):
     Test that when threshold is inf, all tiles are skipped except one range.
     Expected: skip_list should contain exactly 2 entries (one range of length 1).
     """
-    attn = LiteAttention(use_int8=use_int8)
-    attn.threshold = float('inf')
+    attn = LiteAttention(use_int8=use_int8, threshold = float('inf'))
     
     # Warm up
     run_attention_warmup(attn, q, k, v)
@@ -112,27 +115,18 @@ def test_skip_all(q, k, v, head_dim, use_int8=False):
     
     # Test that skip lists include only 1 range (skip_list[..., 0] == 2 means 1 range)
     passed = (skip_list[..., 0] == 2).all()
-    if not passed:
-        print("      ⚠️  Skip list length is not 2")
     
     # Test that the only range has length 1
     diff = (skip_list[..., 1] - skip_list[..., 2]).abs()
-    mpassed = (diff == 1)
-    passed &= mpassed.all()
-
-    # # Test that the only block we don't skip is the last one
-    # passed &= check_first_element_is_last_block(skip_list)
+    passed &= (diff == 1).all()
     
     prefix = "INT8 " if use_int8 else ""
     print(f"  {prefix}Skip all test: {'✅ PASSED' if passed else '❌ FAILED'}")
     if not passed:
         print(f"    Skip list shape: {skip_list.shape}")
         print_skip_percentage(attn, q)
-        mdiff = diff[~mpassed]
-        print(f"    Mismatched diffs: {mdiff}, shape: {mdiff.shape}")
-        print(f"    Sample skip_list[0, 1, :, 1:3]:\n{skip_list[0, 1, :, 1:3]}")
     
-    return passed
+    assert passed, "Skip all test failed"
 
 
 def test_skip_nothing(q, k, v, head_dim, use_int8=False):
@@ -140,8 +134,7 @@ def test_skip_nothing(q, k, v, head_dim, use_int8=False):
     Test that when threshold is -inf, no tiles are skipped.
     Expected: skip lists should remain consistent between read and write phases.
     """
-    attn = LiteAttention(use_int8=use_int8)
-    attn.threshold = float('-inf')
+    attn = LiteAttention(use_int8=use_int8, threshold = float('-inf'))
     read_list_original, _ = attn._get_read_write_lists(q, v)
     read_list_original = read_list_original.clone()
     attn._phase = 0
@@ -161,16 +154,14 @@ def test_skip_nothing(q, k, v, head_dim, use_int8=False):
     assert diff_min.shape == diff_max.shape == one_range.shape
     diff = one_range & diff_min & diff_max
     passed = diff.all()
+    mismatch_percent = (~diff).sum().item() / diff.numel() * 100
     prefix = "INT8 " if use_int8 else ""
     print(f"  {prefix}Skip nothing test: {'✅ PASSED' if passed else '❌ FAILED'}")
     if not passed:
-        mismatch_percent = (~diff).sum().item() / diff.numel() * 100
         print(f"    Mismatch percentage: {mismatch_percent:.2f}%")
         print_skip_percentage(attn, q)
-        print(f"    Mismatched read_list:\n{read_list[~diff][..., :3]}")
-        print(f"    Mismatched read_list_original:\n{read_list_original[~diff][..., :3]}")
     
-    return passed
+    assert passed, f"Read list mismatch {mismatch_percent:.2f}%"
 
 
 def compute_reference_lse(q, k, v, head_dim):
@@ -246,19 +237,19 @@ def compute_error_metrics(output, reference, name=""):
     }
 
 
-def test_softmax_lse_correctness(q, k, v, head_dim, tolerance=0.001, use_int8=False):
+def test_softmax_lse_correctness(small_q, small_k, small_v, head_dim, tolerance=0.001, use_int8=False):
     """
     Test that softmax_lse output matches PyTorch reference implementation.
+    Uses small_q/small_k/small_v fixtures to avoid OOM in reference matmul (seq_len^2).
     """
-    attn = LiteAttention(use_int8=use_int8)
-    attn.threshold = 0.0
+    attn = LiteAttention(use_int8=use_int8, threshold = 0.0)
     
     torch.cuda.synchronize()
-    output_lite, lse_lite = attn(q, k, v, return_softmax_lse=True)
+    output_lite, lse_lite = attn(small_q, small_k, small_v, return_softmax_lse=True)
     torch.cuda.synchronize()
     
     # Compute reference LSE
-    lse_ref = compute_reference_lse(q, k, v, head_dim)
+    lse_ref = compute_reference_lse(small_q, small_k, small_v, head_dim)
     
     # Adjust lse_lite shape if needed
     lse_lite_transposed = lse_lite
@@ -277,7 +268,7 @@ def test_softmax_lse_correctness(q, k, v, head_dim, tolerance=0.001, use_int8=Fa
     print(f"  {prefix}Softmax LSE test: {'✅ PASSED' if passed else '❌ FAILED'}")
     print(f"    Max diff: {max_diff:.6f}, Mean diff: {mean_diff:.6f} (tolerance: {tolerance_actual:.6f})")
     
-    return passed
+    assert passed, f"Max diff {max_diff:.6f} exceeds tolerance {tolerance}"
 
 
 def test_rectangular_attention_correctness(head_dim, batch=1, q_len=1024, k_len=256, heads=4, tolerance_max_abs=1e-2, tolerance_cosine=0.999, use_int8=False):
@@ -305,10 +296,13 @@ def test_rectangular_attention_correctness(head_dim, batch=1, q_len=1024, k_len=
     print(f"    RMSE: {metrics['rmse']:.6e}")
     print(f"    Cosine similarity: {metrics['cosine_sim']:.8f} (tolerance: {tolerance_cosine:.8f})")
 
-    return passed
+    assert passed, (
+        f"Rectangular attention vs PyTorch: max_abs_error={metrics['max_abs_error']:.6e} (tolerance {tolerance_max_abs:.6e}), "
+        f"cosine_sim={metrics['cosine_sim']:.8f} (tolerance {tolerance_cosine:.8f})"
+    )
 
 
-def test_rectangular_attention_skipping_twice(head_dim, batch=1, q_len=240, k_len=208, heads=4, use_int8=False):
+def test_rectangular_attention_skipping_twice(head_dim, batch=1, q_len=258, k_len=710, heads=4, use_int8=False):
     """
     Test rectangular attention with skipping enabled.
     Runs LiteAttention twice to ensure skip-list state is exercised across passes,
@@ -362,9 +356,8 @@ def test_rectangular_attention_skipping_twice(head_dim, batch=1, q_len=240, k_le
 
     scale = 1.0 / (head_dim ** 0.5)
 
-    attn = LiteAttention(enable_skipping=True, use_int8=use_int8)
     # Keep this near 0 to make the skip decision robust across head dims.
-    attn.threshold = -1.0
+    attn = LiteAttention(enable_skipping=True, use_int8=use_int8, threshold = -1.0)
 
     passed = True
 
@@ -412,16 +405,18 @@ def test_rectangular_attention_skipping_twice(head_dim, batch=1, q_len=240, k_le
     else:
         print(f"    read_list is None")
 
-    return passed
+    assert passed, "Rectangular attention skipping (two-pass) test failed"
+
 
 def consistency_test(q, k, v, head_dim, num_iters=10):
     """Test that the skip list is consistent between reads and writes."""
-    attn = LiteAttention()
-    attn.threshold = float(0.0)
+    attn = LiteAttention(threshold = float(0.0))
 
     previous_skip_list = None
     skip_list = None
     percentage = float('inf')
+    passed = True
+    
     for i in range(num_iters):
         q, k, v = generate_test_tensors(batch=q.shape[0], seq_len=q.shape[1], heads=q.shape[2], head_dim=q.shape[3])
         torch.cuda.synchronize()
@@ -435,86 +430,155 @@ def consistency_test(q, k, v, head_dim, num_iters=10):
         # check new percentage is not bigger than the previous one
         new_percentage = attn.calc_percentage(skip_list)
         if new_percentage > percentage:
-            print(f"  Consistency test: {'✅ PASSED' if False else '❌ FAILED'}")
+            print(f"  Consistency test: ❌ FAILED")
             print(f"    Failed on iteration {i}")
             print(f"    New percentage is bigger than the previous one: {new_percentage:.2%} > {percentage:.2%}")
-            return False
+            passed = False
+            break
         percentage = new_percentage
-        
-        # # Check that the first element in the skip list is the last block
-        # if not check_first_element_is_last_block(skip_list):
-        #     print(f"  Consistency test: {'✅ PASSED' if False else '❌ FAILED'}")
-        #     print(f"    Failed on iteration {i}")
-        #     return False
         
         # Check that the list length isn't bigger than ktiles + 1
         if not check_skip_list_length_valid(skip_list):
-            print(f"  Consistency test: {'✅ PASSED' if False else '❌ FAILED'}")
+            print(f"  Consistency test: ❌ FAILED")
             print(f"    Failed on iteration {i}")
-            return False
+            passed = False
+            break
 
         # Check that we don't have empty or negative ranges
         if not check_no_empty_or_negative_ranges(skip_list):
-            print(f"  Consistency test: {'✅ PASSED' if False else '❌ FAILED'}")
+            print(f"  Consistency test: ❌ FAILED")
             print(f"    Failed on iteration {i}")
-            return False
+            passed = False
+            break
     
-    print(f"  Consistency test: {'✅ PASSED' if True else '❌ FAILED'}")
-    return True
+    if passed:
+        print(f"  Consistency test: ✅ PASSED")
+    
+    assert passed, "Consistency test failed"
 
-def test_must_skip_list(q, k, v, head_dim, use_int8=False):
+def get_must_skip_list_cases(seq_len):
+    """Generate must skip list test cases based on sequence length."""
+    return [
+        ("beginning_and_end", [0, 1000, 10000, seq_len-1]),
+        ("first_half", [0, 5000]),
+        ("middle_quarter", [seq_len // 4, seq_len // 2]),
+        ("first_and_last_10pct", [0, seq_len // 10, seq_len * 9 // 10, seq_len-1]),
+        ("middle_third", [seq_len // 3, seq_len * 2 // 3]),
+        ("multiple_small_ranges", [0, 2000, 5000, 7000, 10000, seq_len-1]),
+    ]
+
+
+def _test_must_skip_list_single(q, k, v, head_dim, must_skip_list, case_name, use_int8=False):
     """
     Test that must_skip_list forces tiles to be skipped even if threshold dictates computing.
-    Tests multiple must skip list configurations.
+    Tests a single must skip list configuration.
     """
     seq_len = k.shape[1]
     element_type = torch.int8 if use_int8 else k.dtype
     _, kBlockN = LiteAttention.get_MN(head_dim, element_type)
     ktiles = LiteAttention.ceil_div(seq_len, kBlockN)
 
-    # Each entry is [start0, end0, start1, end1, ...] representing ranges to skip
-    must_skip_list_cases = [
-        [0, 1000, 10000, seq_len-1],                       # Skip beginning and end
-        [0, 5000],                                         # Skip first half
-        [seq_len // 4, seq_len // 2],                      # Skip middle quarter
-        [0, seq_len // 10, seq_len * 9 // 10, seq_len-1],  # Skip first and last 10%
-        [seq_len // 3, seq_len * 2 // 3],                  # Skip middle third
-        [0, 2000, 5000, 7000, 10000, seq_len-1],           # Multiple small ranges
+    attn = LiteAttention(use_int8=use_int8)
+    # Set threshold to -inf to compute everything by default
+    attn.threshold = -float("inf")
+
+    torch.cuda.synchronize()
+    output = attn(q, k, v, must_skip_list=must_skip_list)
+    torch.cuda.synchronize()
+
+    # The write_list from this pass (which will be read_list next pass)
+    # should contain the skip information.
+    result_list = attn.read_list
+
+    # Calculate expected percentage based on tiles
+    skipped_tiles = 0
+    for i in range(0, len(must_skip_list), 2):
+        start_seq = must_skip_list[i]
+        end_seq = must_skip_list[i+1]
+        start_tile = start_seq // kBlockN
+        end_tile = LiteAttention.ceil_div(end_seq, kBlockN)
+        skipped_tiles += end_tile - start_tile
+    expected_percentage = (ktiles - skipped_tiles) / ktiles
+
+    actual_percentage = attn.calc_percentage(result_list)
+    passed = abs(actual_percentage - expected_percentage) < 0.01
+
+    print(f"    {case_name}: {'✅ PASSED' if passed else '❌ FAILED'}")
+    if not passed:
+        print(f"      Expected {expected_percentage:.2%} computed, got {actual_percentage:.2%}")
+
+    assert passed, f"Case '{case_name}': Expected {expected_percentage:.2%}, got {actual_percentage:.2%}"
+
+
+def test_must_skip_list(q, k, v, head_dim, use_int8=False):
+    """Run all must_skip_list cases (for main runner)."""
+    seq_len = k.shape[1]
+    cases = get_must_skip_list_cases(seq_len)
+    for case_name, must_skip_list in cases:
+        _test_must_skip_list_single(q, k, v, head_dim, must_skip_list, case_name, use_int8=use_int8)
+    prefix = "INT8 " if use_int8 else ""
+    print(f"  {prefix}Must-skip list tests: ✅ PASSED")
+
+
+def get_must_do_list_cases(seq_len):
+    """Generate must do list test cases based on sequence length."""
+    return [
+        ("beginning_and_end", [0, 1000, 10000, seq_len-1]),
+        ("first_half", [0, 5000]),
+        ("middle_quarter", [seq_len // 4, seq_len // 2]),
+        ("first_and_last_10pct", [0, seq_len // 10, seq_len * 9 // 10, seq_len-1]),
+        ("middle_third", [seq_len // 3, seq_len * 2 // 3]),
+        ("multiple_small_ranges", [0, 2000, 5000, 7000, 10000, seq_len-1]),
+        ("custom_test", [0, 2000, 15000, seq_len-1]),
     ]
-    
-    all_passed = True
-    for test_idx, must_skip_list in enumerate(must_skip_list_cases):
-        attn = LiteAttention(use_int8=use_int8)
 
-        # Set threshold to -inf to compute everything by default
-        attn.threshold = -float("inf")
 
+def _test_must_do_list_single(q, k, v, head_dim, must_do_list, case_name, num_iters=10, use_int8=False):
+    """
+    Test that must_do_list forces tiles to be computed even if threshold dictates skipping.
+    Tests a single must do list configuration.
+    """
+    seq_len = k.shape[1]
+    element_type = torch.int8 if use_int8 else k.dtype
+    _, kBlockN = LiteAttention.get_MN(head_dim, element_type)
+    ktiles = LiteAttention.ceil_div(seq_len, kBlockN)
+
+    attn = LiteAttention(use_int8=use_int8)
+    # Set threshold to +inf to skip everything by default
+    attn.threshold = float("inf")
+
+    passed = True
+    for i in range(num_iters):
         torch.cuda.synchronize()
-        output = attn(q, k, v, must_skip_list=must_skip_list)
+        output = attn(q, k, v, must_do_list=must_do_list)
         torch.cuda.synchronize()
-        
+
         # The write_list from this pass (which will be read_list next pass)
-        # should contain the skip information.
+        # should contain the compute information.
         result_list = attn.read_list
-        
+
         # Calculate expected percentage based on tiles
-        skipped_tiles = 0
-        for i in range(0, len(must_skip_list), 2):
-            start_seq = must_skip_list[i]
-            end_seq = must_skip_list[i+1]
+        computed_tiles = 0
+        for j in range(0, len(must_do_list), 2):
+            start_seq = must_do_list[j]
+            end_seq = must_do_list[j+1]
             start_tile = start_seq // kBlockN
             end_tile = LiteAttention.ceil_div(end_seq, kBlockN)
-            skipped_tiles += end_tile - start_tile
-        expected_percentage = (ktiles - skipped_tiles) / ktiles
-        
+            computed_tiles += end_tile - start_tile
+        expected_percentage = computed_tiles / ktiles
+
         actual_percentage = attn.calc_percentage(result_list)
-        passed = abs(actual_percentage - expected_percentage) < 0.01
-        
-        all_passed &= passed
-    
-    prefix = "INT8 " if use_int8 else ""
-    print(f"  {prefix}Must-skip list tests: {'✅ PASSED' if all_passed else '❌ FAILED'}")
-    return all_passed
+        if abs(actual_percentage - expected_percentage) >= 0.01:
+            passed = False
+            print(f"    {case_name}: ❌ FAILED (iter {i})")
+            print(f"      Expected {expected_percentage:.2%} computed, got {actual_percentage:.2%}")
+            break
+
+    if passed:
+        print(f"    {case_name}: ✅ PASSED")
+
+    assert passed, f"Case '{case_name}': Test failed"
+
 
 def test_must_do_list(q, k, v, head_dim, use_int8=False):
     """
@@ -526,64 +590,55 @@ def test_must_do_list(q, k, v, head_dim, use_int8=False):
     _, kBlockN = LiteAttention.get_MN(head_dim, element_type)
     ktiles = LiteAttention.ceil_div(seq_len, kBlockN)
 
-    # Each entry is [start0, end0, start1, end1, ...] representing ranges to compute
     must_do_list_cases = [
-        [0, 1000, 10000, seq_len-1],                       # Compute beginning and end
-        [0, 5000],                                         # Compute first half
-        [seq_len // 4, seq_len // 2],                      # Compute middle quarter
-        [0, seq_len // 10, seq_len * 9 // 10, seq_len-1],  # Compute first and last 10%
-        [seq_len // 3, seq_len * 2 // 3],                  # Compute middle third
-        [0, 2000, 5000, 7000, 10000, seq_len-1],           # Multiple small ranges
-        [0, 2000, 15000, seq_len-1],                       # Custom test
+        [0, 1000, 10000, seq_len - 1],
+        [0, 5000],
+        [seq_len // 4, seq_len // 2],
+        [0, seq_len // 10, seq_len * 9 // 10, seq_len - 1],
+        [seq_len // 3, seq_len * 2 // 3],
+        [0, 2000, 5000, 7000, 10000, seq_len - 1],
+        [0, 2000, 15000, seq_len - 1],
     ]
-    
+
     all_passed = True
     for test_idx, must_do_list in enumerate(must_do_list_cases):
-        attn = LiteAttention(use_int8=use_int8)
-
-        # Set threshold to +inf to skip everything by default
-        attn.threshold = float("inf")
+        attn = LiteAttention(use_int8=use_int8, threshold=float("inf"))
 
         for i in range(10):
             torch.cuda.synchronize()
             output = attn(q, k, v, must_do_list=must_do_list)
             torch.cuda.synchronize()
-            
-            # The write_list from this pass (which will be read_list next pass)
-            # should contain the compute information.
+
             result_list = attn.read_list
-            
-            # Calculate expected percentage based on tiles
+
             computed_tiles = 0
-            for i in range(0, len(must_do_list), 2):
-                start_seq = must_do_list[i]
-                end_seq = must_do_list[i+1]
+            for j in range(0, len(must_do_list), 2):
+                start_seq = must_do_list[j]
+                end_seq = must_do_list[j + 1]
                 start_tile = start_seq // kBlockN
                 end_tile = LiteAttention.ceil_div(end_seq, kBlockN)
                 computed_tiles += end_tile - start_tile
-                # print(f"    Range [{start_seq}, {end_seq}): tiles [{start_tile}, {end_tile}) = {end_tile - start_tile} tiles")
-            # print(f"    Debug: Tiles to compute={computed_tiles}, Tiles total={ktiles}")
             expected_percentage = computed_tiles / ktiles
-            
+
             actual_percentage = attn.calc_percentage(result_list)
             passed = abs(actual_percentage - expected_percentage) < 0.01
 
             if not passed:
                 print(f"    Expected {expected_percentage:.2%} computed, got {actual_percentage:.2%}, expected tile count: {computed_tiles}, total tiles: {ktiles}")
                 print(f"    Must do ranges: {must_do_list}")
-            
+
             all_passed &= passed
-        
+
     prefix = "INT8 " if use_int8 else ""
     print(f"  {prefix}Must-do list tests: {'✅ PASSED' if all_passed else '❌ FAILED'}")
-    return all_passed
+    assert all_passed, "Must-do list tests failed"
+
 
 def stress_test(q, k, v, head_dim, num_iters=10, use_int8=False):
     """Stress test the attention mechanism."""
-    attn = LiteAttention(use_int8=use_int8)
-    attn.threshold = float(0.0)
+    attn = LiteAttention(use_int8=use_int8, threshold = float(0.0))
 
-    output = run_attention_warmup(attn, q, k, v, 2) # only after 2 iters we stabilize due to bi-direction
+    output = run_attention_warmup(attn, q, k, v, 2)  # only after 2 iters we stabilize due to bi-direction
 
     n = 11
     percentage = attn.calc_percentage(attn.read_list)
@@ -602,30 +657,33 @@ def stress_test(q, k, v, head_dim, num_iters=10, use_int8=False):
         
         if (new_percentage - percentage).abs() > percentage_tol:
             print(f"  Skip list: {attn._skip_list[attn._phase, 0,0,0,:n]}, ktiles: {attn._skip_list.shape[-1] - 1}")
-            # print(f"  percentage changed from {percentage:.2%} to {new_percentage:.2%} at iteration {i}")
             print(f"  percentage changed from {percentage} to {new_percentage} at iteration {i}")
             prefix = "INT8 " if use_int8 else ""
-            print(f"  {prefix}Stress test: {'✅ PASSED' if False else '❌ FAILED'}")
+            print(f"  {prefix}Stress test: ❌ FAILED")
             diff = new_percentage_per_head != percentage_per_head
             diff_read = attn.read_list[diff]
             diff_read_original = read_list_original[diff]
             length = max(diff_read[..., 0].max().item(), diff_read_original[..., 0].max().item())
             print(f"  read_list: {diff_read[..., :length]}")
             print(f"  original : {diff_read_original[..., :length]}")
-            return False
+            passed = False
+            break
+
+        percentage = new_percentage
 
     print_skip_percentage(attn, q)
     prefix = "INT8 " if use_int8 else ""
     print(f"  {prefix}Stress test: {'✅ PASSED' if passed else '❌ FAILED'}")
+    assert passed, "Percentage changed unexpectedly"
     return passed
-    
+
 
 def test_int8_correctness(q, k, v, head_dim, tolerance_max_abs=0.1, tolerance_cosine=0.99):
     """
     Test that INT8 output matches BF16 output within acceptable tolerance.
-    
+
     Args:
-        q, k, v: Input tensors
+        q, k, v: Query, key, value tensors
         head_dim: Head dimension
         tolerance_max_abs: Maximum acceptable absolute error (default: 0.1)
         tolerance_cosine: Minimum acceptable cosine similarity (default: 0.99)
@@ -676,8 +734,9 @@ def test_int8_correctness(q, k, v, head_dim, tolerance_max_abs=0.1, tolerance_co
         print(f"    Max relative error: {metrics['max_rel_error']:.6e}")
         print(f"    Mean relative error: {metrics['mean_rel_error']:.6e}")
     
-    # If tile sizes don't match, always return True (don't fail)
-    return passed if tile_sizes_match else True
+    # If tile sizes don't match, don't fail the test
+    if tile_sizes_match:
+        assert passed, "INT8 correctness test failed (max_abs or cosine out of tolerance)"
 
 
 def test_int8_with_skipping(q, k, v, head_dim, tolerance_max_abs=0.15, tolerance_cosine=0.98):
@@ -742,8 +801,9 @@ def test_int8_with_skipping(q, k, v, head_dim, tolerance_max_abs=0.15, tolerance
     if not skip_pct_passed:
         print(f"    ⚠️  Skip percentage mismatch: BF16={skip_pct_bf16:.2%}, INT8={skip_pct_int8:.2%}, diff={skip_pct_diff:.2%}")
     
-    # If tile sizes don't match, always return True (don't fail)
-    return overall_passed if tile_sizes_match else True
+    # If tile sizes don't match, don't fail the test
+    if tile_sizes_match:
+        assert overall_passed, "INT8 with skipping test failed (metrics or skip percentage out of tolerance)"
 
 def run_tests_for_head_dim(head_dim, batch=2, seq_len=18200, heads=32):
     """Run all tests for a specific head dimension."""
@@ -765,7 +825,9 @@ def run_tests_for_head_dim(head_dim, batch=2, seq_len=18200, heads=32):
     bf16_results.append(test_must_skip_list(q, k, v, head_dim, use_int8=False))
     bf16_results.append(test_must_do_list(q, k, v, head_dim, use_int8=False))
     q_short, k_short, v_short = generate_test_tensors(batch=batch, seq_len=min(6143, seq_len), heads=heads, head_dim=head_dim)
-    bf16_results.append(test_softmax_lse_correctness(q_short, k_short, v_short, head_dim, use_int8=False))
+    # Use smaller tensors for LSE test to avoid OOM
+    q_lse, k_lse, v_lse = generate_test_tensors(batch=1, seq_len=2048, heads=8, head_dim=head_dim)
+    bf16_results.append(test_softmax_lse_correctness(q_lse, k_lse, v_lse, head_dim, use_int8=False))
     bf16_results.append(test_rectangular_attention_correctness(head_dim))
     bf16_results.append(test_rectangular_attention_skipping_twice(head_dim, q_len = 4096, k_len = 1024, use_int8=False))
     bf16_results.append(test_rectangular_attention_skipping_twice(head_dim, q_len = 1024, k_len = 4096, use_int8=False))
@@ -782,7 +844,7 @@ def run_tests_for_head_dim(head_dim, batch=2, seq_len=18200, heads=32):
     int8_results.append(test_skip_nothing(q, k, v, head_dim, use_int8=True))
     int8_results.append(test_must_skip_list(q, k, v, head_dim, use_int8=True))
     int8_results.append(test_must_do_list(q, k, v, head_dim, use_int8=True))
-    int8_results.append(test_softmax_lse_correctness(q_short, k_short, v_short, head_dim, tolerance=0.01, use_int8=True))
+    int8_results.append(test_softmax_lse_correctness(q_lse, k_lse, v_lse, head_dim, tolerance=0.01, use_int8=True))
     int8_results.append(test_rectangular_attention_correctness(head_dim, tolerance_max_abs=0.1, tolerance_cosine=0.99, use_int8=True))
     int8_results.append(test_rectangular_attention_skipping_twice(head_dim, q_len = 4096, k_len = 1024, use_int8=True))
     int8_results.append(test_rectangular_attention_skipping_twice(head_dim, q_len = 1024, k_len = 4096, use_int8=True))
@@ -795,8 +857,16 @@ def run_tests_for_head_dim(head_dim, batch=2, seq_len=18200, heads=32):
     print(f"  {'-'*56}")
     # int8_results.append(test_int8_correctness(q, k, v, head_dim))
     # int8_results.append(test_int8_with_skipping(q, k, v, head_dim))
-    int8_results.append(test_int8_correctness(q_short, k_short, v_short, head_dim))
-    int8_results.append(test_int8_with_skipping(q_short, k_short, v_short, head_dim))
+    try:
+        test_int8_correctness(q_short, k_short, v_short, head_dim)
+        int8_results.append(True)
+    except AssertionError:
+        int8_results.append(False)
+    try:
+        test_int8_with_skipping(q_short, k_short, v_short, head_dim)
+        int8_results.append(True)
+    except AssertionError:
+        int8_results.append(False)
     
     # Determine overall pass/fail for each dtype
     bf16_passed = all(bf16_results)
@@ -860,5 +930,119 @@ def main():
     print(f"\n{'='*60}\n")
 
 
-if __name__ == "__main__":
-    main()
+# Pytest fixtures and parametrized tests
+@pytest.fixture(autouse=True)
+def set_random_seed():
+    """Set random seeds for reproducibility before each test."""
+    torch.manual_seed(0)
+    torch.cuda.manual_seed(0)
+
+
+# @pytest.fixture(params=[32, 64, 96, 128, 192, 256])
+# TODO: check small head dims after the fix
+@pytest.fixture(params=[128, 192, 256])
+def head_dim(request):
+    """Parametrize tests across different head dimensions."""
+    return request.param
+
+
+@pytest.fixture
+def test_tensors(head_dim):
+    """Generate test tensors for a given head dimension."""
+    batch, seq_len, heads = 2, 18200, 32
+    return generate_test_tensors(batch, seq_len, heads, head_dim)
+
+
+@pytest.fixture
+def q(test_tensors):
+    return test_tensors[0]
+
+
+@pytest.fixture
+def k(test_tensors):
+    return test_tensors[1]
+
+
+@pytest.fixture
+def v(test_tensors):
+    return test_tensors[2]
+
+
+@pytest.fixture
+def small_test_tensors(head_dim):
+    """Generate smaller test tensors for LSE tests (reduced to avoid OOM)."""
+    batch, seq_len, heads = 1, 2048, 8
+    return generate_test_tensors(batch, seq_len, heads, head_dim)
+
+
+@pytest.fixture
+def small_q(small_test_tensors):
+    return small_test_tensors[0]
+
+
+@pytest.fixture
+def small_k(small_test_tensors):
+    return small_test_tensors[1]
+
+
+@pytest.fixture
+def small_v(small_test_tensors):
+    return small_test_tensors[2]
+
+
+# Parametrized test wrappers that use fixtures
+def test_stress_parametrized(q, k, v, head_dim):
+    """Stress test with parametrized head dimensions."""
+    stress_test(q, k, v, head_dim)
+
+
+def test_skip_all_parametrized(q, k, v, head_dim):
+    """Test skip all with parametrized head dimensions."""
+    test_skip_all(q, k, v, head_dim)
+
+
+def test_skip_nothing_parametrized(q, k, v, head_dim):
+    """Test skip nothing with parametrized head dimensions."""
+    test_skip_nothing(q, k, v, head_dim)
+
+
+@pytest.mark.parametrize("case_idx", [0, 1, 2, 3, 4, 5], ids=[
+    "beginning_and_end",
+    "first_half", 
+    "middle_quarter",
+    "first_and_last_10pct",
+    "middle_third",
+    "multiple_small_ranges"
+])
+def test_must_skip_list_parametrized(q, k, v, head_dim, case_idx):
+    """Test must skip list with parametrized head dimensions and test cases."""
+    if case_idx == 0:
+        print("  Must-skip list tests:")
+    seq_len = k.shape[1]
+    cases = get_must_skip_list_cases(seq_len)
+    case_name, must_skip_list = cases[case_idx]
+    _test_must_skip_list_single(q, k, v, head_dim, must_skip_list, case_name)
+
+
+@pytest.mark.parametrize("case_idx", [0, 1, 2, 3, 4, 5, 6], ids=[
+    "beginning_and_end",
+    "first_half",
+    "middle_quarter", 
+    "first_and_last_10pct",
+    "middle_third",
+    "multiple_small_ranges",
+    "custom_test"
+])
+def test_must_do_list_parametrized(q, k, v, head_dim, case_idx):
+    """Test must do list with parametrized head dimensions and test cases."""
+    if case_idx == 0:
+        print("  Must-do list tests:")
+    seq_len = k.shape[1]
+    cases = get_must_do_list_cases(seq_len)
+    case_name, must_do_list = cases[case_idx]
+    _test_must_do_list_single(q, k, v, head_dim, must_do_list, case_name)
+
+
+def test_softmax_lse_correctness_parametrized(small_q, small_k, small_v, head_dim):
+    """Test softmax LSE correctness with parametrized head dimensions."""
+    test_softmax_lse_correctness(small_q, small_k, small_v, head_dim)

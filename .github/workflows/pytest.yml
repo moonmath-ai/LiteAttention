@@ -1,0 +1,82 @@
+name: Run Pytest Tests
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    name: Run LiteAttention Tests (Py ${{ matrix.python-version }})
+    runs-on: [self-hosted, gpu]
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.13"]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Create virtual environment
+        run: python -m venv .venv
+
+      - name: Detect CUDA version for PyTorch index
+        run: |
+          ./.venv/bin/python - <<'PY'
+          import os
+          import re
+          import subprocess
+
+          cuda_version = None
+          try:
+              output = subprocess.check_output(["nvidia-smi"], text=True)
+              match = re.search(r"CUDA Version:\s*([0-9.]+)", output)
+              if match:
+                  cuda_version = match.group(1)
+          except Exception as exc:  # noqa: BLE001
+              print(f"Could not detect CUDA version: {exc}")
+
+          torch_label = None
+          if cuda_version:
+              match = re.match(r"(\d+)\.(\d+)", cuda_version)
+              if match:
+                  major, minor = match.groups()
+                  torch_label = f"cu{major}{minor}"
+
+          index_url = f"https://download.pytorch.org/whl/{torch_label}" if torch_label else "https://download.pytorch.org/whl/cpu"
+
+          print(f"Detected CUDA version: {cuda_version}, using index: {index_url}")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as fh:
+              fh.write(f"TORCH_INDEX_URL={index_url}\n")
+          PY
+
+      - name: Install PyTorch
+        run: |
+          source .venv/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install packaging wheel
+          python -m pip install --extra-index-url "${TORCH_INDEX_URL}" torch
+          python -m pip install numpy
+
+      - name: Clean and install project with dev extras
+        working-directory: hopper
+        run: |
+          source ../.venv/bin/activate
+          rm -rf build _C*.so lite_attention.egg-info dist
+          pip uninstall -y lite_attention 2>/dev/null || true
+          # Match PyTorch C++ ABI to avoid undefined symbol (c10::* or ListType::get)
+          CXX11_ABI=$(python -c "import torch; print('TRUE' if torch._C._GLIBCXX_USE_CXX11_ABI else 'FALSE')")
+          echo "Building with FLASH_ATTENTION_FORCE_CXX11_ABI=$CXX11_ABI"
+          FLASH_ATTENTION_FORCE_CXX11_ABI=$CXX11_ABI python -m pip install --no-build-isolation .[dev]
+
+      - name: Run pytest tests
+        working-directory: hopper
+        run: |
+          source ../.venv/bin/activate
+          pytest tests
