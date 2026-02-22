@@ -71,8 +71,8 @@ jobs:
           pip uninstall -y lite_attention 2>/dev/null || true
           # Match PyTorch C++ ABI to avoid undefined symbol (c10::* or ListType::get)
           CXX11_ABI=$(python -c "import torch; print('TRUE' if torch._C._GLIBCXX_USE_CXX11_ABI else 'FALSE')")
-          echo "Building with FLASH_ATTENTION_FORCE_CXX11_ABI=$CXX11_ABI"
-          FLASH_ATTENTION_FORCE_CXX11_ABI=$CXX11_ABI python -m pip install --no-build-isolation .[dev]
+          echo "Building with LITE_ATTENTION_FORCE_CXX11_ABI=$CXX11_ABI"
+          LITE_ATTENTION_FORCE_CXX11_ABI=$CXX11_ABI python -m pip install --no-build-isolation .[dev]
 
       - name: Run pytest tests
         run: |

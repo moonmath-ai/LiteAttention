@@ -35,7 +35,7 @@ except ImportError:
     triton_attention = None
 triton_attention = None
 
-DISABLE_BACKWARD = os.getenv("FLASH_ATTENTION_DISABLE_BACKWARD", "FALSE") == "TRUE"
+DISABLE_BACKWARD = os.getenv("LITE_ATTENTION_DISABLE_BACKWARD", "FALSE") == "TRUE"
 
 
 def time_fwd(func, *args, repeats=30, verbose=True, desc="", **kwargs):
