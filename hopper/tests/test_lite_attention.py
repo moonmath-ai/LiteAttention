@@ -59,18 +59,16 @@ def test_first_element_is_last_block(skip_list):
     Check that the first element in the skip list is the last block (ktiles - 1).
     """
     last_n_block = skip_list.shape[-1] - 2
-    is_n_block = skip_list[..., 1] == last_n_block
-    assert is_n_block.all(), (
-        f"First element is not ktiles - 1: {skip_list[..., 1]} != {last_n_block}"
-    )
-
+    assert (skip_list[..., 1] == last_n_block).all()
 def assert_skip_list_length_valid(skip_list):
     """List length field must not exceed the skip list dimension."""
     assert (skip_list.shape[-1] > skip_list[..., 0]).all()
 
 
 def assert_no_empty_or_negative_ranges(skip_list):
-    """All ranges in the skip list must be non-empty and positive."""
+    """
+    Check that we don't have empty or negative ranges in the skip list.
+    """
     # Check that all ranges are positive (start < end)
     # [start0 - end0, end0 - start1, start1 - end1, end1 - start2, ..., start_n - end_n]
     diff = skip_list[..., 1:-1] - skip_list[..., 2:]
@@ -90,16 +88,16 @@ def test_skip_all(qkv, use_int8):
     Expected: skip_list should contain exactly 2 entries (one range of length 1).
     """
     q, k, v = qkv
-    attn = LiteAttention(use_int8=use_int8, threshold=float("inf"))
-
+    attn = LiteAttention(use_int8=use_int8, threshold = float('inf'))
+    
     # Warm up
     run_attention_warmup(attn, q, k, v)
-
-    skip_list = attn._skip_list[attn._phase, : q.shape[0]]  # [batch, heads, qtiles, ktiles]
-
+    
+    skip_list = attn._skip_list[attn._phase, :q.shape[0]]  # [batch, heads, qtiles, ktiles]
+    
     # Test that skip lists include only 1 range (skip_list[..., 0] == 2 means 1 range)
     assert (skip_list[..., 0] == 2).all(), "Should contain exactly 1 range"
-
+    
     # Test that the only range has length 1
     diff = (skip_list[..., 1] - skip_list[..., 2]).abs()
     assert (diff == 1).all(), "Range length should be 1"
@@ -112,15 +110,15 @@ def test_skip_nothing(qkv, use_int8):
     Expected: skip lists should remain consistent between read and write phases.
     """
     q, k, v = qkv
-    attn = LiteAttention(use_int8=use_int8, threshold=float("-inf"))
+    attn = LiteAttention(use_int8=use_int8, threshold = float('-inf'))
     read_list_original, _ = attn._get_read_write_lists(q, v)
     read_list_original = read_list_original.clone()
     attn._phase = 0
-
+    
     # Warm up
     run_attention_warmup(attn, q, k, v, 2)
-
-    read_list = attn.read_list
+    
+    read_list = attn.read_list  # [batch, heads, qtiles, ktiles+1]
     assert (read_list[..., 0] == 2).all(), "Should contain exactly 1 range"
     rl_range = read_list[..., 1:3]
     orig_range = read_list_original[..., 1:3]
@@ -176,16 +174,16 @@ def test_softmax_lse_correctness(qkv_short, head_dim, use_int8):
     Test that softmax_lse output matches PyTorch reference implementation.
     Uses qkv_short fixtures to avoid OOM in reference matmul (seq_len^2).
     """
-    q, k, v = qkv_short
+    small_q, small_k, small_v = qkv_short
     attn = LiteAttention(use_int8=use_int8, threshold=0.0)
-
+    
     torch.cuda.synchronize()
-    _, lse_lite = attn(q, k, v, return_softmax_lse=True)
+    _output_lite, lse_lite = attn(small_q, small_k, small_v, return_softmax_lse=True)
     torch.cuda.synchronize()
-
+    
     # Compute reference LSE
-    lse_ref = compute_reference_lse(q, k, head_dim)
-
+    lse_ref = compute_reference_lse(small_q, small_k, head_dim)
+    
     # Adjust lse_lite shape if needed
     if lse_lite.dim() == 4 and lse_lite.shape[-1] == 1:
         lse_lite = lse_lite.squeeze(-1)
@@ -211,9 +209,9 @@ def test_rectangular_attention_correctness(head_dim, use_int8):
     output_lite = attn(q, k, v, scale=scale)
     torch.cuda.synchronize()
 
-    ref = compute_reference_attention_output(q, k, v, head_dim)
-    torch.testing.assert_close(output_lite.float(), ref, atol=tol_abs, rtol=0)
-    assert cosine_sim(output_lite, ref) >= tol_cos
+    output_ref = compute_reference_attention_output(q, k, v, head_dim)
+    torch.testing.assert_close(output_lite.float(), output_ref, atol=tol_abs, rtol=0)
+    assert cosine_sim(output_lite, output_ref) >= tol_cos
 
 
 @pytest.mark.parametrize("use_int8", [False, True], ids=["bf16", "int8"])
@@ -239,7 +237,7 @@ def test_rectangular_attention_skipping_twice(head_dim, q_len, k_len, use_int8):
 
     # Base (existing) structured construction.
     q_base_len = 2 * kBlockM + 1  # ensure multiple q-tiles, keep Lq != Lk
-    k_base_len = 4 * kBlockN
+    k_base_len = 4 * kBlockN      # 4 key tiles: [+Q, -Q, -Q, +Q]
     assert q_len > q_base_len
     assert k_len > k_base_len
 
@@ -255,10 +253,10 @@ def test_rectangular_attention_skipping_twice(head_dim, q_len, k_len, use_int8):
 
     # 4 key tiles: [+Q, -Q, -Q, +Q] — high tiles will be computed, low tiles skipped
     k_base = torch.empty(batch, k_base_len, heads, head_dim, device=device, dtype=dtype)
-    k_base[:, :kBlockN] = q_vec
-    k_base[:, kBlockN : 2 * kBlockN] = -q_vec
-    k_base[:, 2 * kBlockN : 3 * kBlockN] = -q_vec
-    k_base[:, 3 * kBlockN : 4 * kBlockN] = q_vec
+    k_base[:, 0:kBlockN] = q_vec
+    k_base[:, kBlockN:2 * kBlockN] = -q_vec
+    k_base[:, 2 * kBlockN:3 * kBlockN] = -q_vec
+    k_base[:, 3 * kBlockN:4 * kBlockN] = q_vec
 
     # Values don't affect the skip decision; keep them small-ish for numerical comfort.
     v_base = (0.1 * torch.randn(batch, k_base_len, heads, head_dim, device=device, dtype=dtype)).contiguous()
@@ -275,7 +273,7 @@ def test_rectangular_attention_skipping_twice(head_dim, q_len, k_len, use_int8):
     scale = 1.0 / (head_dim ** 0.5)
 
     # Keep this near 0 to make the skip decision robust across head dims.
-    attn = LiteAttention(enable_skipping=True, use_int8=use_int8, threshold=-1.0)
+    attn = LiteAttention(enable_skipping=True, use_int8=use_int8, threshold = -1.0)
 
     for _pass_num in range(2):
         torch.cuda.synchronize()
@@ -311,10 +309,13 @@ def test_consistency(qkv):
         torch.cuda.synchronize()
 
         skip_list = attn.read_list
-        new_pct = attn.calc_percentage(skip_list).item()
-        assert new_pct <= percentage, "Percentage should not increase"
-        percentage = new_pct
+        # check new percentage is not bigger than the previous one
+        new_percentage = attn.calc_percentage(skip_list).item()
+        assert new_percentage <= percentage, "Percentage should not increase"
+        percentage = new_percentage
+        # Check that the list length isn't bigger than ktiles + 1
         assert_skip_list_length_valid(skip_list)
+        # Check that we don't have empty or negative ranges
         assert_no_empty_or_negative_ranges(skip_list)
 
 
@@ -339,15 +340,22 @@ def test_must_skip_list(qkv, head_dim, use_int8, case_fn):
     attn(q, k, v, must_skip_list=must_skip)
     torch.cuda.synchronize()
 
-    expected = (ktiles - count_tiles(must_skip, kBlockN)) / ktiles
-    actual = attn.calc_percentage(attn.read_list).item()
-    assert actual == pytest.approx(expected, abs=0.01)
+    # The write_list from this pass (which will be read_list next pass)
+    # should contain the skip information.
+    result_list = attn.read_list
+
+    # Calculate expected percentage based on tiles
+    expected_percentage = (ktiles - count_tiles(must_skip, kBlockN)) / ktiles
+    actual_percentage = attn.calc_percentage(result_list)
+    assert actual_percentage.item() == pytest.approx(expected_percentage, abs=0.01)
 
 
 @pytest.mark.parametrize("use_int8", [False, True], ids=["bf16", "int8"])
 @pytest.mark.parametrize("case_fn", DO_CASES)
 def test_must_do_list(qkv, head_dim, use_int8, case_fn):
-    """must_do_list forces tiles to be computed even when threshold=inf."""
+    """
+    Test that must_do_list forces tiles to be computed even if threshold dictates skipping.
+    """
     q, k, v = qkv
     seq_len = k.shape[1]
     must_do = case_fn(seq_len)
@@ -361,9 +369,14 @@ def test_must_do_list(qkv, head_dim, use_int8, case_fn):
         attn(q, k, v, must_do_list=must_do)
         torch.cuda.synchronize()
 
-        expected = count_tiles(must_do, kBlockN) / ktiles
-        actual = attn.calc_percentage(attn.read_list).item()
-        assert actual == pytest.approx(expected, abs=0.01)
+        # The write_list from this pass (which will be read_list next pass)
+        # should contain the compute information.
+        result_list = attn.read_list
+
+        # Calculate expected percentage based on tiles
+        expected_percentage = count_tiles(must_do, kBlockN) / ktiles
+        actual_percentage = attn.calc_percentage(result_list)
+        assert actual_percentage.item() == pytest.approx(expected_percentage, abs=0.01)
 
 
 @pytest.mark.parametrize("use_int8", [False, True], ids=["bf16", "int8"])
@@ -381,8 +394,8 @@ def test_stress(qkv, use_int8):
         torch.cuda.synchronize()
         attn(q, k, v)
         torch.cuda.synchronize()
-        new_pct = attn.calc_percentage(attn.read_list).item()
-        assert new_pct == pytest.approx(percentage, abs=tol)
+        new_percentage = attn.calc_percentage(attn.read_list)
+        assert new_percentage.item() == pytest.approx(percentage, abs=tol)
 
 
 def test_int8_correctness(qkv_short, head_dim):
@@ -393,15 +406,15 @@ def test_int8_correctness(qkv_short, head_dim):
     tile_size_int8 = LiteAttention.get_MN(head_dim, torch.int8, is_skipable=False)
     if tile_size_bf16 != tile_size_int8:
         pytest.skip(f"Tile sizes differ (BF16: {tile_size_bf16}, INT8: {tile_size_int8})")
-
+    
     scale = 1.0 / (head_dim ** 0.5)
-
+    
     # Create BF16 reference (without skipping for fair comparison)
     attn_bf16 = LiteAttention(enable_skipping=False, use_int8=False)
     torch.cuda.synchronize()
     output_bf16 = attn_bf16(q, k, v, scale=scale)
     torch.cuda.synchronize()
-
+    
     # Create INT8 version (without skipping for fair comparison)
     attn_int8 = LiteAttention(enable_skipping=False, use_int8=True)
     torch.cuda.synchronize()
@@ -416,15 +429,15 @@ def test_int8_with_skipping(qkv_short, head_dim):
     """INT8 with skipping matches BF16 with skipping."""
     q, k, v = qkv_short
 
+    # Check if tile sizes match between int8 and bf16
     tile_size_bf16 = LiteAttention.get_MN(head_dim, torch.bfloat16, is_skipable=True)
     tile_size_int8 = LiteAttention.get_MN(head_dim, torch.int8, is_skipable=True)
     if tile_size_bf16 != tile_size_int8:
         pytest.skip(f"Tile sizes differ (BF16: {tile_size_bf16}, INT8: {tile_size_int8})")
-
+    
     scale = 1.0 / (head_dim ** 0.5)
-
     threshold = 0.0
-
+    
     # Create BF16 reference with skipping
     attn_bf16 = LiteAttention(enable_skipping=True, use_int8=False, threshold=threshold)
     # Warm up to stabilize skip lists
@@ -432,7 +445,7 @@ def test_int8_with_skipping(qkv_short, head_dim):
     torch.cuda.synchronize()
     output_bf16 = attn_bf16(q, k, v, scale=scale)
     torch.cuda.synchronize()
-
+    
     # Create INT8 version with skipping
     attn_int8 = LiteAttention(enable_skipping=True, use_int8=True, threshold=threshold)
     # Warm up to stabilize skip lists
@@ -440,14 +453,14 @@ def test_int8_with_skipping(qkv_short, head_dim):
     torch.cuda.synchronize()
     output_int8 = attn_int8(q, k, v, scale=scale)
     torch.cuda.synchronize()
-
+    
     torch.testing.assert_close(output_int8.float(), output_bf16.float(), atol=0.15, rtol=0)
     assert cosine_sim(output_int8, output_bf16) >= 0.98
-
+    
     # Also check skip percentages are similar
-    pct_bf16 = attn_bf16.calc_percentage(attn_bf16.read_list).item()
-    pct_int8 = attn_int8.calc_percentage(attn_int8.read_list).item()
-    assert pct_bf16 == pytest.approx(pct_int8, abs=0.05)
+    skip_pct_bf16 = attn_bf16.calc_percentage(attn_bf16.read_list)
+    skip_pct_int8 = attn_int8.calc_percentage(attn_int8.read_list)
+    assert skip_pct_bf16.item() == pytest.approx(skip_pct_int8.item(), abs=0.05)
 
 
 # Fixtures
