@@ -1491,7 +1491,7 @@ class LiteAttentionRegistry(ModuleRegistry):
 
         Args:
             model: `nn.Module` that contains LiteAttention modules.
-            mode: Configuration mode - 'const', 'load', or 'calib'.
+            mode: Configuration mode - 'const', 'load', 'calib', or 'disable'.
             threshold: Threshold value for mode='const'.
             filename: Path to config file for mode='load' (input) or
                 mode='calib' (output via save_if_calib). Cast to Path internally.
@@ -1527,7 +1527,10 @@ class LiteAttentionRegistry(ModuleRegistry):
                         module_name=name,
                     )
 
-        if mode == "const":
+        if mode == "disable":
+            for module in registry.named_modules.values():
+                module.enable_skipping = False
+        elif mode == "const":
             if threshold is None:
                 warnings.warn(
                     "no 'threshold' specified for mode 'const'. Using default value",
@@ -1556,7 +1559,7 @@ class LiteAttentionRegistry(ModuleRegistry):
             registry.set_bulk_config(LiteAttentionCalibConfig(**calib_config))
         else:
             raise ValueError(
-                f"Unknown mode: {mode!r}. Must be 'const', 'load', or 'calib'."
+                f"Unknown mode: {mode!r}. Must be 'const', 'load', 'calib', or 'disable'."
             )
 
         return registry
