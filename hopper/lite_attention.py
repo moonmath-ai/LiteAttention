@@ -439,7 +439,8 @@ class LiteAttention(nn.Module, ConfigurableModule):
         #   [2]: Head dimension  
         #   [3]: Query tiles dimension
         #   [4]: ktiles + 1 (the +1 stores the list length at index 0)
-        skip_list = torch.empty(2, batch, heads, qtiles, ktiles + 1, dtype=torch.int16, device=device)
+        #   We need at least 3 in the last dimension to store [length, start, end]
+        skip_list = torch.empty(2, batch, heads, qtiles, max(ktiles + 1, 3), dtype=torch.int16, device=device)
 
         if must_skip_list is not None:
             tile_indices = LiteAttention.convert_sequence_indices_to_tile_indices(

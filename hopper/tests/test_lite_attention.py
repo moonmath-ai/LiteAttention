@@ -819,6 +819,7 @@ def run_tests_for_head_dim(head_dim, batch=2, seq_len=18200, heads=32):
     print(f"  BF16 Tests (head_dim: {head_dim})")
     print(f"  {'-'*56}")
     bf16_results = []
+    bf16_results.append(test_small_ktiles(head_dim))
     bf16_results.append(stress_test(q, k, v, head_dim, use_int8=False))
     bf16_results.append(test_skip_all(q, k, v, head_dim, use_int8=False))
     bf16_results.append(test_skip_nothing(q, k, v, head_dim, use_int8=False))
@@ -1046,3 +1047,32 @@ def test_must_do_list_parametrized(q, k, v, head_dim, case_idx):
 def test_softmax_lse_correctness_parametrized(small_q, small_k, small_v, head_dim):
     """Test softmax LSE correctness with parametrized head dimensions."""
     test_softmax_lse_correctness(small_q, small_k, small_v, head_dim)
+
+
+def test_small_ktiles_single(seq_len, head_dim, num_heads=8, batch=2):
+    """Test single config with small ktiles (ktiles=1 edge case)."""
+    q, k, v = generate_test_tensors(batch, seq_len, num_heads, head_dim)
+    
+    for threshold in [float('-inf'), 0.0, float('inf')]:
+        attn = LiteAttention(threshold=threshold)
+        output = attn(q, k, v)
+        assert torch.isfinite(output).all()
+        
+        skip_list = attn.read_list
+        if skip_list is not None:
+            assert skip_list.shape[-1] >= 3
+            expected = torch.tensor([2, 0, -1], dtype=torch.int16, device="cuda")
+            assert torch.equal(skip_list[0, 0, 0, :3], expected)
+
+
+def test_small_ktiles(head_dim):
+    """Test the ktiles=1 edge case that previously caused a crash."""
+    kBlockN = LiteAttention.get_MN(head_dim, torch.bfloat16)[1]
+    test_seq_lens = [64, 128, 176] if head_dim == 64 else [128]
+    
+    for seq_len in test_seq_lens:
+        ktiles = LiteAttention.ceil_div(seq_len, kBlockN)
+        if ktiles == 1:
+            test_small_ktiles_single(seq_len, head_dim)
+    
+    print(f"  Small ktiles test (head_dim={head_dim}): ✅ PASSED")
