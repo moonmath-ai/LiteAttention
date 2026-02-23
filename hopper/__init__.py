@@ -5,6 +5,7 @@ from .debug_capture import load_capture, render_skip_images
 from .lite_attention import (
     LiteAttention,
     LiteAttentionCalibConfig,
+    LiteAttentionDisabledConfig,
     LiteAttentionRegistry,
     LiteAttentionRunConfig,
     SeqParallelLiteAttention,
@@ -14,6 +15,7 @@ __all__ = [
     "LiteAttention",
     "SeqParallelLiteAttention",
     "LiteAttentionRunConfig",
+    "LiteAttentionDisabledConfig",
     "LiteAttentionCalibConfig",
     "LiteAttentionRegistry",
     "load_capture",

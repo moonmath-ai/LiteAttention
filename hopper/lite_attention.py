@@ -121,6 +121,13 @@ class LiteAttentionRunConfig(CalibratedRunConfig):
 
 
 @dataclass
+class LiteAttentionDisabledConfig(LiteAttentionRunConfig):
+    """Runtime config that disables skipping for this timestep (regular attention)."""
+
+    threshold: float = 0.0
+
+
+@dataclass
 class LiteAttentionCalibConfig(CalibratedCalibConfig):
     """Calibration configuration for finding optimal threshold."""
 
@@ -864,18 +871,24 @@ class LiteAttention(nn.Module, ConfigurableModule):
         >>> output = lite_attn(q, k, v, must_do_list=[0, 128, 500, 640])
         """
         cfg = self.config if self.enable_skipping else None
+        disabled = isinstance(cfg, LiteAttentionDisabledConfig)
+        skipping = self.enable_skipping and not disabled
 
-        # Get read and write lists (internal mask management)
-        read_list, write_list = self._get_read_write_lists(
-            query, key, value, must_skip_list
-        )
-
-        if self.enable_skipping and (must_do_list is not None):
-            # handle must-do list - expand the 1d list to a list per head per batch per qi
-            must_do_list_expanded = self._expand_must_do_list(
-                must_do_list, write_list.shape, query, value, self.use_int8
+        if skipping:
+            # Get read and write lists (internal mask management)
+            read_list, write_list = self._get_read_write_lists(
+                query, key, value, must_skip_list
             )
+
+            if must_do_list is not None:
+                # handle must-do list - expand the 1d list to a list per head per batch per qi
+                must_do_list_expanded = self._expand_must_do_list(
+                    must_do_list, write_list.shape, query, value, self.use_int8
+                )
+            else:
+                must_do_list_expanded = None
         else:
+            read_list = write_list = None
             must_do_list_expanded = None
 
         # softmax_scale: for INT8 use q_scale (1.44269504089 * scale or / sqrt(head_dim)); else use scale as-is
@@ -890,7 +903,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
             else scale
         )
 
-        if not self.enable_skipping:
+        if not skipping:
             threshold = 0.0  # unused
         elif isinstance(cfg, LiteAttentionCalibConfig):
             temp_list = read_list.clone()
@@ -997,17 +1010,18 @@ class LiteAttention(nn.Module, ConfigurableModule):
 
         # Record calibration results and advance timestep
         if self.enable_skipping:
-            self.add_calibration_results(LiteAttentionRunConfig(threshold=threshold))
+            self.add_calibration_results(
+                LiteAttentionDisabledConfig()
+                if disabled
+                else LiteAttentionRunConfig(threshold=threshold)
+            )
 
         # Capture debug data if enabled (after add_calibration_results so timestep is set)
-        if self.enable_skipping:
+        if skipping:
             self._maybe_capture(write_list, threshold, query, key, scale)
 
         # Calculate and store statistics if enabled
-        if (
-            self.enable_skipping
-            and os.getenv("LITE_ATTENTION_VERBOSE", "FALSE") != "FALSE"
-        ):
+        if skipping and os.getenv("LITE_ATTENTION_VERBOSE", "FALSE") != "FALSE":
             real_batch_size = query.shape[0]
             self._last_percentage = self.calc_percentage(read_list[:real_batch_size])
             log.info(
@@ -1695,7 +1709,11 @@ class LiteAttentionRegistry(ModuleRegistry):
                 raise ValueError("filename is required for mode='load'")
             registry.load_config(
                 filename,
-                config_types=[LiteAttentionRunConfig, LiteAttentionCalibConfig],
+                config_types=[
+                    LiteAttentionRunConfig,
+                    LiteAttentionDisabledConfig,
+                    LiteAttentionCalibConfig,
+                ],
             )
         elif mode == "calib":
             if filename is None:
