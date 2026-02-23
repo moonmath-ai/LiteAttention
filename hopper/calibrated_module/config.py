@@ -56,12 +56,13 @@ class CalibratedConfig:
             ValueError: If the _type is not found in config_types.
 
         """
-        _type = cfg.pop("_type")
+        _type = cfg["_type"]
         _class = config_types.get(_type)
         if _class is None:
             raise ValueError(f"Unknown config type: {_type}")
         assert issubclass(_class, CalibratedConfig)
-        return _class(**cfg)
+        fields = {k: v for k, v in cfg.items() if k != "_type"}
+        return _class(**fields)
 
     def to_dict(self) -> dict[str, typing.Any]:
         """Serialize this config to a dictionary with a _type field."""
