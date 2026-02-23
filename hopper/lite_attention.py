@@ -1017,7 +1017,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
             )
 
         # Capture debug data if enabled (after add_calibration_results so timestep is set)
-        if skipping:
+        if self.enable_skipping:
             self._maybe_capture(write_list, threshold, query, key, scale)
 
         # Calculate and store statistics if enabled
@@ -1193,12 +1193,16 @@ class LiteAttention(nn.Module, ConfigurableModule):
 
         Tier 1 (always when capture enabled): compute pct_per_head for ALL
         heads and ALL batch items. Cheap — no attention map materialization.
+        For disabled timesteps (write_list is None), emits pct=1.0.
 
         Tier 2 (when attn maps enabled and timestep/head matches): compute
         downsampled attention maps and save skip_lists for selected subset.
+        For disabled timesteps, attn maps are still computed from Q@K^T and
+        a synthetic "all tiles computed" skip list is stored.
 
         Args:
-            write_list: The write skip list [batch, heads, qtiles, ktiles+1].
+            write_list: The write skip list [batch, heads, qtiles, ktiles+1],
+                or None for disabled timesteps.
             threshold: The threshold used for this forward pass.
             query: Query tensor [batch, seq_len_q, heads, head_dim].
             key: Key tensor [batch, seq_len_k, heads, head_dim].
@@ -1209,11 +1213,17 @@ class LiteAttention(nn.Module, ConfigurableModule):
 
         current_timestep = self._config_index - 1
         real_batch_size = query.shape[0]
+        disabled = write_list is None
+        device = query.device
 
         # --- Tier 1: pct for ALL heads, ALL batch items ---
-        pct = self.calc_percentage_per_head(write_list[:real_batch_size])
-        # pct shape: [real_batch, all_heads, qtiles] -> mean over qtiles
-        pct_per_head = pct.mean(dim=-1).float().cpu()
+        if disabled:
+            num_heads = query.shape[2]
+            pct_per_head = torch.ones(real_batch_size, num_heads)
+        else:
+            pct = self.calc_percentage_per_head(write_list[:real_batch_size])
+            # pct shape: [real_batch, all_heads, qtiles] -> mean over qtiles
+            pct_per_head = pct.mean(dim=-1).float().cpu()
 
         self._captured_pct.append(
             {
@@ -1233,23 +1243,40 @@ class LiteAttention(nn.Module, ConfigurableModule):
         ):
             return
 
-        batch_idx = self._capture_attn_map_batch_indices.to(write_list.device)
+        batch_idx = self._capture_attn_map_batch_indices.to(device)
         batch_idx = batch_idx[batch_idx < real_batch_size]
         if batch_idx.numel() == 0:
             return
 
         # Resolve heads: None means all heads
         if self._capture_attn_map_heads is not None:
-            head_idx = self._capture_attn_map_heads.to(write_list.device)
+            head_idx = self._capture_attn_map_heads.to(device)
         else:
-            head_idx = torch.arange(write_list.shape[1], device=write_list.device)
+            num_heads = query.shape[2]
+            head_idx = torch.arange(num_heads, device=device)
 
-        # Slice write_list for selected batch/head
-        captured_skip = (
-            write_list[batch_idx][:, head_idx]
-            .clone()
-            .to(dtype=torch.int16, device="cpu")
-        )
+        # Skip list: real or synthetic "all tiles computed"
+        if disabled:
+            head_dim = query.shape[-1]
+            dtype = torch.int8 if self.use_int8 else query.dtype
+            v_colmajor = (
+                self._last_v_colmajor if self._last_v_colmajor is not None else False
+            )
+            kBlockM, kBlockN = self.get_MN(head_dim, dtype, v_colmajor)
+            qtiles = self.ceil_div(query.shape[1], kBlockM)
+            ktiles = self.ceil_div(key.shape[1], kBlockN)
+            captured_skip = torch.zeros(
+                len(batch_idx), len(head_idx), qtiles, ktiles + 1, dtype=torch.int16
+            )
+            captured_skip[:, :, :, 0] = 2
+            captured_skip[:, :, :, 1] = ktiles - 1
+            captured_skip[:, :, :, 2] = -1
+        else:
+            captured_skip = (
+                write_list[batch_idx][:, head_idx]
+                .clone()
+                .to(dtype=torch.int16, device="cpu")
+            )
 
         # Compute downsampled attention maps
         res = self._capture_attn_map_res
