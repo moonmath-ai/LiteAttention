@@ -872,24 +872,26 @@ class LiteAttention(nn.Module, ConfigurableModule):
         """
         cfg = self.config if self.enable_skipping else None
         disabled = isinstance(cfg, LiteAttentionDisabledConfig)
-        skipping = self.enable_skipping and not disabled
 
-        if skipping:
-            # Get read and write lists (internal mask management)
-            read_list, write_list = self._get_read_write_lists(
-                query, key, value, must_skip_list
+        # if we are disabled, we temporarily disable skipping
+        enable_skipping = self.enable_skipping
+        if disabled:
+            self.enable_skipping = False
+
+        # Get read and write lists (internal mask management)
+        read_list, write_list = self._get_read_write_lists(
+            query, key, value, must_skip_list
+        )
+
+        if self.enable_skipping and must_do_list is not None:
+            # handle must-do list - expand the 1d list to a list per head per batch per qi
+            must_do_list_expanded = self._expand_must_do_list(
+                must_do_list, write_list.shape, query, value, self.use_int8
             )
-
-            if must_do_list is not None:
-                # handle must-do list - expand the 1d list to a list per head per batch per qi
-                must_do_list_expanded = self._expand_must_do_list(
-                    must_do_list, write_list.shape, query, value, self.use_int8
-                )
-            else:
-                must_do_list_expanded = None
         else:
-            read_list = write_list = None
             must_do_list_expanded = None
+
+        self.enable_skipping = enable_skipping
 
         # softmax_scale: for INT8 use q_scale (1.44269504089 * scale or / sqrt(head_dim)); else use scale as-is
         head_dim = query.shape[-1]
@@ -903,7 +905,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
             else scale
         )
 
-        if not skipping:
+        if not self.enable_skipping or isinstance(cfg, LiteAttentionDisabledConfig):
             threshold = 0.0  # unused
         elif isinstance(cfg, LiteAttentionCalibConfig):
             temp_list = read_list.clone()
@@ -988,9 +990,10 @@ class LiteAttention(nn.Module, ConfigurableModule):
                 return curr_th
 
             threshold = find_threshold(low=-20.0, high=0.0)
-        else:
-            assert isinstance(cfg, LiteAttentionRunConfig)
+        elif isinstance(cfg, LiteAttentionRunConfig):
             threshold = cfg.threshold
+        else:
+            raise ValueError(f"Unknown config type: {type(cfg)}")
 
         output = flash_attn_func(
             q=query,
@@ -1020,8 +1023,12 @@ class LiteAttention(nn.Module, ConfigurableModule):
         if self.enable_skipping:
             self._maybe_capture(write_list, threshold, query, key, scale)
 
-        # Calculate and store statistics if enabled
-        if skipping and os.getenv("LITE_ATTENTION_VERBOSE", "FALSE") != "FALSE":
+        # Old way to calculate and store statistics (if enabled)
+        if (
+            self.enable_skipping
+            and not disabled
+            and os.getenv("LITE_ATTENTION_VERBOSE", "FALSE") != "FALSE"
+        ):
             real_batch_size = query.shape[0]
             self._last_percentage = self.calc_percentage(read_list[:real_batch_size])
             log.info(
