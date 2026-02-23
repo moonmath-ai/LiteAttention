@@ -113,7 +113,7 @@ The near-linear scaling between sparsity and runtime improvement demonstrates th
 
 ### Build from Source
 
-The build compiles CUDA kernels and must be run with `--no-build-isolation`. All build-time and runtime dependencies must be in the venv **before** installing:
+The build compiles CUDA kernels and must be run with `--no-build-isolation`. All build-time and runtime dependencies must be in the venv **before** installing.
 
 ```sh
 # Build-time dependencies (setup_requires)

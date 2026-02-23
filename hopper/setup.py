@@ -288,6 +288,12 @@ def get_platform():
 
 
 def get_cuda_bare_metal_version(cuda_dir):
+    if cuda_dir is None:
+        raise RuntimeError(
+            "CUDA_HOME is not set and nvcc was not found. "
+            "For a CUDA build, set CUDA_HOME or ensure nvcc is on PATH. "
+            "On AMD/ROCm systems, use a PyTorch build with ROCm (torch.version.hip) so the ROCm path is used."
+        )
     raw_output = subprocess.check_output([cuda_dir + "/bin/nvcc", "-V"], universal_newlines=True)
     output = raw_output.split()
     release_idx = output.index("release") + 1
@@ -421,7 +427,14 @@ feature_args = (
     + ["-DCK_TILE_FMHA_FWD_FAST_EXP2=1"]
 )
 
-is_rocm = torch.version.hip is not None
+# Prefer ROCm path when torch has HIP, or when ROCm toolchain is present (e.g. on AMD machine
+# where pip's build isolation may install CUDA torch)
+def _rocm_toolchain_present():
+    if os.environ.get("ROCM_PATH") or os.environ.get("HIP_PATH"):
+        return True
+    return shutil.which("hipcc") is not None
+
+is_rocm = (torch.version.hip is not None) or _rocm_toolchain_present()
 
 if is_rocm:
     print("\n\nBuilding for AMD ROCm...\n\n")
@@ -509,10 +522,11 @@ if is_rocm:
         str(generated_dir),
     ]
 
-    # 4. Compiler Flags
+    # 4. Compiler Flags (ROCm/HIP uses hipcc which is Clang-based; -Wno-c++11-narrowing avoids
+    #    "float cannot be narrowed to index_t" when CK args use float threshold and compiler is strict)
     extra_compile_args = {
-        "cxx": ["-O3", "-std=c++17", "-D__HIP_PLATFORM_AMD__=1", "-DTORCH_EXTENSION_NAME=lite_attention._C"] + feature_args,
-        "nvcc": ["-O3", "-std=c++17", "-D__HIP_PLATFORM_AMD__=1", "--offload-arch=gfx942"] + feature_args # nvcc here actually maps to hipcc in CUDAExtension when IS_HIP_EXTENSION is true
+        "cxx": ["-O3", "-std=c++17", "-Wno-c++11-narrowing", "-D__HIP_PLATFORM_AMD__=1", "-DTORCH_EXTENSION_NAME=lite_attention._C"] + feature_args,
+        "nvcc": ["-O3", "-std=c++17", "-Wno-c++11-narrowing", "-D__HIP_PLATFORM_AMD__=1", "--offload-arch=gfx942"] + feature_args # nvcc here actually maps to hipcc in CUDAExtension when IS_HIP_EXTENSION is true
     }
 
     ext_modules.append(
@@ -761,7 +775,11 @@ class CachedWheelsCommand(_bdist_wheel):
             super().run()
 
 setup(
+    name="lite_attention",
     version=get_package_version(),
+    packages=["lite_attention", "lite_attention._internal", "lite_attention.calibrated_module"],
+    package_dir={"lite_attention": "."},
+    package_data={"lite_attention": ["*.py"]},  # ensure lite_attention.py etc. are in the wheel
     ext_modules=ext_modules,
     cmdclass={"bdist_wheel": CachedWheelsCommand, "build_ext": BuildExtension}
     if ext_modules
