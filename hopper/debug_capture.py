@@ -165,7 +165,7 @@ def render_skip_images(
                         attn_map.numpy(), cmap="viridis", interpolation="nearest"
                     )
                     plt.title(
-                        f"{mod_name} | t={t_val} | batch {b_val} | head {h_val} | {pct:.1f}% computed"
+                        f"{mod_name}\nt={t_val} | batch {b_val} | head {h_val} | {pct:.1f}% computed"
                     )
 
                     for y in y_positions:
