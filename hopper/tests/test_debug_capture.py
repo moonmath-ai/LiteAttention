@@ -49,108 +49,35 @@ def warmup_all(registry, q, k, v, n=1):
 
 
 # ===========================================================================
-# Basic capture
+# Tier 1: pct_per_head always captured
 # ===========================================================================
 
 
-def test_capture_basic_shapes(qkv, tmp_path):
-    """Enable capture on all modules, run forward, save, reload, check shapes."""
+def test_pct_captured_for_all_modules_and_timesteps(qkv, tmp_path):
+    """enable_capture with attn_map_res=0 still captures pct for all modules/timesteps."""
     q, k, v = qkv
     model = SimpleModel()
     registry = LiteAttentionRegistry.from_model(model, mode="const", threshold=-8.0)
     save_path = tmp_path / "capture.pt"
 
-    registry.enable_capture(
-        save_path=save_path,
-        heads=[0, 2],
-        timesteps=[0, 2],
-        batch_indices=[0],
-        attn_map_res=64,
-    )
-
-    warmup_all(registry, q, k, v, n=3)
+    registry.enable_capture(save_path=save_path, attn_map_res=0)
+    warmup_all(registry, q, k, v, n=5)
     registry.save()
 
-    assert save_path.exists()
     data = load_capture(save_path)
-
     assert "modules" in data
     for name in registry.named_modules:
         mod_data = data["modules"][name]
-
-        # Timesteps 0 and 2 captured (not 1)
-        assert torch.equal(mod_data["timesteps"], torch.tensor([0, 2]))
-        assert torch.equal(mod_data["heads"], torch.tensor([0, 2]))
-        assert torch.equal(mod_data["batch_indices"], torch.tensor([0]))
-
-        assert mod_data["seq_len_q"] == SEQ_LEN
-        assert mod_data["seq_len_k"] == SEQ_LEN
-        assert mod_data["head_dim"] == HEAD_DIM
-
-        # skip_lists: [n_captured=2, n_batch=1, n_heads=2, qtiles, ktiles+1]
-        sl = mod_data["skip_lists"]
-        assert sl.shape[0] == 2  # 2 captured timesteps
-        assert sl.shape[1] == 1  # 1 batch
-        assert sl.shape[2] == 2  # 2 heads
-        assert sl.dtype == torch.int16
-
-        # pct_per_head: [n_captured=2, n_batch=1, n_heads=2]
-        assert mod_data["pct_per_head"].shape == (2, 1, 2)
-
-        # attn_maps: [n_captured=2, n_batch=1, n_heads=2, 64, 64]
-        assert mod_data["attn_maps"].shape == (2, 1, 2, 64, 64)
-        assert mod_data["attn_maps"].dtype == torch.float16
-
-        # thresholds
-        assert mod_data["thresholds"].shape == (2,)
-        assert (mod_data["thresholds"] == -8.0).all()
-
-        # per-module metadata
-        assert mod_data["kBlockM"] > 0
-        assert mod_data["kBlockN"] > 0
-
-
-def test_capture_no_attn_maps(qkv, tmp_path):
-    """attn_map_res=0 skips attention map computation."""
-    q, k, v = qkv
-    model = SimpleModel()
-    registry = LiteAttentionRegistry.from_model(model, mode="const", threshold=-8.0)
-    save_path = tmp_path / "capture_no_maps.pt"
-
-    registry.enable_capture(save_path=save_path, attn_map_res=0)
-    warmup_all(registry, q, k, v, n=2)
-    registry.save()
-
-    data = load_capture(save_path)
-    for mod_data in data["modules"].values():
+        assert mod_data["timesteps"].shape[0] == 5
+        # pct_per_head: [T=5, B=1, H=8]
+        assert mod_data["pct_per_head"].shape == (5, BATCH, HEADS)
+        assert mod_data["thresholds"].shape == (5,)
         assert "attn_maps" not in mod_data
-        assert mod_data["skip_lists"].shape[0] == 2
-        assert mod_data["pct_per_head"].shape[0] == 2
+        assert "skip_lists" not in mod_data
 
 
-# ===========================================================================
-# Module filtering
-# ===========================================================================
-
-
-def test_capture_module_filter_list(qkv, tmp_path):
-    """Only capture modules matching the list."""
-    q, k, v = qkv
-    model = SimpleModel()
-    registry = LiteAttentionRegistry.from_model(model, mode="const", threshold=-8.0)
-    save_path = tmp_path / "capture.pt"
-
-    registry.enable_capture(save_path=save_path, modules=["attn0"], attn_map_res=0)
-    warmup_all(registry, q, k, v, n=2)
-    registry.save()
-
-    data = load_capture(save_path)
-    assert "attn0" in data["modules"]
-    assert "attn1" not in data["modules"]
-
-
-def test_capture_module_filter_callable(qkv, tmp_path):
-    """Callable filter on module names."""
+def test_pct_shape_with_maps_enabled(qkv, tmp_path):
+    """pct_per_head covers ALL timesteps/heads even when maps filter to subset."""
     q, k, v = qkv
     model = SimpleModel()
     registry = LiteAttentionRegistry.from_model(model, mode="const", threshold=-8.0)
@@ -158,53 +85,137 @@ def test_capture_module_filter_callable(qkv, tmp_path):
 
     registry.enable_capture(
         save_path=save_path,
-        modules=lambda name: "1" in name,
-        attn_map_res=0,
+        attn_map_modules=["attn0"],
+        attn_map_timesteps=[0, 2],
+        attn_map_heads=[0, 3],
+        attn_map_res=32,
+    )
+    warmup_all(registry, q, k, v, n=3)
+    registry.save()
+
+    data = load_capture(save_path)
+    for name in ["attn0", "attn1"]:
+        mod_data = data["modules"][name]
+        # pct always has ALL timesteps and ALL heads
+        assert mod_data["pct_per_head"].shape == (3, BATCH, HEADS)
+        assert mod_data["timesteps"].shape[0] == 3
+
+    # attn0 has maps for timesteps 0 and 2 only
+    attn0 = data["modules"]["attn0"]
+    assert "attn_maps" in attn0
+    assert torch.equal(attn0["map_timesteps"], torch.tensor([0, 2]))
+    assert torch.equal(attn0["map_heads"], torch.tensor([0, 3]))
+    assert attn0["attn_maps"].shape == (2, 1, 2, 32, 32)
+    assert attn0["skip_lists"].shape[0] == 2  # 2 map timesteps
+
+    # attn1 has no maps
+    assert "attn_maps" not in data["modules"]["attn1"]
+
+
+# ===========================================================================
+# Tier 2: attn map filtering
+# ===========================================================================
+
+
+def test_attn_maps_all_modules_when_modules_none(qkv, tmp_path):
+    """attn_map_modules=None captures maps for all modules."""
+    q, k, v = qkv
+    model = SimpleModel()
+    registry = LiteAttentionRegistry.from_model(model, mode="const", threshold=-8.0)
+    save_path = tmp_path / "capture.pt"
+
+    registry.enable_capture(save_path=save_path, attn_map_res=32)
+    warmup_all(registry, q, k, v, n=2)
+    registry.save()
+
+    data = load_capture(save_path)
+    for name in ["attn0", "attn1"]:
+        assert "attn_maps" in data["modules"][name]
+        assert data["modules"][name]["attn_maps"].shape[0] == 2
+
+
+def test_attn_map_module_filter_list(qkv, tmp_path):
+    """attn_map_modules as list selects specific modules."""
+    q, k, v = qkv
+    model = SimpleModel()
+    registry = LiteAttentionRegistry.from_model(model, mode="const", threshold=-8.0)
+    save_path = tmp_path / "capture.pt"
+
+    registry.enable_capture(
+        save_path=save_path,
+        attn_map_modules=["attn0"],
+        attn_map_res=32,
+    )
+    warmup_all(registry, q, k, v, n=2)
+    registry.save()
+
+    data = load_capture(save_path)
+    assert "attn_maps" in data["modules"]["attn0"]
+    assert "attn_maps" not in data["modules"]["attn1"]
+
+
+def test_attn_map_module_filter_callable(qkv, tmp_path):
+    """attn_map_modules as callable filter."""
+    q, k, v = qkv
+    model = SimpleModel()
+    registry = LiteAttentionRegistry.from_model(model, mode="const", threshold=-8.0)
+    save_path = tmp_path / "capture.pt"
+
+    registry.enable_capture(
+        save_path=save_path,
+        attn_map_modules=lambda name: "1" in name,
+        attn_map_res=32,
     )
     warmup_all(registry, q, k, v, n=1)
     registry.save()
 
     data = load_capture(save_path)
-    assert "attn1" in data["modules"]
-    assert "attn0" not in data["modules"]
+    assert "attn_maps" not in data["modules"]["attn0"]
+    assert "attn_maps" in data["modules"]["attn1"]
 
 
-# ===========================================================================
-# Timestep & head filtering
-# ===========================================================================
-
-
-def test_capture_all_timesteps(qkv, tmp_path):
-    """timesteps=None captures every forward pass."""
+def test_attn_map_timestep_filter(qkv, tmp_path):
+    """attn_map_timesteps filters which timesteps get maps."""
     q, k, v = qkv
     model = SimpleModel()
     registry = LiteAttentionRegistry.from_model(model, mode="const", threshold=-8.0)
     save_path = tmp_path / "capture.pt"
 
-    registry.enable_capture(save_path=save_path, timesteps=None, attn_map_res=0)
+    registry.enable_capture(
+        save_path=save_path,
+        attn_map_timesteps=[1, 3],
+        attn_map_res=32,
+    )
     warmup_all(registry, q, k, v, n=5)
     registry.save()
 
     data = load_capture(save_path)
     for mod_data in data["modules"].values():
-        assert mod_data["timesteps"].shape[0] == 5
+        assert mod_data["timesteps"].shape[0] == 5  # pct has all 5
+        assert torch.equal(mod_data["map_timesteps"], torch.tensor([1, 3]))
+        assert mod_data["attn_maps"].shape[0] == 2
 
 
-def test_capture_all_heads(qkv, tmp_path):
-    """heads=None captures all heads."""
+def test_attn_map_head_filter(qkv, tmp_path):
+    """attn_map_heads filters which heads get maps."""
     q, k, v = qkv
     model = SimpleModel()
     registry = LiteAttentionRegistry.from_model(model, mode="const", threshold=-8.0)
     save_path = tmp_path / "capture.pt"
 
-    registry.enable_capture(save_path=save_path, heads=None, attn_map_res=0)
+    registry.enable_capture(
+        save_path=save_path,
+        attn_map_heads=[0, 5],
+        attn_map_res=32,
+    )
     warmup_all(registry, q, k, v, n=1)
     registry.save()
 
     data = load_capture(save_path)
     for mod_data in data["modules"].values():
-        assert mod_data["heads"].shape[0] == HEADS
-        assert mod_data["skip_lists"].shape[2] == HEADS
+        assert mod_data["pct_per_head"].shape[2] == HEADS  # pct has all heads
+        assert torch.equal(mod_data["map_heads"], torch.tensor([0, 5]))
+        assert mod_data["attn_maps"].shape[2] == 2  # maps only for 2 heads
 
 
 # ===========================================================================
@@ -226,7 +237,6 @@ def test_save_preserves_data(qkv, tmp_path):
     data1 = load_capture(save_path)
     n1 = list(data1["modules"].values())[0]["timesteps"].shape[0]
 
-    # Run more, save again
     warmup_all(registry, q, k, v, n=3)
     registry.save()
 
@@ -245,10 +255,10 @@ def test_reset_skip_state_warns_unsaved(qkv):
     attn(q, k, v)
     torch.cuda.synchronize()
 
-    assert len(attn._captured_data) > 0
+    assert len(attn._captured_pct) > 0
     with pytest.warns(UserWarning, match="unsaved capture data"):
         attn.reset_skip_state()
-    assert len(attn._captured_data) == 0
+    assert len(attn._captured_pct) == 0
 
 
 def test_reset_skip_state_no_warn_when_empty(qkv):
@@ -257,7 +267,6 @@ def test_reset_skip_state_no_warn_when_empty(qkv):
     attn = LiteAttention(threshold=-8.0)
     attn._enable_capture(attn_map_res=0)
 
-    # No forward passes — no captured data
     import warnings
 
     with warnings.catch_warnings():
@@ -271,7 +280,7 @@ def test_reset_skip_state_no_warn_when_empty(qkv):
 
 
 def test_capture_batch_out_of_range(qkv, tmp_path):
-    """batch_indices beyond actual batch size are silently skipped."""
+    """attn_map_batch_indices beyond actual batch size are silently skipped."""
     q, k, v = qkv  # BATCH=1
     model = SimpleModel()
     registry = LiteAttentionRegistry.from_model(model, mode="const", threshold=-8.0)
@@ -279,42 +288,39 @@ def test_capture_batch_out_of_range(qkv, tmp_path):
 
     registry.enable_capture(
         save_path=save_path,
-        batch_indices=[0, 5],
-        attn_map_res=0,
+        attn_map_batch_indices=[0, 5],
+        attn_map_res=32,
     )
     warmup_all(registry, q, k, v, n=1)
     registry.save()
 
     data = load_capture(save_path)
     for mod_data in data["modules"].values():
-        # Only batch 0 should be captured (batch 5 > actual batch size 1)
+        # pct has all batch items (BATCH=1)
+        assert mod_data["pct_per_head"].shape[1] == BATCH
+        # maps only have batch 0 (batch 5 > actual batch size 1)
         assert mod_data["skip_lists"].shape[1] == 1
 
 
 # ===========================================================================
-# skip_list_to_mask
+# skip_list_to_mask (unchanged)
 # ===========================================================================
 
 
 def test_skip_list_to_mask_basic():
     """Verify mask decoding from a known skip list pattern."""
     ktiles = 8
-    # Format: [length, r1, r2, r1, r2, ...]
-    # 2 pairs: range (7,3) and (2,0) — reversed, step=1
-    # After +step: (8,4) and (3,1) → sorted: (4,8) and (1,3)
     row = torch.zeros(ktiles + 1, dtype=torch.int16)
-    row[0] = 4  # length (4 entries = 2 pairs)
-    row[1] = 7  # r1 > r2 → step=1
+    row[0] = 4
+    row[1] = 7
     row[2] = 3
     row[3] = 2
     row[4] = 0
 
-    skip_list_2d = row.unsqueeze(0)  # [1, ktiles+1]
+    skip_list_2d = row.unsqueeze(0)
     mask = skip_list_to_mask(skip_list_2d, ktiles)
 
     assert mask.shape == (1, ktiles)
-    # After +step=1: pairs (8,4) and (3,1), sorted → (4,8) and (1,3)
-    # mask[0, 4:8] = True, mask[0, 1:3] = True
     expected = torch.tensor([False, True, True, False, True, True, True, True])
     assert torch.equal(mask[0], expected)
 
@@ -333,9 +339,9 @@ def test_render_skip_images(qkv, tmp_path):
 
     registry.enable_capture(
         save_path=save_path,
-        heads=[0],
-        timesteps=[0],
-        batch_indices=[0],
+        attn_map_heads=[0],
+        attn_map_timesteps=[0],
+        attn_map_batch_indices=[0],
         attn_map_res=32,
     )
     warmup_all(registry, q, k, v, n=1)
@@ -345,29 +351,27 @@ def test_render_skip_images(qkv, tmp_path):
     vis_dir = tmp_path / "vis"
     render_skip_images(data, output_dir=vis_dir)
 
-    # Check PNGs were created
     for name in registry.named_modules:
         png = vis_dir / name / "batch_0" / "head_0" / "t_0000.png"
         assert png.exists(), f"Expected {png}"
 
 
-def test_render_skip_images_no_attn_maps_raises(tmp_path):
-    """render_skip_images raises if attn_maps are missing."""
+def test_render_skip_images_skips_modules_without_maps(tmp_path):
+    """render_skip_images silently skips modules with no attn_maps."""
     data = {
         "modules": {
-            "test": {
-                "kBlockM": 64,
-                "kBlockN": 128,
+            "no_maps": {
                 "timesteps": torch.tensor([0]),
-                "heads": torch.tensor([0]),
-                "batch_indices": torch.tensor([0]),
-                "skip_lists": torch.zeros(1, 1, 1, 4, 9, dtype=torch.int16),
+                "thresholds": torch.tensor([-8.0]),
                 "pct_per_head": torch.zeros(1, 1, 1),
                 "seq_len_q": 256,
                 "seq_len_k": 256,
-                # no "attn_maps" key
+                "head_dim": 128,
+                "use_int8": False,
+                "kBlockM": 64,
+                "kBlockN": 128,
             }
         }
     }
-    with pytest.raises(ValueError, match="no attention maps"):
-        render_skip_images(data, output_dir=tmp_path / "vis")
+    # Should not raise — just produces no images
+    render_skip_images(data, output_dir=tmp_path / "vis")

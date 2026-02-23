@@ -227,12 +227,16 @@ class LiteAttention(nn.Module, ConfigurableModule):
         self.max_batch_size = max_batch_size
 
         # Debug capture state (set via _enable_capture, cleared via _disable_capture)
-        self._capture_enabled = False
-        self._capture_heads = None  # Tensor | None — None means all heads
-        self._capture_timesteps = None  # set[int] | None — None means all
-        self._capture_batch_indices = None  # Tensor | None
+        self._capture_enabled = False  # tier 1: pct for all heads/timesteps
+        self._captured_pct = []  # [{timestep, pct_per_head, threshold}]
+
+        # Attn map capture (tier 2):
+        self._capture_attn_map = False
+        self._capture_attn_map_timesteps = None  # set[int] | None — None means all
+        self._capture_attn_map_heads = None  # Tensor | None — None means all
+        self._capture_attn_map_batch_indices = torch.tensor([0])
         self._capture_attn_map_res = 256
-        self._captured_data = []
+        self._captured_maps = []  # [{timestep, skip_list, attn_map}]
 
     @staticmethod
     def ceil_div(x, y):
@@ -1045,12 +1049,13 @@ class LiteAttention(nn.Module, ConfigurableModule):
         self.verbose_reinitialization = False
         self._last_percentage = 0.0
         self._last_num_heads = None
-        if self._captured_data:
+        if self._captured_pct or self._captured_maps:
             warnings.warn(
                 "reset_skip_state() called with unsaved capture data; data will be lost.",
                 stacklevel=2,
             )
-            self._captured_data = []
+            self._captured_pct = []
+            self._captured_maps = []
         self.restart_config()
 
     @property
@@ -1131,47 +1136,55 @@ class LiteAttention(nn.Module, ConfigurableModule):
 
     def _enable_capture(
         self,
-        heads: Optional[torch.Tensor] = None,
-        timesteps: Optional[set] = None,
-        batch_indices: Optional[torch.Tensor] = None,
+        attn_map: bool = False,
+        attn_map_timesteps: Optional[set] = None,
+        attn_map_heads: Optional[torch.Tensor] = None,
+        attn_map_batch_indices: Optional[torch.Tensor] = None,
         attn_map_res: int = 256,
     ):
-        """Enable debug capture on this module. Called by LiteAttentionRegistry.enable_capture()."""
+        """Enable debug capture on this module.
+
+        Tier 1 (always): capture pct_per_head for all heads/timesteps/batches.
+        Tier 2 (optional): capture attn maps + skip_lists for selected subset.
+        """
         self._capture_enabled = True
-        self._capture_heads = heads  # None means all heads (resolved at forward time)
-        self._capture_timesteps = timesteps
-        self._capture_batch_indices = (
-            batch_indices if batch_indices is not None else torch.tensor([0])
+        self._captured_pct = []
+
+        self._capture_attn_map = attn_map
+        self._capture_attn_map_timesteps = attn_map_timesteps
+        self._capture_attn_map_heads = attn_map_heads
+        self._capture_attn_map_batch_indices = (
+            attn_map_batch_indices
+            if attn_map_batch_indices is not None
+            else torch.tensor([0])
         )
         self._capture_attn_map_res = attn_map_res
-        self._captured_data = []
+        self._captured_maps = []
 
     def _disable_capture(self):
         """Disable debug capture and clear accumulated data."""
         self._capture_enabled = False
-        self._capture_heads = None
-        self._capture_timesteps = None
-        self._capture_batch_indices = None
+        self._captured_pct = []
+
+        self._capture_attn_map = False
+        self._capture_attn_map_timesteps = None
+        self._capture_attn_map_heads = None
+        self._capture_attn_map_batch_indices = torch.tensor([0])
         self._capture_attn_map_res = 256
-        self._captured_data = []
+        self._captured_maps = []
 
     @torch.no_grad()
     def _maybe_capture(self, write_list, threshold, query, key, scale):
         """Capture debug data for the current forward pass if capture is enabled.
 
-        Called at the end of forward() after the kernel call. Captures the write_list
-        (the skip pattern just discovered), per-head compute percentages, and
-        optionally a downsampled attention map for the selected heads/batches.
+        Tier 1 (always when capture enabled): compute pct_per_head for ALL
+        heads and ALL batch items. Cheap — no attention map materialization.
 
-        Warning:
-            When ``attn_map_res > 0``, this materializes a full ``[seq_q, seq_k]``
-            attention matrix per (batch, head) pair in float32 on GPU. For long
-            sequences this can use significant GPU memory. Set ``attn_map_res=0``
-            in ``enable_capture()`` to skip attention map computation entirely.
+        Tier 2 (when attn maps enabled and timestep/head matches): compute
+        downsampled attention maps and save skip_lists for selected subset.
 
         Args:
-            write_list: The write skip list from the current forward pass.
-                Shape [batch, heads, qtiles, ktiles+1].
+            write_list: The write skip list [batch, heads, qtiles, ktiles+1].
             threshold: The threshold used for this forward pass.
             query: Query tensor [batch, seq_len_q, heads, head_dim].
             key: Key tensor [batch, seq_len_k, heads, head_dim].
@@ -1180,69 +1193,73 @@ class LiteAttention(nn.Module, ConfigurableModule):
         if not self._capture_enabled:
             return
 
-        # Check timestep filter — _config_index was already incremented by add_calibration_results
         current_timestep = self._config_index - 1
+        real_batch_size = query.shape[0]
+
+        # --- Tier 1: pct for ALL heads, ALL batch items ---
+        pct = self.calc_percentage_per_head(write_list[:real_batch_size])
+        # pct shape: [real_batch, all_heads, qtiles] -> mean over qtiles
+        pct_per_head = pct.mean(dim=-1).float().cpu()
+
+        self._captured_pct.append(
+            {
+                "timestep": current_timestep,
+                "pct_per_head": pct_per_head,  # [real_batch, all_heads]
+                "threshold": float(threshold),
+            }
+        )
+
+        # --- Tier 2: attn maps + skip_lists for filtered subset ---
+        if not self._capture_attn_map:
+            return
+
         if (
-            self._capture_timesteps is not None
-            and current_timestep not in self._capture_timesteps
+            self._capture_attn_map_timesteps is not None
+            and current_timestep not in self._capture_attn_map_timesteps
         ):
             return
 
-        real_batch_size = query.shape[0]
-        batch_idx = self._capture_batch_indices.to(write_list.device)
+        batch_idx = self._capture_attn_map_batch_indices.to(write_list.device)
         batch_idx = batch_idx[batch_idx < real_batch_size]
         if batch_idx.numel() == 0:
             return
 
         # Resolve heads: None means all heads
-        if self._capture_heads is not None:
-            head_idx = self._capture_heads.to(write_list.device)
+        if self._capture_attn_map_heads is not None:
+            head_idx = self._capture_attn_map_heads.to(write_list.device)
         else:
             head_idx = torch.arange(write_list.shape[1], device=write_list.device)
 
-        # Slice write_list: [batch, heads, qtiles, ktiles+1] -> selected batch/head
+        # Slice write_list for selected batch/head
         captured_skip = (
             write_list[batch_idx][:, head_idx]
             .clone()
             .to(dtype=torch.int16, device="cpu")
         )
 
-        # Per-head percentage for selected batch/heads
-        pct = self.calc_percentage_per_head(write_list[batch_idx][:, head_idx])
-        # pct shape: [n_batch_sel, n_heads_sel, qtiles] -> mean over qtiles
-        pct_per_head = pct.mean(dim=-1).float().cpu()
-
-        # Optionally compute downsampled attention maps
+        # Compute downsampled attention maps
         res = self._capture_attn_map_res
-        attn_maps = None
-        if res > 0:
-            attn_maps = []
-            raw_scale = (1.0 / math.sqrt(query.shape[-1])) if scale is None else scale
-            for bi in batch_idx:
-                head_maps = []
-                for hi in head_idx:
-                    q_h = (
-                        query[bi, :, hi, :].unsqueeze(0).unsqueeze(0)
-                    )  # [1, 1, seq_q, d]
-                    k_h = (
-                        key[bi, :, hi, :].unsqueeze(0).unsqueeze(0)
-                    )  # [1, 1, seq_k, d]
-                    qk = (q_h.float() @ k_h.float().transpose(-2, -1)) * raw_scale
-                    attn = torch.softmax(qk, dim=-1)
-                    attn_down = F.adaptive_max_pool2d(attn, output_size=(res, res))
-                    head_maps.append(attn_down[0, 0].half().cpu())
-                attn_maps.append(torch.stack(head_maps))
-            attn_maps = torch.stack(attn_maps)  # [n_batch_sel, n_heads_sel, res, res]
+        attn_maps = []
+        raw_scale = (1.0 / math.sqrt(query.shape[-1])) if scale is None else scale
+        for bi in batch_idx:
+            head_maps = []
+            for hi in head_idx:
+                q_h = query[bi, :, hi, :].unsqueeze(0).unsqueeze(0)
+                k_h = key[bi, :, hi, :].unsqueeze(0).unsqueeze(0)
+                qk = (q_h.float() @ k_h.float().transpose(-2, -1)) * raw_scale
+                attn = torch.softmax(qk, dim=-1)
+                attn_down = F.adaptive_max_pool2d(attn, output_size=(res, res))
+                head_maps.append(attn_down[0, 0].half().cpu())
+            attn_maps.append(torch.stack(head_maps))
+        attn_maps = torch.stack(attn_maps)  # [n_batch_sel, n_heads_sel, res, res]
 
-        entry = {
-            "timestep": current_timestep,
-            "skip_list": captured_skip,  # [n_batch_sel, n_heads_sel, qtiles, ktiles+1]
-            "threshold": float(threshold),
-            "pct_per_head": pct_per_head,  # [n_batch_sel, n_heads_sel]
-        }
-        if attn_maps is not None:
-            entry["attn_map"] = attn_maps  # [n_batch_sel, n_heads_sel, res, res]
-        self._captured_data.append(entry)
+        self._captured_maps.append(
+            {
+                "timestep": current_timestep,
+                "skip_list": captured_skip,  # [n_batch_sel, n_heads_sel, qtiles, ktiles+1]
+                "attn_map": attn_maps,  # [n_batch_sel, n_heads_sel, res, res]
+            }
+        )
 
     def visualize_skips(
         self,
@@ -1700,53 +1717,57 @@ class LiteAttentionRegistry(ModuleRegistry):
     def enable_capture(
         self,
         save_path: str | Path,
-        modules: Union[list, typing.Callable, None] = None,
-        heads: Optional[list] = None,
-        timesteps: Optional[list] = None,
-        batch_indices: Optional[list] = None,
+        attn_map_modules: Union[list, typing.Callable, None] = None,
+        attn_map_timesteps: Optional[list] = None,
+        attn_map_heads: Optional[list] = None,
+        attn_map_batch_indices: Optional[list] = None,
         attn_map_res: int = 256,
     ) -> None:
-        """Enable debug capture on selected modules.
+        """Enable debug capture on all modules.
+
+        All modules always capture pct_per_head for every timestep and head.
+        Attn maps + skip_lists are captured only for the filtered subset.
 
         Args:
             save_path: Path for the .pt capture file (written by save()).
-            modules: Which modules to capture. Can be:
+            attn_map_modules: Which modules capture attn maps. Can be:
                 - list[str]: exact module names
                 - Callable[[str], bool]: predicate on module name
-                - None: all modules
-            heads: Head indices to capture, or None for all.
-            timesteps: Timestep indices to capture, or None for all.
-            batch_indices: Batch indices to capture. Defaults to [0].
+                - None: all modules (when attn_map_res > 0)
+            attn_map_timesteps: Timestep indices for map capture, or None for all.
+            attn_map_heads: Head indices for map capture, or None for all.
+            attn_map_batch_indices: Batch indices for map capture. Defaults to [0].
             attn_map_res: Resolution for downsampled attention maps.
-                Set to 0 to skip attention map capture entirely (avoids
-                materializing the full Q*K^T matrix on GPU).
+                Set to 0 to skip attention map capture entirely.
         """
         self._capture_path = Path(save_path)
 
-        heads_t = torch.tensor(heads) if heads is not None else None
-        timesteps_set = set(timesteps) if timesteps is not None else None
+        heads_t = torch.tensor(attn_map_heads) if attn_map_heads is not None else None
+        timesteps_set = (
+            set(attn_map_timesteps) if attn_map_timesteps is not None else None
+        )
         batch_t = (
-            torch.tensor(batch_indices)
-            if batch_indices is not None
+            torch.tensor(attn_map_batch_indices)
+            if attn_map_batch_indices is not None
             else torch.tensor([0])
         )
 
         for name, module in self.named_modules.items():
-            if modules is None:
-                match = True
-            elif callable(modules):
-                match = modules(name)
-            else:
-                match = name in modules
-            if not match:
-                continue
+            # Determine if this module should capture attn maps
+            capture_maps = False
+            if attn_map_res > 0:
+                if attn_map_modules is None:
+                    capture_maps = True
+                elif callable(attn_map_modules):
+                    capture_maps = attn_map_modules(name)
+                else:
+                    capture_maps = name in attn_map_modules
 
-            # For heads=None, defer to per-module: will capture all heads
-            # once we know num_heads at forward time
             module._enable_capture(
-                heads=heads_t,
-                timesteps=timesteps_set,
-                batch_indices=batch_t,
+                attn_map=capture_maps,
+                attn_map_timesteps=timesteps_set,
+                attn_map_heads=heads_t,
+                attn_map_batch_indices=batch_t,
                 attn_map_res=attn_map_res,
             )
 
@@ -1777,59 +1798,62 @@ class LiteAttentionRegistry(ModuleRegistry):
         has_data = False
 
         for name, module in self.named_modules.items():
-            if not module._captured_data:
+            if not module._captured_pct:
                 continue
             has_data = True
-
-            first = module._captured_data[0]
-
-            # Determine heads tensor — if None was passed, all heads were captured
-            if module._capture_heads is not None:
-                heads_t = module._capture_heads
-            else:
-                heads_t = torch.arange(first["skip_list"].shape[1])
-
-            batch_t = (
-                module._capture_batch_indices
-                if module._capture_batch_indices is not None
-                else torch.tensor([0])
-            )
 
             kBlockM, kBlockN = LiteAttention.get_MN(
                 module._last_head_dim,
                 torch.int8 if module.use_int8 else module._last_dtype,
             )
 
+            # --- Tier 1: pct for all timesteps/heads ---
             timesteps = torch.tensor(
-                [d["timestep"] for d in module._captured_data], dtype=torch.int64
+                [d["timestep"] for d in module._captured_pct], dtype=torch.int64
             )
             thresholds = torch.tensor(
-                [d["threshold"] for d in module._captured_data], dtype=torch.float32
+                [d["threshold"] for d in module._captured_pct], dtype=torch.float32
             )
-            skip_lists = torch.stack([d["skip_list"] for d in module._captured_data])
             pct_per_head = torch.stack(
-                [d["pct_per_head"] for d in module._captured_data]
-            )
+                [d["pct_per_head"] for d in module._captured_pct]
+            )  # [T_all, B, H_all]
 
             mod_data = {
                 "timesteps": timesteps,
-                "heads": heads_t.cpu(),
-                "batch_indices": batch_t.cpu(),
+                "thresholds": thresholds,
+                "pct_per_head": pct_per_head,
                 "seq_len_q": module._last_seq_len[0],
                 "seq_len_k": module._last_seq_len[1],
                 "head_dim": module._last_head_dim,
                 "use_int8": module.use_int8,
                 "kBlockM": kBlockM,
                 "kBlockN": kBlockN,
-                "attn_map_res": module._capture_attn_map_res,
-                "skip_lists": skip_lists,
-                "thresholds": thresholds,
-                "pct_per_head": pct_per_head,
             }
-            if module._capture_attn_map_res > 0:
-                mod_data["attn_maps"] = torch.stack(
-                    [d["attn_map"] for d in module._captured_data]
+
+            # --- Tier 2: attn maps + skip_lists for filtered subset ---
+            if module._captured_maps:
+                map_timesteps = torch.tensor(
+                    [d["timestep"] for d in module._captured_maps], dtype=torch.int64
                 )
+                skip_lists = torch.stack(
+                    [d["skip_list"] for d in module._captured_maps]
+                )
+                attn_maps = torch.stack([d["attn_map"] for d in module._captured_maps])
+
+                # Resolve heads tensor
+                if module._capture_attn_map_heads is not None:
+                    map_heads = module._capture_attn_map_heads.cpu()
+                else:
+                    map_heads = torch.arange(pct_per_head.shape[-1])
+
+                map_batch = module._capture_attn_map_batch_indices.cpu()
+
+                mod_data["attn_maps"] = attn_maps
+                mod_data["skip_lists"] = skip_lists
+                mod_data["map_timesteps"] = map_timesteps
+                mod_data["map_heads"] = map_heads
+                mod_data["map_batch_indices"] = map_batch
+                mod_data["attn_map_res"] = module._capture_attn_map_res
 
             file_data["modules"][name] = mod_data
 

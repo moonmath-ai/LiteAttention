@@ -22,8 +22,9 @@ def load_capture(path: str | Path) -> dict:
         path: Path to the ``.pt`` file.
 
     Returns:
-        Dictionary with ``"metadata"`` and ``"modules"`` keys.
-        See the capture file format specification for the full schema.
+        Dictionary with ``"modules"`` key. Each module has ``pct_per_head``
+        (all timesteps/heads) and optionally ``attn_maps``/``skip_lists``
+        for a filtered subset.
     """
     return torch.load(path, weights_only=True)
 
@@ -86,9 +87,12 @@ def render_skip_images(
 ) -> None:
     """Render captured skip list data as PNG images with attention map overlays.
 
-    For each ``(module, timestep, batch, head)`` combination, produces a PNG
-    showing the downsampled attention map (viridis colormap) with white
-    semi-transparent rectangles overlaid for computed tiles and a tile grid.
+    Only renders modules that have attn maps (tier 2 capture). Modules with
+    only pct_per_head are silently skipped.
+
+    For each ``(module, timestep, batch, head)`` combination that has attn maps,
+    produces a PNG showing the downsampled attention map (viridis colormap) with
+    white semi-transparent rectangles overlaid for computed tiles and a tile grid.
 
     Args:
         data: Dictionary returned by :func:`load_capture`.
@@ -103,23 +107,22 @@ def render_skip_images(
     output_dir = Path(output_dir)
 
     for mod_name, mod_data in data["modules"].items():
+        if "attn_maps" not in mod_data:
+            continue
+
         kBlockM = mod_data["kBlockM"]
         kBlockN = mod_data["kBlockN"]
-        timesteps = mod_data["timesteps"]
-        heads = mod_data["heads"]
-        batch_indices = mod_data["batch_indices"]
-        skip_lists = mod_data[
-            "skip_lists"
-        ]  # [n_captured, n_batch, n_heads, qtiles, ktiles+1]
-        pct_per_head = mod_data["pct_per_head"]  # [n_captured, n_batch, n_heads]
-        if "attn_maps" not in mod_data:
-            raise ValueError(
-                f"Module {mod_name!r} has no attention maps. "
-                "Re-capture with attn_map_res > 0 to include them."
-            )
-        attn_maps = mod_data["attn_maps"]  # [n_captured, n_batch, n_heads, res, res]
+        map_timesteps = mod_data["map_timesteps"]
+        map_heads = mod_data["map_heads"]
+        map_batch_indices = mod_data["map_batch_indices"]
+        skip_lists = mod_data["skip_lists"]
+        attn_maps = mod_data["attn_maps"]
         seq_len_q = mod_data["seq_len_q"]
         seq_len_k = mod_data["seq_len_k"]
+
+        # For pct overlay: look up from the full pct_per_head
+        all_timesteps = mod_data["timesteps"]
+        pct_per_head_all = mod_data["pct_per_head"]  # [T_all, B, H_all]
 
         # Grid geometry (map tile coordinates to pixel coordinates)
         height, width = max_res, max_res
@@ -135,18 +138,27 @@ def render_skip_images(
             b * grid_w for b in range(int(width / grid_w) + 1) if b * grid_w <= width
         ]
 
-        for ti, t in enumerate(timesteps):
+        for ti, t in enumerate(map_timesteps):
             t_val = int(t.item())
-            for bi_idx, b in enumerate(batch_indices):
+            for bi_idx, b in enumerate(map_batch_indices):
                 b_val = int(b.item())
-                for hi_idx, h in enumerate(heads):
+                for hi_idx, h in enumerate(map_heads):
                     h_val = int(h.item())
 
                     img_dir = output_dir / mod_name / f"batch_{b_val}" / f"head_{h_val}"
                     os.makedirs(img_dir, exist_ok=True)
 
                     attn_map = attn_maps[ti, bi_idx, hi_idx].float()
-                    pct = float(pct_per_head[ti, bi_idx, hi_idx].item()) * 100
+
+                    # Look up pct from pct_per_head_all
+                    t_all_idx = (all_timesteps == t).nonzero(as_tuple=True)[0]
+                    if t_all_idx.numel() > 0:
+                        pct = (
+                            float(pct_per_head_all[t_all_idx[0], b_val, h_val].item())
+                            * 100
+                        )
+                    else:
+                        pct = 0.0
 
                     plt.figure(figsize=(6, 6))
                     plt.imshow(
@@ -183,43 +195,61 @@ def render_skip_images(
 
 
 def to_xarray(data: dict):
-    """Convert capture data to an ``xarray.Dataset`` with labeled dimensions.
+    """Convert capture data to ``xarray.Dataset`` objects with labeled dimensions.
 
-    Requires ``xarray`` to be installed. Dimensions are
-    ``(module, timestep, batch, head, qtile, ktile_entry)``.
+    Returns a dict mapping module names to datasets. Each dataset always has
+    ``pct_per_head`` (all timesteps/heads). If attn maps were captured for the
+    module, the dataset also contains ``attn_maps`` and ``skip_lists`` with
+    their own coordinate arrays (``map_timestep``, ``map_head``, ``map_batch``).
 
     Args:
         data: Dictionary returned by :func:`load_capture`.
 
     Returns:
-        ``xarray.Dataset`` with ``skip_lists``, ``pct_per_head``, and
-        ``attn_maps`` as data variables.
+        Dict mapping module names to ``xarray.Dataset`` instances.
     """
     import xarray as xr
 
     datasets = {}
     for mod_name, mod_data in data["modules"].items():
         timesteps = mod_data["timesteps"].numpy()
-        heads = mod_data["heads"].numpy()
-        batch_indices = mod_data["batch_indices"].numpy()
+        n_batch = mod_data["pct_per_head"].shape[1]
+        n_heads = mod_data["pct_per_head"].shape[2]
 
         data_vars = {
-            "skip_lists": xr.DataArray(
-                mod_data["skip_lists"].numpy(),
-                dims=["timestep", "batch", "head", "qtile", "ktile_entry"],
-                coords={"timestep": timesteps, "batch": batch_indices, "head": heads},
-            ),
             "pct_per_head": xr.DataArray(
                 mod_data["pct_per_head"].numpy(),
                 dims=["timestep", "batch", "head"],
-                coords={"timestep": timesteps, "batch": batch_indices, "head": heads},
+                coords={
+                    "timestep": timesteps,
+                    "batch": list(range(n_batch)),
+                    "head": list(range(n_heads)),
+                },
             ),
         }
+
         if "attn_maps" in mod_data:
+            map_ts = mod_data["map_timesteps"].numpy()
+            map_heads = mod_data["map_heads"].numpy()
+            map_batch = mod_data["map_batch_indices"].numpy()
+
+            data_vars["skip_lists"] = xr.DataArray(
+                mod_data["skip_lists"].numpy(),
+                dims=["map_timestep", "map_batch", "map_head", "qtile", "ktile_entry"],
+                coords={
+                    "map_timestep": map_ts,
+                    "map_batch": map_batch,
+                    "map_head": map_heads,
+                },
+            )
             data_vars["attn_maps"] = xr.DataArray(
                 mod_data["attn_maps"].numpy(),
-                dims=["timestep", "batch", "head", "attn_y", "attn_x"],
-                coords={"timestep": timesteps, "batch": batch_indices, "head": heads},
+                dims=["map_timestep", "map_batch", "map_head", "attn_y", "attn_x"],
+                coords={
+                    "map_timestep": map_ts,
+                    "map_batch": map_batch,
+                    "map_head": map_heads,
+                },
             )
 
         ds = xr.Dataset(
