@@ -1683,6 +1683,7 @@ class LiteAttentionRegistry(ModuleRegistry):
         filename: str | Path | None = None,
         calib_config: dict | None = None,
         force: bool = False,
+        disabled_steps: int = 0,
     ) -> Self:
         """
         Create a registry from a model and configure all its LiteAttention modules.
@@ -1762,6 +1763,18 @@ class LiteAttentionRegistry(ModuleRegistry):
             raise ValueError(
                 f"Unknown mode: {mode!r}. Must be 'const', 'load', 'calib', or 'disable'."
             )
+
+        if disabled_steps > 0 and mode != "disable":
+            disabled_prefix = [LiteAttentionDisabledConfig()] * disabled_steps
+            for module in registry.named_modules.values():
+                cfg = module._registry_config
+                if isinstance(cfg, ConfigList):
+                    remainder = list(cfg)[disabled_steps:]
+                    if not remainder:
+                        remainder = [cfg[-1]]
+                    module._registry_config = ConfigList(disabled_prefix + remainder)
+                else:
+                    module._registry_config = ConfigList(disabled_prefix + [cfg])
 
         return registry
 
