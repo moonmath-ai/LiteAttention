@@ -83,7 +83,6 @@ def skip_list_to_mask(skip_list_row: torch.Tensor, ktiles: int) -> torch.Tensor:
 def render_skip_images(
     data: dict,
     output_dir: str | Path,
-    max_res: int = 520,
 ) -> None:
     """Render captured skip list data as PNG images with attention map overlays.
 
@@ -100,7 +99,6 @@ def render_skip_images(
 
             {output_dir}/{module_name}/batch_{b}/head_{h}/t_{t:04d}.png
 
-        max_res: Resolution for the output image (default 520).
     """
     import matplotlib.pyplot as plt
 
@@ -124,8 +122,10 @@ def render_skip_images(
         all_timesteps = mod_data["timesteps"]
         pct_per_head_all = mod_data["pct_per_head"]  # [T_all, B, H_all]
 
-        # Grid geometry (map tile coordinates to pixel coordinates)
-        height, width = max_res, max_res
+        # Grid geometry — use the actual attn map resolution so that imshow
+        # pixel coordinates match the grid/rectangle coordinates exactly
+        # (same coordinate system as visualize_skips).
+        height, width = attn_maps.shape[-2], attn_maps.shape[-1]
         ratio_h = height / seq_len_q
         ratio_w = width / seq_len_k
         grid_h = kBlockM * ratio_h
