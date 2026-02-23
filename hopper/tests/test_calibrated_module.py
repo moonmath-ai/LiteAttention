@@ -335,15 +335,28 @@ def test_config_indexes_into_config_list():
     assert mod.config.threshold == -2.0  # index 1
 
 
-def test_config_index_out_of_bounds_on_config_list():
-    cl = ConfigList([DummyRunConfig(threshold=-1.0)])
+def test_config_list_clamps_to_last_element():
+    cl = ConfigList([DummyRunConfig(threshold=-1.0), DummyRunConfig(threshold=-2.0)])
     mod = DummyModule()
     _ = ModuleRegistry(iter([("mod", mod)]))  # registers mod
     mod._registry_config = cl
     assert mod.config.threshold == -1.0  # index 0
-    mod._config_index = 1  # beyond list
-    with pytest.raises(IndexError):
-        _ = mod.config
+    mod._config_index = 1
+    assert mod.config.threshold == -2.0  # index 1
+    mod._config_index = 2  # beyond list — should clamp to last
+    assert mod.config.threshold == -2.0
+    mod._config_index = 100  # way beyond — still last
+    assert mod.config.threshold == -2.0
+
+
+def test_config_list_single_element_clamps():
+    cl = ConfigList([DummyRunConfig(threshold=-5.0)])
+    mod = DummyModule()
+    _ = ModuleRegistry(iter([("mod", mod)]))  # registers mod
+    mod._registry_config = cl
+    assert mod.config.threshold == -5.0  # index 0
+    mod._config_index = 1  # beyond list — clamp to last
+    assert mod.config.threshold == -5.0
 
 
 def test_add_calibration_results_advances_index():
