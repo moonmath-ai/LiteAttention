@@ -1719,8 +1719,7 @@ class LiteAttentionRegistry(ModuleRegistry):
                     )
 
         if mode == "disable":
-            for module in registry.named_modules.values():
-                module.enable_skipping = False
+            registry.set_bulk_config(LiteAttentionDisabledConfig())
         elif mode == "const":
             if threshold is None:
                 warnings.warn(
