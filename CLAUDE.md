@@ -40,9 +40,10 @@ See `BUILDING.md` for all optional flags, alternative methods (pip, setup.py, tw
 ## Running Tests
 
 ```bash
+uv sync --extra dev --extra vis        # install test + vis deps (first time / after changes)
 uv run pytest                          # all tests
-uv run pytest hopper/tests/test_lite_attention.py  # single file
-uv run pytest -k test_flash_attn_output  # single test by name
+uv run pytest hopper/tests/test_debug_capture.py  # single file
+uv run pytest -k test_flash_attn_output            # single test by name
 ```
 
 Tests require a GPU. pytest config is in `pyproject.toml` (`testpaths = ["hopper/tests"]`).
@@ -71,7 +72,7 @@ LITE_ATTENTION_DISABLE_HDIMDIFF64=TRUE \
 LITE_ATTENTION_DISABLE_HDIMDIFF192=TRUE \
 LITE_ATTENTION_DISABLE_PACKGQA=TRUE \
 LITE_ATTENTION_DISABLE_PAGEDKV=TRUE \
-CUDA_HOME=/usr/local/cuda-12.8 CXX=g++ uv sync --extra dev
+CUDA_HOME=/usr/local/cuda-12.8 CXX=g++ uv sync --extra dev --extra vis
 uv run pytest
 ```
 
