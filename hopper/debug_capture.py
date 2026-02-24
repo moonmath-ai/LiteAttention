@@ -1,3 +1,10 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = [
+#     "matplotlib>=3.10.8",
+#     "torch>=2.10.0",
+# ]
+# ///
 """
 Offline utilities for loading and rendering LiteAttention debug capture files.
 
@@ -26,7 +33,7 @@ def load_capture(path: str | Path) -> dict:
         (all timesteps/heads) and optionally ``attn_maps``/``skip_lists``
         for a filtered subset.
     """
-    return torch.load(path, weights_only=True)
+    return torch.load(path, weights_only=True, map_location="cpu")
 
 
 def _decode_skip_list_ranges(row: torch.Tensor):
@@ -265,3 +272,24 @@ def to_xarray(data: dict):
         datasets[mod_name] = ds
 
     return datasets
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Render LiteAttention capture .pt files to PNG images."
+    )
+    parser.add_argument(
+        "pt_files", nargs="+", help="One or more .pt capture files to render."
+    )
+    args = parser.parse_args()
+
+    for pt_file in args.pt_files:
+        pt_path = Path(pt_file)
+        out_dir = pt_path.with_name(pt_path.stem + "_vis")
+        print(f"Loading {pt_path} ...")
+        data = load_capture(pt_path)
+        print(f"Rendering to {out_dir} ...")
+        render_skip_images(data, out_dir)
+        print(f"Done: {out_dir}")
