@@ -230,9 +230,7 @@ class CalibratedConfigDict(dict[str, ConfigList | CalibratedConfig]):
         return cls(result)
 
     @classmethod
-    def load(
-        cls, filename: Path, config_types: list[type[CalibratedConfig]]
-    ) -> Self:
+    def load(cls, filename: Path, config_types: list[type[CalibratedConfig]]) -> Self:
         """
         Load configs from a TOML file.
 

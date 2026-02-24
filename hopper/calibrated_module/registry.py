@@ -8,8 +8,7 @@ import typing
 from collections.abc import Iterator
 from pathlib import Path
 
-from .config import CalibratedConfig
-from .config import CalibratedConfigDict, ConfigList
+from .config import CalibratedConfig, CalibratedConfigDict, ConfigList
 from .module import ConfigurableModule
 
 
@@ -103,8 +102,5 @@ class ModuleRegistry:
         Use .save() on the result to persist calibration results to TOML.
         """
         return CalibratedConfigDict(
-            {
-                name: module._config_output
-                for name, module in self.named_modules.items()
-            }
+            {name: module._config_output for name, module in self.named_modules.items()}
         )

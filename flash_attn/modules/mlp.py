@@ -5,7 +5,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributed import ProcessGroup
 
-
 try:
     from flash_attn.ops.activations import swiglu
 except ImportError:

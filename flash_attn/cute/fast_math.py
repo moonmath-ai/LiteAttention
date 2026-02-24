@@ -5,8 +5,8 @@ from typing import Tuple
 import cutlass
 import cutlass.cute as cute
 from cutlass import Int32, Uint32
-from cutlass.cutlass_dsl import T, dsl_user_op
 from cutlass._mlir.dialects import llvm
+from cutlass.cutlass_dsl import T, dsl_user_op
 
 
 @cute.jit

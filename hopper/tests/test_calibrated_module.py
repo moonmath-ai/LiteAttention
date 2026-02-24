@@ -5,7 +5,6 @@ from dataclasses import dataclass
 
 import pytest
 import torch.nn as nn
-
 from lite_attention.calibrated_module import (
     CalibratedCalibConfig,
     CalibratedConfig,
@@ -15,7 +14,6 @@ from lite_attention.calibrated_module import (
     ConfigurableModule,
     ModuleRegistry,
 )
-
 
 # ---------------------------------------------------------------------------
 # Dummy classes
@@ -55,7 +53,9 @@ class DummyModule(nn.Module, ConfigurableModule):
 class DummyModel(nn.Module):
     def __init__(self, n_layers=3, config=None):
         super().__init__()
-        self.layers = nn.ModuleList([DummyModule(config=config) for _ in range(n_layers)])
+        self.layers = nn.ModuleList(
+            [DummyModule(config=config) for _ in range(n_layers)]
+        )
         self.proj = nn.Linear(4, 4)  # non-configurable module
 
 
@@ -154,7 +154,11 @@ def test_config_list_mixed_types_raises():
 
 
 def test_config_list_mismatched_list_lengths_raises():
-    data = {"_type": "DummyCalibConfig", "metric": ["L1", "RMSE"], "target_error": [0.01]}
+    data = {
+        "_type": "DummyCalibConfig",
+        "metric": ["L1", "RMSE"],
+        "target_error": [0.01],
+    }
     with pytest.raises(ValueError, match="same length"):
         ConfigList.explode(data, CONFIG_TYPES)
 
@@ -202,7 +206,9 @@ def test_calibrated_config_dict_from_dict_does_not_mutate_raw():
 def test_calibrated_config_dict_collect():
     ccd = CalibratedConfigDict(
         {
-            "m1": ConfigList([DummyRunConfig(threshold=-1.0), DummyRunConfig(threshold=-2.0)]),
+            "m1": ConfigList(
+                [DummyRunConfig(threshold=-1.0), DummyRunConfig(threshold=-2.0)]
+            ),
             "m2": DummyCalibConfig(metric="L1"),
         }
     )
@@ -230,7 +236,9 @@ def test_calibrated_config_dict_save_load_roundtrip_with_config_lists(tmp_path):
     """Test actual save() -> load() roundtrip with ConfigLists (via to_dict)."""
     ccd = CalibratedConfigDict(
         {
-            "m": ConfigList([DummyRunConfig(threshold=-1.0), DummyRunConfig(threshold=-2.0)]),
+            "m": ConfigList(
+                [DummyRunConfig(threshold=-1.0), DummyRunConfig(threshold=-2.0)]
+            ),
         }
     )
     path = tmp_path / "config.toml"
@@ -246,7 +254,9 @@ def test_calibrated_config_dict_toml_roundtrip_with_collect(tmp_path):
     """Save ConfigLists via collect(), reload via explode."""
     ccd = CalibratedConfigDict(
         {
-            "m": ConfigList([DummyRunConfig(threshold=-1.0), DummyRunConfig(threshold=-2.0)]),
+            "m": ConfigList(
+                [DummyRunConfig(threshold=-1.0), DummyRunConfig(threshold=-2.0)]
+            ),
         }
     )
     path = tmp_path / "config.toml"

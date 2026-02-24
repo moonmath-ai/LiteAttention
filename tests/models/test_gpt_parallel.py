@@ -9,15 +9,18 @@ import torch.nn as nn
 import torch.nn.functional as F
 from apex.transformer import parallel_state
 from einops import rearrange
+from transformers import GPT2Config
+
 from flash_attn.losses.cross_entropy import CrossEntropyLoss
 from flash_attn.models.gpt import GPTLMHeadModel, shard_state_dict_tp
 from flash_attn.utils.distributed import allreduce_sequence_parallel_grad
-from transformers import GPT2Config
 
 is_sm8x = torch.cuda.get_device_capability("cuda")[0] >= 8
 
 
-@pytest.mark.parametrize("dtype", [torch.float16] + ([torch.bfloat16] if is_sm8x else []))
+@pytest.mark.parametrize(
+    "dtype", [torch.float16] + ([torch.bfloat16] if is_sm8x else [])
+)
 # @pytest.mark.parametrize('dtype', [torch.bfloat16])
 @pytest.mark.parametrize("world_size", [1, 2, 4, 8])
 # @pytest.mark.parametrize('world_size', [2])
@@ -72,7 +75,9 @@ def test_gpt_parallel(dim, has_pos_emb, sequence_parallel, world_size, dtype):
         pad_vocab_size_multiple=8 * world_size,
         sequence_parallel=sequence_parallel,
     )
-    config.vocab_size = math.ceil(config.vocab_size / (8 * world_size)) * (8 * world_size)
+    config.vocab_size = math.ceil(config.vocab_size / (8 * world_size)) * (
+        8 * world_size
+    )
     model_pt = GPTLMHeadModel(config, device=device)
 
     def init_layer_norm(module):
@@ -87,14 +92,18 @@ def test_gpt_parallel(dim, has_pos_emb, sequence_parallel, world_size, dtype):
     sharded_nparams = sum(p.numel() for p in model.parameters())
     sharded_nparams_all = torch.empty(world_size, dtype=torch.long, device=device)
     torch.distributed.all_gather_into_tensor(
-        sharded_nparams_all, torch.tensor([sharded_nparams], device=device), group=process_group
+        sharded_nparams_all,
+        torch.tensor([sharded_nparams], device=device),
+        group=process_group,
     )
     shared_nparams = sum(
         p.numel() for p in model.parameters() if getattr(p, "_shared_params", False)
     )
     shared_nparams_all = torch.empty(world_size, dtype=torch.long, device=device)
     torch.distributed.all_gather_into_tensor(
-        shared_nparams_all, torch.tensor([shared_nparams], device=device), group=process_group
+        shared_nparams_all,
+        torch.tensor([shared_nparams], device=device),
+        group=process_group,
     )
     assert torch.all(shared_nparams_all == shared_nparams)
     assert total_nparams == (
@@ -106,7 +115,9 @@ def test_gpt_parallel(dim, has_pos_emb, sequence_parallel, world_size, dtype):
     partition_dim = dim // world_size
     partition_hidden_dim = 4 * dim // world_size
     with torch.no_grad():
-        model.load_state_dict(shard_state_dict_tp(model_pt.state_dict(), config, world_size, rank))
+        model.load_state_dict(
+            shard_state_dict_tp(model_pt.state_dict(), config, world_size, rank)
+        )
         model.tie_weights()
 
     with torch.autocast(device_type="cuda", dtype=dtype):
@@ -121,7 +132,9 @@ def test_gpt_parallel(dim, has_pos_emb, sequence_parallel, world_size, dtype):
         rtol=rtol,
         atol=atol,
     )
-    loss_fn = CrossEntropyLoss(inplace_backward=True, reduction="none", process_group=process_group)
+    loss_fn = CrossEntropyLoss(
+        inplace_backward=True, reduction="none", process_group=process_group
+    )
     loss_fn_pt = CrossEntropyLoss(inplace_backward=True, reduction="none")
     loss = loss_fn(out, input_ids[:, 1:].flatten())
     loss_pt = loss_fn_pt(out_pt, input_ids[:, 1:].flatten())
@@ -156,7 +169,10 @@ def test_gpt_parallel(dim, has_pos_emb, sequence_parallel, world_size, dtype):
         atol=atol,
     )
     assert torch.allclose(
-        model.transformer.ln_f.bias.grad, grad_dict["transformer.ln_f.bias"], rtol=rtol, atol=atol
+        model.transformer.ln_f.bias.grad,
+        grad_dict["transformer.ln_f.bias"],
+        rtol=rtol,
+        atol=atol,
     )
     for i in range(num_layers):
         assert torch.allclose(

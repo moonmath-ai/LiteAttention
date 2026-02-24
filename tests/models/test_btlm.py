@@ -1,15 +1,14 @@
 # Copyright (c) 2023, Tri Dao.
 import time
 
-import torch
 import pytest
+import torch
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
-from transformers import AutoConfig, AutoTokenizer, AutoModelForCausalLM
-
-from flash_attn.models.gpt import GPTLMHeadModel
 from flash_attn.models.btlm import btlm_config_to_gpt2_config, remap_state_dict_hf_btlm
-from flash_attn.utils.pretrained import state_dict_from_pretrained
+from flash_attn.models.gpt import GPTLMHeadModel
 from flash_attn.utils.generation import update_graph_cache
+from flash_attn.utils.pretrained import state_dict_from_pretrained
 
 
 @pytest.mark.parametrize("model_name", ["cerebras/btlm-3b-8k-base"])
@@ -17,8 +16,12 @@ def test_btlm_state_dict(model_name):
     config = btlm_config_to_gpt2_config(
         AutoConfig.from_pretrained(model_name, trust_remote_code=True)
     )
-    pretrained_state_dict = remap_state_dict_hf_btlm(state_dict_from_pretrained(model_name), config)
-    model = GPTLMHeadModel(config, device="meta")  # Without device='meta' init is very slow
+    pretrained_state_dict = remap_state_dict_hf_btlm(
+        state_dict_from_pretrained(model_name), config
+    )
+    model = GPTLMHeadModel(
+        config, device="meta"
+    )  # Without device='meta' init is very slow
     state_dict = model.state_dict()
     assert len(state_dict.keys()) == len(pretrained_state_dict.keys())
     assert state_dict.keys() == pretrained_state_dict.keys()
@@ -41,7 +44,9 @@ def test_btlm_optimized(model_name):
     config.fused_dropout_add_ln = True
     config.residual_in_fp32 = True
 
-    pretrained_state_dict = remap_state_dict_hf_btlm(state_dict_from_pretrained(model_name), config)
+    pretrained_state_dict = remap_state_dict_hf_btlm(
+        state_dict_from_pretrained(model_name), config
+    )
     model = GPTLMHeadModel(config, device=device, dtype=dtype)
     model.load_state_dict(pretrained_state_dict)
     model.eval()
@@ -49,7 +54,9 @@ def test_btlm_optimized(model_name):
     torch.manual_seed(0)
     batch_size = 2
     max_seqlen = 256
-    seqlens = torch.randint(max_seqlen // 2, max_seqlen + 1, (batch_size,), device=device)
+    seqlens = torch.randint(
+        max_seqlen // 2, max_seqlen + 1, (batch_size,), device=device
+    )
     input_ids = torch.randint(
         0, config.vocab_size, (batch_size, max_seqlen), dtype=torch.long, device=device
     )
@@ -85,7 +92,9 @@ def test_btlm_optimized(model_name):
     print(f"Output mean diff: {(out - out_ref).abs().mean().item()}")
     print(f"HF fp16 max diff: {(out_hf - out_ref).abs().max().item()}")
     print(f"HF fp16 mean diff: {(out_hf - out_ref).abs().mean().item()}")
-    assert (out - out_ref).abs().max().item() < 3 * (out_hf - out_ref).abs().max().item()
+    assert (out - out_ref).abs().max().item() < 3 * (
+        out_hf - out_ref
+    ).abs().max().item()
 
     print(f"Logits max diff: {(logits - logits_ref).abs().max().item()}")
     print(f"Logits mean diff: {(logits - logits_ref).abs().mean().item()}")
@@ -141,10 +150,14 @@ def test_btlm_generation(model_name):
     )
     model_ref.eval()
     with torch.no_grad():
-        logits_ref = model_ref(out_hf.sequences).logits[:, (seqlen - 1) : -1].to(device=device)
+        logits_ref = (
+            model_ref(out_hf.sequences).logits[:, (seqlen - 1) : -1].to(device=device)
+        )
     del model_ref
 
-    pretrained_state_dict = remap_state_dict_hf_btlm(state_dict_from_pretrained(model_name), config)
+    pretrained_state_dict = remap_state_dict_hf_btlm(
+        state_dict_from_pretrained(model_name), config
+    )
     model = GPTLMHeadModel(config, device=device, dtype=dtype)
     model.load_state_dict(pretrained_state_dict)
     model.eval()
@@ -167,7 +180,9 @@ def test_btlm_generation(model_name):
 
     # Capture graph outside the timing loop
     batch_size, seqlen_og = input_ids.shape
-    model._decoding_cache = update_graph_cache(model, None, batch_size, seqlen_og, max_length)
+    model._decoding_cache = update_graph_cache(
+        model, None, batch_size, seqlen_og, max_length
+    )
     print("With CUDA graph")
     torch.cuda.synchronize()
     start = time.time()
@@ -194,8 +209,8 @@ def test_btlm_generation(model_name):
     hf_error = (logits_hf - logits_ref).abs().max().item()
 
     print(f"HF fp16 logits max diff: {hf_error}")
-    print(f"Logits max diff: {(logits - logits_ref).abs().max().item() }")
-    print(f"Logits CG max diff: {(logits_cg - logits_ref).abs().max().item() }")
+    print(f"Logits max diff: {(logits - logits_ref).abs().max().item()}")
+    print(f"Logits CG max diff: {(logits_cg - logits_ref).abs().max().item()}")
 
     assert (logits_parallel - logits_ref).abs().max().item() < 2 * hf_error
     assert (logits - logits_ref).abs().max().item() < 2 * hf_error
@@ -209,7 +224,9 @@ def test_btlm_init(model_name):
     btlm_config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
     config = btlm_config_to_gpt2_config(btlm_config)
     model = GPTLMHeadModel(config, device=device, dtype=dtype)
-    model_ref = AutoModelForCausalLM.from_config(btlm_config, trust_remote_code=True).to(device)
+    model_ref = AutoModelForCausalLM.from_config(
+        btlm_config, trust_remote_code=True
+    ).to(device)
 
     assert model.transformer.embeddings.word_embeddings.weight.mean().abs() < 1e-4
     assert (

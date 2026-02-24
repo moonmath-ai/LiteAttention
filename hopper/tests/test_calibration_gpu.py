@@ -3,7 +3,6 @@
 import pytest
 import torch
 import torch.nn as nn
-
 from lite_attention import LiteAttention
 from lite_attention.calibrated_module import (
     CalibratedConfigDict,
@@ -39,9 +38,15 @@ HEAD_DIM = 128
 def qkv():
     torch.manual_seed(42)
     torch.cuda.manual_seed(42)
-    q = torch.randn(BATCH, SEQ_LEN, HEADS, HEAD_DIM, device="cuda", dtype=torch.bfloat16)
-    k = torch.randn(BATCH, SEQ_LEN, HEADS, HEAD_DIM, device="cuda", dtype=torch.bfloat16)
-    v = torch.randn(BATCH, SEQ_LEN, HEADS, HEAD_DIM, device="cuda", dtype=torch.bfloat16)
+    q = torch.randn(
+        BATCH, SEQ_LEN, HEADS, HEAD_DIM, device="cuda", dtype=torch.bfloat16
+    )
+    k = torch.randn(
+        BATCH, SEQ_LEN, HEADS, HEAD_DIM, device="cuda", dtype=torch.bfloat16
+    )
+    v = torch.randn(
+        BATCH, SEQ_LEN, HEADS, HEAD_DIM, device="cuda", dtype=torch.bfloat16
+    )
     return q, k, v
 
 
@@ -166,7 +171,9 @@ def test_reset_skip_state_resets_config_index(qkv):
 
 
 def test_registry_from_model_const(simple_model):
-    registry = LiteAttentionRegistry.from_model(simple_model, mode="const", threshold=-6.0)
+    registry = LiteAttentionRegistry.from_model(
+        simple_model, mode="const", threshold=-6.0
+    )
     for mod in registry.named_modules.values():
         assert mod._registry_config.threshold == -6.0
 
@@ -175,7 +182,9 @@ def test_registry_from_model_const_default_warns(simple_model):
     with pytest.warns(UserWarning, match="no 'threshold'"):
         registry = LiteAttentionRegistry.from_model(simple_model, mode="const")
     for mod in registry.named_modules.values():
-        assert mod._registry_config.threshold == LiteAttentionRunConfig.default().threshold
+        assert (
+            mod._registry_config.threshold == LiteAttentionRunConfig.default().threshold
+        )
 
 
 @pytest.mark.filterwarnings("ignore:no 'threshold'")
@@ -200,7 +209,9 @@ def test_registry_from_model_calib_missing_filename_raises(simple_model):
 
 
 def test_registry_from_model_load(simple_model, tmp_toml):
-    registry = LiteAttentionRegistry.from_model(simple_model, mode="const", threshold=-4.0)
+    registry = LiteAttentionRegistry.from_model(
+        simple_model, mode="const", threshold=-4.0
+    )
     names = list(registry.named_modules.keys())
     ccd = CalibratedConfigDict(
         {name: LiteAttentionRunConfig(threshold=-4.0) for name in names}
@@ -215,7 +226,9 @@ def test_registry_from_model_load(simple_model, tmp_toml):
 
 def test_registry_force_clears_instance_configs():
     model = SimpleModel(threshold=-5.0)
-    registry = LiteAttentionRegistry.from_model(model, mode="const", threshold=-3.0, force=True)
+    registry = LiteAttentionRegistry.from_model(
+        model, mode="const", threshold=-3.0, force=True
+    )
     for mod in registry.named_modules.values():
         assert mod._instance_config is None
         assert mod._registry_config.threshold == -3.0

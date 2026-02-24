@@ -82,7 +82,7 @@ def create_mlp_cls(config, layer_idx=None, return_residual=False):
     fused_mlp = getattr(config, "fused_mlp", False)
     if fused_mlp:
         assert config.hidden_act in ["gelu_new", "gelu_fast", "gelu_pytorch_tanh"], (
-            "fused_mlp only " "supports approximate gelu"
+            "fused_mlp only supports approximate gelu"
         )
     if not fused_mlp:
         approximate = (

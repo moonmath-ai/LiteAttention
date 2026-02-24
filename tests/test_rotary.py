@@ -4,13 +4,16 @@ import random
 import pytest
 import torch
 import torch.nn.functional as F
+import triton
 from einops import rearrange
 
-import triton
-
-from flash_attn.layers.rotary import apply_rotary_emb, apply_rotary_emb_torch
-from flash_attn.layers.rotary import apply_rotary_emb_qkv_, apply_rotary_emb_kv_
 from flash_attn.bert_padding import pad_input, unpad_input
+from flash_attn.layers.rotary import (
+    apply_rotary_emb,
+    apply_rotary_emb_kv_,
+    apply_rotary_emb_qkv_,
+    apply_rotary_emb_torch,
+)
 
 is_sm8x = torch.cuda.get_device_capability("cuda") >= (8, 0)
 
@@ -29,7 +32,9 @@ def generate_seqlen_offsets(seqlen_offsets_type, batch_size, seqlen, device):
     elif seqlen_offsets_type is int:
         return torch.randint(0, seqlen + 1, (1,)).item()
     elif seqlen_offsets_type is torch.Tensor:
-        return torch.randint(0, seqlen + 1, (batch_size,), dtype=torch.int32, device=device)
+        return torch.randint(
+            0, seqlen + 1, (batch_size,), dtype=torch.int32, device=device
+        )
 
 
 def index_cos_sin(cos, sin, seqlen_offsets, seqlen):
@@ -57,7 +62,9 @@ def index_cos_sin(cos, sin, seqlen_offsets, seqlen):
 # @pytest.mark.parametrize('interleaved', [True])
 @pytest.mark.parametrize("inplace", [False, True])
 # @pytest.mark.parametrize('inplace', [False])
-def test_rotary_emb_func(inplace, interleaved, rotary_fraction, seqlen_offsets_type, dtype):
+def test_rotary_emb_func(
+    inplace, interleaved, rotary_fraction, seqlen_offsets_type, dtype
+):
     rtol = 1e-3
     batch_size = 32
     nheads = 4
@@ -67,13 +74,26 @@ def test_rotary_emb_func(inplace, interleaved, rotary_fraction, seqlen_offsets_t
     rotary_dim = int(rotary_fraction * headdim)
     torch.manual_seed(42)
     x = torch.randn(
-        batch_size, seqlen, nheads, headdim, dtype=dtype, device=device, requires_grad=True
+        batch_size,
+        seqlen,
+        nheads,
+        headdim,
+        dtype=dtype,
+        device=device,
+        requires_grad=True,
     )
     x_pt = x.detach().clone().requires_grad_()
     cos, sin = generate_cos_sin(seqlen, rotary_dim, device, dtype)
-    seqlen_offsets = generate_seqlen_offsets(seqlen_offsets_type, batch_size, seqlen, device)
+    seqlen_offsets = generate_seqlen_offsets(
+        seqlen_offsets_type, batch_size, seqlen, device
+    )
     out = apply_rotary_emb(
-        x, cos, sin, seqlen_offsets=seqlen_offsets, interleaved=interleaved, inplace=inplace
+        x,
+        cos,
+        sin,
+        seqlen_offsets=seqlen_offsets,
+        interleaved=interleaved,
+        inplace=inplace,
     )
     cos_pt, sin_pt = index_cos_sin(cos, sin, seqlen_offsets, seqlen)
     out_pt = apply_rotary_emb_torch(
@@ -110,9 +130,11 @@ def test_rotary_emb_func(inplace, interleaved, rotary_fraction, seqlen_offsets_t
 # @pytest.mark.parametrize('rotary_fraction', [1.0])
 @pytest.mark.parametrize("interleaved", [False, True])
 # @pytest.mark.parametrize('interleaved', [False])
-def test_rotary_emb_qkv(interleaved, rotary_fraction, seqlen_offsets_type, gqa, compiled, dtype):
+def test_rotary_emb_qkv(
+    interleaved, rotary_fraction, seqlen_offsets_type, gqa, compiled, dtype
+):
     if compiled:  # Don't fall back to eager just bc of recompilation
-        torch._dynamo.config.recompile_limit = 2 ** 31
+        torch._dynamo.config.recompile_limit = 2**31
     rtol = 1e-3
     batch_size = 32
     nheads = 4
@@ -123,20 +145,39 @@ def test_rotary_emb_qkv(interleaved, rotary_fraction, seqlen_offsets_type, gqa, 
     torch.manual_seed(42)
     if not gqa:
         qkv = torch.randn(
-            batch_size, seqlen, 3, nheads, headdim, dtype=dtype, device=device, requires_grad=True
+            batch_size,
+            seqlen,
+            3,
+            nheads,
+            headdim,
+            dtype=dtype,
+            device=device,
+            requires_grad=True,
         )
     else:
         nheads_k = nheads // 2
         qkv = torch.randn(
-            batch_size, seqlen, nheads + nheads_k * 2, headdim, dtype=dtype, device=device, requires_grad=True
+            batch_size,
+            seqlen,
+            nheads + nheads_k * 2,
+            headdim,
+            dtype=dtype,
+            device=device,
+            requires_grad=True,
         )
     qkv_pt = qkv.detach().clone().requires_grad_()
     cos, sin = generate_cos_sin(seqlen, rotary_dim, device, dtype)
-    seqlen_offsets = generate_seqlen_offsets(seqlen_offsets_type, batch_size, seqlen, device)
+    seqlen_offsets = generate_seqlen_offsets(
+        seqlen_offsets_type, batch_size, seqlen, device
+    )
     fn = apply_rotary_emb_qkv_ if not compiled else torch.compile(apply_rotary_emb_qkv_)
     out = fn(
-        qkv, cos, sin, seqlen_offsets=seqlen_offsets, interleaved=interleaved,
-        num_heads_q=None if not gqa else nheads
+        qkv,
+        cos,
+        sin,
+        seqlen_offsets=seqlen_offsets,
+        interleaved=interleaved,
+        num_heads_q=None if not gqa else nheads,
     )
     cos_pt, sin_pt = index_cos_sin(cos, sin, seqlen_offsets, seqlen)
     if not gqa:
@@ -188,12 +229,23 @@ def test_rotary_emb_kv(interleaved, rotary_fraction, seqlen_offsets_type, dtype)
     rotary_dim = int(rotary_fraction * headdim)
     torch.manual_seed(42)
     kv = torch.randn(
-        batch_size, seqlen, 2, nheads, headdim, dtype=dtype, device=device, requires_grad=True
+        batch_size,
+        seqlen,
+        2,
+        nheads,
+        headdim,
+        dtype=dtype,
+        device=device,
+        requires_grad=True,
     )
     kv_pt = kv.detach().clone().requires_grad_()
     cos, sin = generate_cos_sin(seqlen, rotary_dim, device, dtype)
-    seqlen_offsets = generate_seqlen_offsets(seqlen_offsets_type, batch_size, seqlen, device)
-    out = apply_rotary_emb_kv_(kv, cos, sin, seqlen_offsets=seqlen_offsets, interleaved=interleaved)
+    seqlen_offsets = generate_seqlen_offsets(
+        seqlen_offsets_type, batch_size, seqlen, device
+    )
+    out = apply_rotary_emb_kv_(
+        kv, cos, sin, seqlen_offsets=seqlen_offsets, interleaved=interleaved
+    )
     cos_pt, sin_pt = index_cos_sin(cos, sin, seqlen_offsets, seqlen)
     k_pt = apply_rotary_emb_torch(
         kv_pt[:, :, 0].float(), cos_pt.float(), sin_pt.float(), interleaved=interleaved
@@ -226,7 +278,9 @@ def test_rotary_emb_kv(interleaved, rotary_fraction, seqlen_offsets_type, dtype)
 # @pytest.mark.parametrize("interleaved", [True])
 @pytest.mark.parametrize("inplace", [False, True])
 # @pytest.mark.parametrize("inplace", [False])
-def test_rotary_emb_varlen_func(inplace, interleaved, rotary_fraction, seqlen_offsets_type, dtype):
+def test_rotary_emb_varlen_func(
+    inplace, interleaved, rotary_fraction, seqlen_offsets_type, dtype
+):
     rtol = 1e-3
     batch_size = 32
     nheads = 4
@@ -237,13 +291,17 @@ def test_rotary_emb_varlen_func(inplace, interleaved, rotary_fraction, seqlen_of
     torch.manual_seed(42)
     x = torch.randn(batch_size, seqlen, nheads, headdim, dtype=dtype, device=device)
     x_pt = x.detach().clone().requires_grad_()
-    lengths = torch.randint(max(1, seqlen - 20), seqlen + 1, (batch_size, 1), device=device)
+    lengths = torch.randint(
+        max(1, seqlen - 20), seqlen + 1, (batch_size, 1), device=device
+    )
     padding_mask = rearrange(torch.arange(seqlen, device=device), "s -> 1 s") < lengths
     x_unpad, indices, cu_seqlens, max_seqlen, _ = unpad_input(x, padding_mask)
     x_unpad_clone = x_unpad.clone()
     x_unpad = x_unpad.requires_grad_()
     cos, sin = generate_cos_sin(seqlen, rotary_dim, device, dtype)
-    seqlen_offsets = generate_seqlen_offsets(seqlen_offsets_type, batch_size, seqlen, device)
+    seqlen_offsets = generate_seqlen_offsets(
+        seqlen_offsets_type, batch_size, seqlen, device
+    )
     out_unpad = apply_rotary_emb(
         x_unpad,
         cos,
@@ -286,7 +344,9 @@ def test_compilation_count():
     torch.manual_seed(42)
 
     from triton.runtime.jit import JITFunction
+
     from flash_attn.ops.triton.rotary import rotary_kernel
+
     compilation_count = 0
 
     def count_compilations(*args, **kwargs):
@@ -307,7 +367,9 @@ def test_compilation_count():
 
         for seqlen in (128, 256):
             for batch_size in (4, 32):
-                x = torch.randn(batch_size, seqlen, nheads, headdim, dtype=dtype, device=device)
+                x = torch.randn(
+                    batch_size, seqlen, nheads, headdim, dtype=dtype, device=device
+                )
                 x.requires_grad_()
                 cos, sin = generate_cos_sin(seqlen, headdim, device, dtype)
                 out = apply_rotary_emb(x, cos, sin)

@@ -6,7 +6,9 @@ import torch
 import torch.nn.functional as F
 from einops import rearrange
 from transformers import BertConfig
-from transformers.models.bert.modeling_bert import BertForPreTraining as BertForPreTrainingHF
+from transformers.models.bert.modeling_bert import (
+    BertForPreTraining as BertForPreTrainingHF,
+)
 from transformers.models.bert.modeling_bert import BertModel as BertModelHF
 
 from flash_attn.models.bert import (
@@ -22,7 +24,9 @@ from flash_attn.utils.pretrained import state_dict_from_pretrained
 # @pytest.mark.parametrize('model_name', ["bert-base-uncased"])
 def test_bert_state_dict(model_name):
     config = BertConfig.from_pretrained(model_name)
-    pretrained_state_dict = remap_state_dict(state_dict_from_pretrained(model_name), config)
+    pretrained_state_dict = remap_state_dict(
+        state_dict_from_pretrained(model_name), config
+    )
     model = BertForPreTraining(config)
     state_dict = model.state_dict()
     assert state_dict.keys() == pretrained_state_dict.keys()
@@ -71,7 +75,9 @@ def test_bert_non_optimized(model_name):
     torch.manual_seed(0)
     batch_size = 4
     max_seqlen = 512
-    seqlens = torch.randint(max_seqlen // 2, max_seqlen + 1, (batch_size,), device="cuda")
+    seqlens = torch.randint(
+        max_seqlen // 2, max_seqlen + 1, (batch_size,), device="cuda"
+    )
     attention_mask = torch.arange(max_seqlen, device="cuda")[None, :] < seqlens[:, None]
     input_ids = torch.randint(
         0, config.vocab_size, (batch_size, max_seqlen), dtype=torch.long, device="cuda"
@@ -79,14 +85,28 @@ def test_bert_non_optimized(model_name):
     out = model.bert(input_ids, attention_mask=attention_mask)
     sequence_output, pooled_output = out.last_hidden_state, out.pooler_output
     out_hf = model_hf.bert(input_ids, attention_mask=attention_mask)
-    sequence_output_hf, pooled_output_hf = out_hf.last_hidden_state, out_hf.pooler_output
+    sequence_output_hf, pooled_output_hf = (
+        out_hf.last_hidden_state,
+        out_hf.pooler_output,
+    )
     out_ref = model_ref.bert(input_ids, attention_mask=attention_mask)
-    sequence_output_ref, pooled_output_ref = out_ref.last_hidden_state, out_ref.pooler_output
+    sequence_output_ref, pooled_output_ref = (
+        out_ref.last_hidden_state,
+        out_ref.pooler_output,
+    )
 
-    print(f"Output max diff: {(sequence_output - sequence_output_ref).abs().max().item()}")
-    print(f"Output mean diff: {(sequence_output - sequence_output_ref).abs().mean().item()}")
-    print(f"HF fp16 max diff: {(sequence_output_hf - sequence_output_ref).abs().max().item()}")
-    print(f"HF fp16 mean diff: {(sequence_output_hf - sequence_output_ref).abs().mean().item()}")
+    print(
+        f"Output max diff: {(sequence_output - sequence_output_ref).abs().max().item()}"
+    )
+    print(
+        f"Output mean diff: {(sequence_output - sequence_output_ref).abs().mean().item()}"
+    )
+    print(
+        f"HF fp16 max diff: {(sequence_output_hf - sequence_output_ref).abs().max().item()}"
+    )
+    print(
+        f"HF fp16 mean diff: {(sequence_output_hf - sequence_output_ref).abs().mean().item()}"
+    )
     assert (sequence_output - sequence_output_ref).abs().max().item() < 3 * (
         sequence_output_hf - sequence_output_ref
     ).abs().max().item()
@@ -126,7 +146,9 @@ def test_bert_optimized(model_name):
     torch.manual_seed(0)
     batch_size = 4
     max_seqlen = 512
-    seqlens = torch.randint(max_seqlen // 2, max_seqlen + 1, (batch_size,), device="cuda")
+    seqlens = torch.randint(
+        max_seqlen // 2, max_seqlen + 1, (batch_size,), device="cuda"
+    )
     attention_mask = torch.arange(max_seqlen, device="cuda")[None, :] < seqlens[:, None]
     input_ids = torch.randint(
         0, config.vocab_size, (batch_size, max_seqlen), dtype=torch.long, device="cuda"
@@ -134,11 +156,17 @@ def test_bert_optimized(model_name):
     out = model.bert(input_ids, attention_mask=attention_mask)
     sequence_output, pooled_output = out.last_hidden_state, out.pooler_output
     out_hf = model_hf.bert(input_ids, attention_mask=attention_mask)
-    sequence_output_hf, pooled_output_hf = out_hf.last_hidden_state, out_hf.pooler_output
+    sequence_output_hf, pooled_output_hf = (
+        out_hf.last_hidden_state,
+        out_hf.pooler_output,
+    )
     # Need to zero out the padded tokens in the sequence before comparison.
     sequence_output_hf[~attention_mask, :] = 0.0
     out_ref = model_ref.bert(input_ids, attention_mask=attention_mask)
-    sequence_output_ref, pooled_output_ref = out_ref.last_hidden_state, out_ref.pooler_output
+    sequence_output_ref, pooled_output_ref = (
+        out_ref.last_hidden_state,
+        out_ref.pooler_output,
+    )
     sequence_output_ref[~attention_mask, :] = 0.0
 
     print(
@@ -161,7 +189,10 @@ def test_bert_optimized(model_name):
     ).abs().max().item()
 
     out = model(input_ids, attention_mask=attention_mask)
-    prediction_scores, seq_relationship_scores = out.prediction_logits, out.seq_relationship_logits
+    prediction_scores, seq_relationship_scores = (
+        out.prediction_logits,
+        out.seq_relationship_logits,
+    )
     # Need to zero out the padded tokens in the sequence before comparison.
     prediction_scores = prediction_scores.clone()
     prediction_scores[~attention_mask, :] = 0.0
@@ -193,7 +224,9 @@ def test_bert_optimized(model_name):
     assert (prediction_scores - prediction_scores_ref).abs().max().item() < 2 * (
         prediction_scores_hf - prediction_scores_ref
     ).abs().max().item()
-    assert (seq_relationship_scores - seq_relationship_scores_ref).abs().max().item() < 2 * (
+    assert (
+        seq_relationship_scores - seq_relationship_scores_ref
+    ).abs().max().item() < 2 * (
         seq_relationship_scores_hf - seq_relationship_scores_ref
     ).abs().max().item()
 
@@ -236,9 +269,13 @@ def test_bert_dense_seq_output(model_name, has_key_padding_mask, last_layer_subs
     torch.manual_seed(0)
     batch_size = 4
     max_seqlen = 512
-    seqlens = torch.randint(max_seqlen // 2, max_seqlen + 1, (batch_size,), device="cuda")
+    seqlens = torch.randint(
+        max_seqlen // 2, max_seqlen + 1, (batch_size,), device="cuda"
+    )
     if has_key_padding_mask:
-        attention_mask = torch.arange(max_seqlen, device="cuda")[None, :] < seqlens[:, None]
+        attention_mask = (
+            torch.arange(max_seqlen, device="cuda")[None, :] < seqlens[:, None]
+        )
     else:
         attention_mask = None
     input_ids = torch.randint(
@@ -259,7 +296,10 @@ def test_bert_dense_seq_output(model_name, has_key_padding_mask, last_layer_subs
         labels=labels,
         next_sentence_label=next_sequence_label,
     )
-    prediction_scores, seq_relationship_scores = out.prediction_logits, out.seq_relationship_logits
+    prediction_scores, seq_relationship_scores = (
+        out.prediction_logits,
+        out.seq_relationship_logits,
+    )
     out_hf = model_hf(
         input_ids,
         attention_mask=attention_mask,
@@ -270,7 +310,9 @@ def test_bert_dense_seq_output(model_name, has_key_padding_mask, last_layer_subs
         out_hf.prediction_logits,
         out_hf.seq_relationship_logits,
     )
-    prediction_scores_hf = rearrange(prediction_scores_hf, "b s d -> (b s) d")[masked_tokens_mask]
+    prediction_scores_hf = rearrange(prediction_scores_hf, "b s d -> (b s) d")[
+        masked_tokens_mask
+    ]
     out_ref = model_ref(
         input_ids,
         attention_mask=attention_mask,
@@ -281,7 +323,9 @@ def test_bert_dense_seq_output(model_name, has_key_padding_mask, last_layer_subs
         out_ref.prediction_logits,
         out_ref.seq_relationship_logits,
     )
-    prediction_scores_ref = rearrange(prediction_scores_ref, "b s d -> (b s) d")[masked_tokens_mask]
+    prediction_scores_ref = rearrange(prediction_scores_ref, "b s d -> (b s) d")[
+        masked_tokens_mask
+    ]
 
     print(
         f"prediction_scores max diff: {(prediction_scores - prediction_scores_ref).abs().max().item()}"
@@ -298,7 +342,9 @@ def test_bert_dense_seq_output(model_name, has_key_padding_mask, last_layer_subs
     assert (prediction_scores - prediction_scores_ref).abs().max().item() < 2 * (
         prediction_scores_hf - prediction_scores_ref
     ).abs().max().item()
-    assert (seq_relationship_scores - seq_relationship_scores_ref).abs().max().item() < 2 * (
+    assert (
+        seq_relationship_scores - seq_relationship_scores_ref
+    ).abs().max().item() < 2 * (
         seq_relationship_scores_hf - seq_relationship_scores_ref
     ).abs().max().item()
     # The loss calculation from HF is wrong: it doesn't ignore the labels that are 0.
@@ -321,4 +367,6 @@ def test_inv_remap_state_dict(model_name: str):
 
     for k in state_dict.keys():
         assert state_dict[k].shape == recovered_state_dict[k].shape
-        torch.testing.assert_close(state_dict[k], recovered_state_dict[k], rtol=1e-6, atol=1e-6)
+        torch.testing.assert_close(
+            state_dict[k], recovered_state_dict[k], rtol=1e-6, atol=1e-6
+        )

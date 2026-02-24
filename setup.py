@@ -1,29 +1,31 @@
 # Copyright (c) 2024, Jay Shah, Ganesh Bikshandi, Ying Zhang, Vijay Thakkar, Pradeep Ramani, Tri Dao.
 
-import sys
-import warnings
+import ast
+import itertools
 import os
-import stat
+import platform
 import re
 import shutil
-import ast
-from pathlib import Path
-from packaging.version import parse, Version
-import platform
+import stat
+import subprocess
+import sys
 import sysconfig
 import tarfile
-import itertools
-
-from setuptools import setup, find_packages
-import subprocess
-
-import urllib.request
 import urllib.error
-from wheel.bdist_wheel import bdist_wheel as _bdist_wheel
+import urllib.request
+import warnings
+from pathlib import Path
 
 import torch
-from torch.utils.cpp_extension import BuildExtension, CppExtension, CUDAExtension, CUDA_HOME
-
+from packaging.version import Version, parse
+from setuptools import find_packages, setup
+from torch.utils.cpp_extension import (
+    CUDA_HOME,
+    BuildExtension,
+    CppExtension,
+    CUDAExtension,
+)
+from wheel.bdist_wheel import bdist_wheel as _bdist_wheel
 
 # Source directory for the lite_attention package
 SRC_DIR = "hopper"
@@ -70,30 +72,32 @@ DISABLE_HDIMDIFF192 = os.getenv("LITE_ATTENTION_DISABLE_HDIMDIFF192", "TRUE") ==
 # "-gencode arch=compute_sm90a,code=sm_90a" to files ending in '_sm90.cu',
 # and pass "-gencode arch=compute_sm80,code=sm_80" to files ending in '_sm80.cu'
 from torch.utils.cpp_extension import (
-    IS_HIP_EXTENSION,
     COMMON_HIP_FLAGS,
-    SUBPROCESS_DECODE_ARGS,
+    IS_HIP_EXTENSION,
     IS_WINDOWS,
-    get_cxx_compiler,
-    _join_rocm_home,
-    _join_cuda_home,
+    SUBPROCESS_DECODE_ARGS,
     _is_cuda_file,
+    _join_cuda_home,
+    _join_rocm_home,
     _maybe_write,
+    get_cxx_compiler,
 )
 
-def _write_ninja_file(path,
-                      cflags,
-                      post_cflags,
-                      cuda_cflags,
-                      cuda_post_cflags,
-                      cuda_dlink_post_cflags,
-                      sources,
-                      objects,
-                      ldflags,
-                      library_target,
-                      with_cuda,
-                      **kwargs,  # kwargs (ignored) to absorb new flags in torch.utils.cpp_extension
-                      ) -> None:
+
+def _write_ninja_file(
+    path,
+    cflags,
+    post_cflags,
+    cuda_cflags,
+    cuda_post_cflags,
+    cuda_dlink_post_cflags,
+    sources,
+    objects,
+    ldflags,
+    library_target,
+    with_cuda,
+    **kwargs,  # kwargs (ignored) to absorb new flags in torch.utils.cpp_extension
+) -> None:
     r"""Write a ninja file that does the desired compiling and linking.
 
     `path`: Where to write this file
@@ -108,6 +112,7 @@ def _write_ninja_file(path,
                       we do no linking.
     `with_cuda`: If we should be compiling with CUDA.
     """
+
     def sanitize_flags(flags):
         if flags is None:
             return []
@@ -128,123 +133,163 @@ def _write_ninja_file(path,
     compiler = get_cxx_compiler()
 
     # Version 1.3 is required for the `deps` directive.
-    config = ['ninja_required_version = 1.3']
-    config.append(f'cxx = {compiler}')
+    config = ["ninja_required_version = 1.3"]
+    config.append(f"cxx = {compiler}")
     if with_cuda or cuda_dlink_post_cflags:
         if IS_HIP_EXTENSION:
-            nvcc = _join_rocm_home('bin', 'hipcc')
+            nvcc = _join_rocm_home("bin", "hipcc")
         else:
-            nvcc = _join_cuda_home('bin', 'nvcc')
+            nvcc = _join_cuda_home("bin", "nvcc")
         if "PYTORCH_NVCC" in os.environ:
-            nvcc_from_env = os.getenv("PYTORCH_NVCC")    # user can set nvcc compiler with ccache using the environment variable here
+            nvcc_from_env = os.getenv(
+                "PYTORCH_NVCC"
+            )  # user can set nvcc compiler with ccache using the environment variable here
         else:
             nvcc_from_env = nvcc
-        config.append(f'nvcc_from_env = {nvcc_from_env}')
-        config.append(f'nvcc = {nvcc}')
+        config.append(f"nvcc_from_env = {nvcc_from_env}")
+        config.append(f"nvcc = {nvcc}")
 
     if IS_HIP_EXTENSION:
         post_cflags = COMMON_HIP_FLAGS + post_cflags
-    flags = [f'cflags = {" ".join(cflags)}']
-    flags.append(f'post_cflags = {" ".join(post_cflags)}')
+    flags = [f"cflags = {' '.join(cflags)}"]
+    flags.append(f"post_cflags = {' '.join(post_cflags)}")
     if with_cuda:
-        flags.append(f'cuda_cflags = {" ".join(cuda_cflags)}')
-        flags.append(f'cuda_post_cflags = {" ".join(cuda_post_cflags)}')
-        cuda_post_cflags_sm80 = [s if s != 'arch=compute_90a,code=sm_90a' else 'arch=compute_80,code=sm_80' for s in cuda_post_cflags]
-        flags.append(f'cuda_post_cflags_sm80 = {" ".join(cuda_post_cflags_sm80)}')
-        cuda_post_cflags_sm80_sm90 = cuda_post_cflags + ['-gencode', 'arch=compute_80,code=sm_80']
-        flags.append(f'cuda_post_cflags_sm80_sm90 = {" ".join(cuda_post_cflags_sm80_sm90)}')
-        cuda_post_cflags_sm100 = [s if s != 'arch=compute_90a,code=sm_90a' else 'arch=compute_100a,code=sm_100a' for s in cuda_post_cflags]
-        flags.append(f'cuda_post_cflags_sm100 = {" ".join(cuda_post_cflags_sm100)}')
-    flags.append(f'cuda_dlink_post_cflags = {" ".join(cuda_dlink_post_cflags)}')
-    flags.append(f'ldflags = {" ".join(ldflags)}')
+        flags.append(f"cuda_cflags = {' '.join(cuda_cflags)}")
+        flags.append(f"cuda_post_cflags = {' '.join(cuda_post_cflags)}")
+        cuda_post_cflags_sm80 = [
+            s if s != "arch=compute_90a,code=sm_90a" else "arch=compute_80,code=sm_80"
+            for s in cuda_post_cflags
+        ]
+        flags.append(f"cuda_post_cflags_sm80 = {' '.join(cuda_post_cflags_sm80)}")
+        cuda_post_cflags_sm80_sm90 = cuda_post_cflags + [
+            "-gencode",
+            "arch=compute_80,code=sm_80",
+        ]
+        flags.append(
+            f"cuda_post_cflags_sm80_sm90 = {' '.join(cuda_post_cflags_sm80_sm90)}"
+        )
+        cuda_post_cflags_sm100 = [
+            s
+            if s != "arch=compute_90a,code=sm_90a"
+            else "arch=compute_100a,code=sm_100a"
+            for s in cuda_post_cflags
+        ]
+        flags.append(f"cuda_post_cflags_sm100 = {' '.join(cuda_post_cflags_sm100)}")
+    flags.append(f"cuda_dlink_post_cflags = {' '.join(cuda_dlink_post_cflags)}")
+    flags.append(f"ldflags = {' '.join(ldflags)}")
 
     # Turn into absolute paths so we can emit them into the ninja build
     # file wherever it is.
     sources = [os.path.abspath(file) for file in sources]
 
     # See https://ninja-build.org/build.ninja.html for reference.
-    compile_rule = ['rule compile']
+    compile_rule = ["rule compile"]
     if IS_WINDOWS:
         compile_rule.append(
-            '  command = cl /showIncludes $cflags -c $in /Fo$out $post_cflags')
-        compile_rule.append('  deps = msvc')
+            "  command = cl /showIncludes $cflags -c $in /Fo$out $post_cflags"
+        )
+        compile_rule.append("  deps = msvc")
     else:
         compile_rule.append(
-            '  command = $cxx -MMD -MF $out.d $cflags -c $in -o $out $post_cflags')
-        compile_rule.append('  depfile = $out.d')
-        compile_rule.append('  deps = gcc')
+            "  command = $cxx -MMD -MF $out.d $cflags -c $in -o $out $post_cflags"
+        )
+        compile_rule.append("  depfile = $out.d")
+        compile_rule.append("  deps = gcc")
 
     if with_cuda:
-        cuda_compile_rule = ['rule cuda_compile']
-        nvcc_gendeps = ''
+        cuda_compile_rule = ["rule cuda_compile"]
+        nvcc_gendeps = ""
         # --generate-dependencies-with-compile is not supported by ROCm
         # Nvcc flag `--generate-dependencies-with-compile` is not supported by sccache, which may increase build time.
-        if torch.version.cuda is not None and os.getenv('TORCH_EXTENSION_SKIP_NVCC_GEN_DEPENDENCIES', '0') != '1':
-            cuda_compile_rule.append('  depfile = $out.d')
-            cuda_compile_rule.append('  deps = gcc')
+        if (
+            torch.version.cuda is not None
+            and os.getenv("TORCH_EXTENSION_SKIP_NVCC_GEN_DEPENDENCIES", "0") != "1"
+        ):
+            cuda_compile_rule.append("  depfile = $out.d")
+            cuda_compile_rule.append("  deps = gcc")
             # Note: non-system deps with nvcc are only supported
             # on Linux so use --generate-dependencies-with-compile
             # to make this work on Windows too.
-            nvcc_gendeps = '--generate-dependencies-with-compile --dependency-output $out.d'
-        cuda_compile_rule_sm80 = ['rule cuda_compile_sm80'] + cuda_compile_rule[1:] + [
-            f'  command = $nvcc_from_env {nvcc_gendeps} $cuda_cflags -c $in -o $out $cuda_post_cflags_sm80'
-        ]
-        cuda_compile_rule_sm80_sm90 = ['rule cuda_compile_sm80_sm90'] + cuda_compile_rule[1:] + [
-            f'  command = $nvcc_from_env {nvcc_gendeps} $cuda_cflags -c $in -o $out $cuda_post_cflags_sm80_sm90'
-        ]
-        cuda_compile_rule_sm100 = ['rule cuda_compile_sm100'] + cuda_compile_rule[1:] + [
-            f'  command = $nvcc_from_env {nvcc_gendeps} $cuda_cflags -c $in -o $out $cuda_post_cflags_sm100'
-        ]
+            nvcc_gendeps = (
+                "--generate-dependencies-with-compile --dependency-output $out.d"
+            )
+        cuda_compile_rule_sm80 = (
+            ["rule cuda_compile_sm80"]
+            + cuda_compile_rule[1:]
+            + [
+                f"  command = $nvcc_from_env {nvcc_gendeps} $cuda_cflags -c $in -o $out $cuda_post_cflags_sm80"
+            ]
+        )
+        cuda_compile_rule_sm80_sm90 = (
+            ["rule cuda_compile_sm80_sm90"]
+            + cuda_compile_rule[1:]
+            + [
+                f"  command = $nvcc_from_env {nvcc_gendeps} $cuda_cflags -c $in -o $out $cuda_post_cflags_sm80_sm90"
+            ]
+        )
+        cuda_compile_rule_sm100 = (
+            ["rule cuda_compile_sm100"]
+            + cuda_compile_rule[1:]
+            + [
+                f"  command = $nvcc_from_env {nvcc_gendeps} $cuda_cflags -c $in -o $out $cuda_post_cflags_sm100"
+            ]
+        )
         cuda_compile_rule.append(
-            f'  command = $nvcc_from_env {nvcc_gendeps} $cuda_cflags -c $in -o $out $cuda_post_cflags')
+            f"  command = $nvcc_from_env {nvcc_gendeps} $cuda_cflags -c $in -o $out $cuda_post_cflags"
+        )
 
     # Emit one build rule per source to enable incremental build.
     build = []
     for source_file, object_file in zip(sources, objects):
         is_cuda_source = _is_cuda_file(source_file) and with_cuda
         if is_cuda_source:
-            if source_file.endswith('_sm90.cu'):
-                rule = 'cuda_compile'
-            elif source_file.endswith('_sm80.cu'):
-                rule = 'cuda_compile_sm80'
-            elif source_file.endswith('_sm100.cu'):
-                rule = 'cuda_compile_sm100'
+            if source_file.endswith("_sm90.cu"):
+                rule = "cuda_compile"
+            elif source_file.endswith("_sm80.cu"):
+                rule = "cuda_compile_sm80"
+            elif source_file.endswith("_sm100.cu"):
+                rule = "cuda_compile_sm100"
             else:
-                rule = 'cuda_compile_sm80_sm90'
+                rule = "cuda_compile_sm80_sm90"
         else:
-            rule = 'compile'
+            rule = "compile"
         if IS_WINDOWS:
-            source_file = source_file.replace(':', '$:')
-            object_file = object_file.replace(':', '$:')
+            source_file = source_file.replace(":", "$:")
+            object_file = object_file.replace(":", "$:")
         source_file = source_file.replace(" ", "$ ")
         object_file = object_file.replace(" ", "$ ")
-        build.append(f'build {object_file}: {rule} {source_file}')
+        build.append(f"build {object_file}: {rule} {source_file}")
 
     if cuda_dlink_post_cflags:
-        devlink_out = os.path.join(os.path.dirname(objects[0]), 'dlink.o')
-        devlink_rule = ['rule cuda_devlink']
-        devlink_rule.append('  command = $nvcc $in -o $out $cuda_dlink_post_cflags')
-        devlink = [f'build {devlink_out}: cuda_devlink {" ".join(objects)}']
+        devlink_out = os.path.join(os.path.dirname(objects[0]), "dlink.o")
+        devlink_rule = ["rule cuda_devlink"]
+        devlink_rule.append("  command = $nvcc $in -o $out $cuda_dlink_post_cflags")
+        devlink = [f"build {devlink_out}: cuda_devlink {' '.join(objects)}"]
         objects += [devlink_out]
     else:
         devlink_rule, devlink = [], []
 
     if library_target is not None:
-        link_rule = ['rule link']
+        link_rule = ["rule link"]
         if IS_WINDOWS:
-            cl_paths = subprocess.check_output(['where',
-                                                'cl']).decode(*SUBPROCESS_DECODE_ARGS).split('\r\n')
+            cl_paths = (
+                subprocess.check_output(["where", "cl"])
+                .decode(*SUBPROCESS_DECODE_ARGS)
+                .split("\r\n")
+            )
             if len(cl_paths) >= 1:
-                cl_path = os.path.dirname(cl_paths[0]).replace(':', '$:')
+                cl_path = os.path.dirname(cl_paths[0]).replace(":", "$:")
             else:
                 raise RuntimeError("MSVC is required to load C++ extensions")
-            link_rule.append(f'  command = "{cl_path}/link.exe" $in /nologo $ldflags /out:$out')
+            link_rule.append(
+                f'  command = "{cl_path}/link.exe" $in /nologo $ldflags /out:$out'
+            )
         else:
-            link_rule.append('  command = $cxx $in $ldflags -o $out')
+            link_rule.append("  command = $cxx $in $ldflags -o $out")
 
-        link = [f'build {library_target}: link {" ".join(objects)}']
+        link = [f"build {library_target}: link {' '.join(objects)}"]
 
-        default = [f'default {library_target}']
+        default = [f"default {library_target}"]
     else:
         link_rule, link, default = [], [], []
 
@@ -282,7 +327,9 @@ def get_platform():
 
 
 def get_cuda_bare_metal_version(cuda_dir):
-    raw_output = subprocess.check_output([cuda_dir + "/bin/nvcc", "-V"], universal_newlines=True)
+    raw_output = subprocess.check_output(
+        [cuda_dir + "/bin/nvcc", "-V"], universal_newlines=True
+    )
     output = raw_output.split()
     release_idx = output.index("release") + 1
     bare_metal_version = parse(output[release_idx].split(",")[0])
@@ -328,16 +375,23 @@ def is_offline_build() -> bool:
 def get_lite_attention_cache_path():
     user_home = os.getenv("LITE_ATTENTION_HOME")
     if not user_home:
-        user_home = os.getenv("HOME") or os.getenv("USERPROFILE") or os.getenv("HOMEPATH") or None
+        user_home = (
+            os.getenv("HOME")
+            or os.getenv("USERPROFILE")
+            or os.getenv("HOMEPATH")
+            or None
+        )
     if not user_home:
         raise RuntimeError("Could not find user home directory")
     return os.path.join(user_home, ".lite_attention")
 
 
 def open_url(url):
-    user_agent = 'Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/119.0'
+    user_agent = (
+        "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/119.0"
+    )
     headers = {
-        'User-Agent': user_agent,
+        "User-Agent": user_agent,
     }
     request = urllib.request.Request(url, None, headers)
     # Set timeout to 300 seconds to prevent the request from hanging forever.
@@ -355,16 +409,20 @@ def download_and_copy(name, src_func, dst_path, version, url_func):
     supported = {"Linux": "linux", "Darwin": "linux"}
     url = url_func(supported[system], arch, version)
     src_path = src_func(supported[system], arch, version)
-    tmp_path = os.path.join(flashattn_cache_path, "nvidia", name)  # path to cache the download
-    dst_path = os.path.join(base_dir, "third_party", "nvidia", "backend", dst_path)  # final binary path
+    tmp_path = os.path.join(
+        flashattn_cache_path, "nvidia", name
+    )  # path to cache the download
+    dst_path = os.path.join(
+        base_dir, "third_party", "nvidia", "backend", dst_path
+    )  # final binary path
     src_path = os.path.join(tmp_path, src_path)
     download = not os.path.exists(src_path)
     if download:
-        print(f'downloading and extracting {url} ...')
+        print(f"downloading and extracting {url} ...")
         file = tarfile.open(fileobj=open_url(url), mode="r|*")
         file.extractall(path=tmp_path)
     os.makedirs(os.path.split(dst_path)[0], exist_ok=True)
-    print(f'copy {src_path} to {dst_path} ...')
+    print(f"copy {src_path} to {dst_path} ...")
     if os.path.isdir(src_path):
         shutil.copytree(src_path, dst_path, dirs_exist_ok=True)
     else:
@@ -406,30 +464,41 @@ if not SKIP_CUDA_BUILD:
     if bare_metal_version != Version("12.8") and bare_metal_version < Version("13.0"):
         download_and_copy(
             name="nvcc",
-            src_func=lambda system, arch, version: f"cuda_nvcc-{system}-{arch}-{version}-archive/bin",
+            src_func=lambda system, arch, version: (
+                f"cuda_nvcc-{system}-{arch}-{version}-archive/bin"
+            ),
             dst_path="bin",
             version=NVIDIA_TOOLCHAIN_VERSION["nvcc"],
-            url_func=lambda system, arch, version:
-            f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/{system}-{arch}/cuda_nvcc-{system}-{arch}-{version}-archive.tar.xz",
+            url_func=lambda system, arch, version: (
+                f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/{system}-{arch}/cuda_nvcc-{system}-{arch}-{version}-archive.tar.xz"
+            ),
         )
         download_and_copy(
             name="ptxas",
-            src_func=lambda system, arch, version: f"cuda_nvcc-{system}-{arch}-{version}-archive/bin/ptxas",
+            src_func=lambda system, arch, version: (
+                f"cuda_nvcc-{system}-{arch}-{version}-archive/bin/ptxas"
+            ),
             dst_path="bin",
             version=NVIDIA_TOOLCHAIN_VERSION["ptxas"],
-            url_func=lambda system, arch, version:
-            f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/{system}-{arch}/cuda_nvcc-{system}-{arch}-{version}-archive.tar.xz",
+            url_func=lambda system, arch, version: (
+                f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/{system}-{arch}/cuda_nvcc-{system}-{arch}-{version}-archive.tar.xz"
+            ),
         )
         download_and_copy(
             name="ptxas",
-            src_func=lambda system, arch, version: f"cuda_nvcc-{system}-{arch}-{version}-archive/nvvm/bin",
+            src_func=lambda system, arch, version: (
+                f"cuda_nvcc-{system}-{arch}-{version}-archive/nvvm/bin"
+            ),
             dst_path="nvvm/bin",
             version=NVIDIA_TOOLCHAIN_VERSION["ptxas"],
-            url_func=lambda system, arch, version:
-            f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/{system}-{arch}/cuda_nvcc-{system}-{arch}-{version}-archive.tar.xz",
+            url_func=lambda system, arch, version: (
+                f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/{system}-{arch}/cuda_nvcc-{system}-{arch}-{version}-archive.tar.xz"
+            ),
         )
         base_dir = os.path.dirname(__file__)
-        ctk_path_new = os.path.abspath(os.path.join(base_dir, "third_party", "nvidia", "backend", "bin"))
+        ctk_path_new = os.path.abspath(
+            os.path.join(base_dir, "third_party", "nvidia", "backend", "bin")
+        )
         nvcc_path_new = os.path.join(ctk_path_new, f"nvcc{exe_extension}")
         # Need to append to path otherwise nvcc can't find cicc in nvvm/bin/cicc
         # nvcc 12.8 seems to hard-code looking for cicc in ../nvvm/bin/cicc
@@ -476,7 +545,12 @@ if not SKIP_CUDA_BUILD:
     )
 
     DTYPE_FWD_SM80 = ["bf16"] + (["fp16"] if not DISABLE_FP16 else [])
-    DTYPE_FWD_SM90 = ["bf16"] + (["fp16"] if not DISABLE_FP16 else []) + (["e4m3"] if not DISABLE_FP8 else []) + (["int8"] if not DISABLE_INT8 else [])
+    DTYPE_FWD_SM90 = (
+        ["bf16"]
+        + (["fp16"] if not DISABLE_FP16 else [])
+        + (["e4m3"] if not DISABLE_FP8 else [])
+        + (["int8"] if not DISABLE_INT8 else [])
+    )
     HALF_DTYPE_FWD_SM90 = ["bf16"] + (["fp16"] if not DISABLE_FP16 else [])
     DTYPE_BWD = ["bf16"] + (["fp16"] if not DISABLE_FP16 else [])
     HEAD_DIMENSIONS_BWD = (
@@ -495,10 +569,7 @@ if not SKIP_CUDA_BUILD:
         + (["64_256"] if not DISABLE_HDIMDIFF64 else [])
         + (["64_512"] if not DISABLE_HDIMDIFF64 else [])
     )
-    HEAD_DIMENSIONS_DIFF192_FWD = (
-        []
-        + (["192_128"] if not DISABLE_HDIMDIFF192 else [])
-    )
+    HEAD_DIMENSIONS_DIFF192_FWD = [] + (["192_128"] if not DISABLE_HDIMDIFF192 else [])
     HEAD_DIMENSIONS_FWD_SM80 = HEAD_DIMENSIONS_BWD
     SPLIT = [""] + (["_split"] if not DISABLE_SPLIT else [])
     PAGEDKV = [""] + (["_paged"] if not DISABLE_PAGEDKV else [])
@@ -506,31 +577,67 @@ if not SKIP_CUDA_BUILD:
     SOFTCAP_ALL = [""] if DISABLE_SOFTCAP else ["_softcapall"]
     PACKGQA = [""] + (["_packgqa"] if not DISABLE_PACKGQA else [])
     # We already always hard-code PackGQA=true for Sm8x
-    sources_fwd_sm80 = [f"{SRC_DIR}/instantiations/flash_fwd_hdim{hdim}_{dtype}{paged}{split}{softcap}_sm80.cu"
-                        for hdim, dtype, split, paged, softcap in itertools.product(HEAD_DIMENSIONS_FWD_SM80, DTYPE_FWD_SM80, SPLIT, PAGEDKV, SOFTCAP_ALL)]
+    sources_fwd_sm80 = [
+        f"{SRC_DIR}/instantiations/flash_fwd_hdim{hdim}_{dtype}{paged}{split}{softcap}_sm80.cu"
+        for hdim, dtype, split, paged, softcap in itertools.product(
+            HEAD_DIMENSIONS_FWD_SM80, DTYPE_FWD_SM80, SPLIT, PAGEDKV, SOFTCAP_ALL
+        )
+    ]
     # We already always hard-code PackGQA=true for Sm9x if PagedKV or Split
-    sources_fwd_sm90 = [f"{SRC_DIR}/instantiations/flash_fwd_hdim{hdim}_{dtype}{paged}{split}{softcap}{packgqa}_sm90.cu"
-                        for hdim, dtype, split, paged, softcap, packgqa in itertools.product(HEAD_DIMENSIONS_FWD, DTYPE_FWD_SM90, SPLIT, PAGEDKV, SOFTCAP, PACKGQA)
-                        if not (packgqa and (paged or split))]
+    sources_fwd_sm90 = [
+        f"{SRC_DIR}/instantiations/flash_fwd_hdim{hdim}_{dtype}{paged}{split}{softcap}{packgqa}_sm90.cu"
+        for hdim, dtype, split, paged, softcap, packgqa in itertools.product(
+            HEAD_DIMENSIONS_FWD, DTYPE_FWD_SM90, SPLIT, PAGEDKV, SOFTCAP, PACKGQA
+        )
+        if not (packgqa and (paged or split))
+    ]
     if not DISABLE_HDIMDIFF64:
-        sources_fwd_sm90 += [f"{SRC_DIR}/instantiations/flash_fwd_hdim{hdim}_{dtype}{paged}{split}{softcap}{packgqa}_sm90.cu"
-                             for hdim, dtype, split, paged, softcap, packgqa in itertools.product(HEAD_DIMENSIONS_DIFF64_FWD, HALF_DTYPE_FWD_SM90, SPLIT, PAGEDKV, SOFTCAP, PACKGQA)
-                             if not (packgqa and (paged or split))]
+        sources_fwd_sm90 += [
+            f"{SRC_DIR}/instantiations/flash_fwd_hdim{hdim}_{dtype}{paged}{split}{softcap}{packgqa}_sm90.cu"
+            for hdim, dtype, split, paged, softcap, packgqa in itertools.product(
+                HEAD_DIMENSIONS_DIFF64_FWD,
+                HALF_DTYPE_FWD_SM90,
+                SPLIT,
+                PAGEDKV,
+                SOFTCAP,
+                PACKGQA,
+            )
+            if not (packgqa and (paged or split))
+        ]
     if not DISABLE_HDIMDIFF192:
-        sources_fwd_sm90 += [f"{SRC_DIR}/instantiations/flash_fwd_hdim{hdim}_{dtype}{paged}{split}{softcap}{packgqa}_sm90.cu"
-                            for hdim, dtype, split, paged, softcap, packgqa in itertools.product(HEAD_DIMENSIONS_DIFF192_FWD, DTYPE_FWD_SM90, SPLIT, PAGEDKV, SOFTCAP, PACKGQA)
-                            if not (packgqa and (paged or split))]
-    sources_bwd_sm80 = [f"{SRC_DIR}/instantiations/flash_bwd_hdim{hdim}_{dtype}{softcap}_sm80.cu"
-                        for hdim, dtype, softcap in itertools.product(HEAD_DIMENSIONS_BWD, DTYPE_BWD, SOFTCAP)]
-    sources_bwd_sm90 = [f"{SRC_DIR}/instantiations/flash_bwd_hdim{hdim}_{dtype}{softcap}_sm90.cu"
-                        for hdim, dtype, softcap in itertools.product(HEAD_DIMENSIONS_BWD, DTYPE_BWD, SOFTCAP_ALL)]
+        sources_fwd_sm90 += [
+            f"{SRC_DIR}/instantiations/flash_fwd_hdim{hdim}_{dtype}{paged}{split}{softcap}{packgqa}_sm90.cu"
+            for hdim, dtype, split, paged, softcap, packgqa in itertools.product(
+                HEAD_DIMENSIONS_DIFF192_FWD,
+                DTYPE_FWD_SM90,
+                SPLIT,
+                PAGEDKV,
+                SOFTCAP,
+                PACKGQA,
+            )
+            if not (packgqa and (paged or split))
+        ]
+    sources_bwd_sm80 = [
+        f"{SRC_DIR}/instantiations/flash_bwd_hdim{hdim}_{dtype}{softcap}_sm80.cu"
+        for hdim, dtype, softcap in itertools.product(
+            HEAD_DIMENSIONS_BWD, DTYPE_BWD, SOFTCAP
+        )
+    ]
+    sources_bwd_sm90 = [
+        f"{SRC_DIR}/instantiations/flash_bwd_hdim{hdim}_{dtype}{softcap}_sm90.cu"
+        for hdim, dtype, softcap in itertools.product(
+            HEAD_DIMENSIONS_BWD, DTYPE_BWD, SOFTCAP_ALL
+        )
+    ]
     if DISABLE_BACKWARD:
         sources_bwd_sm90 = []
         sources_bwd_sm80 = []
     sources = (
         [f"{SRC_DIR}/_internal/cpp/flash_api.cpp"]
-        + (sources_fwd_sm80 if not DISABLE_SM8x else []) + sources_fwd_sm90
-        + (sources_bwd_sm80 if not DISABLE_SM8x else []) + sources_bwd_sm90
+        + (sources_fwd_sm80 if not DISABLE_SM8x else [])
+        + sources_fwd_sm90
+        + (sources_bwd_sm80 if not DISABLE_SM8x else [])
+        + sources_bwd_sm90
     )
     if not DISABLE_SPLIT:
         sources += [f"{SRC_DIR}/_internal/cpp/flash_fwd_combine.cu"]
@@ -573,7 +680,8 @@ if not SKIP_CUDA_BUILD:
             name=f"lite_attention._C",
             sources=sources,
             extra_compile_args={
-                "cxx": ["-O3", "-std=c++17", "-DPy_LIMITED_API=0x03090000"] + feature_args,
+                "cxx": ["-O3", "-std=c++17", "-DPy_LIMITED_API=0x03090000"]
+                + feature_args,
                 "nvcc": nvcc_threads_args() + nvcc_flags + cc_flag + feature_args,
             },
             include_dirs=include_dirs,
@@ -601,7 +709,9 @@ def get_wheel_url():
     torch_version_raw = parse(torch.__version__)
     # For CUDA 11, we only compile for CUDA 11.8, and for CUDA 12 we only compile for CUDA 12.2
     # to save CI time. Minor versions should be compatible.
-    torch_cuda_version = parse("11.8") if torch_cuda_version.major == 11 else parse("12.2")
+    torch_cuda_version = (
+        parse("11.8") if torch_cuda_version.major == 11 else parse("12.2")
+    )
     python_version = f"cp{sys.version_info.major}{sys.version_info.minor}"
     platform_name = get_platform()
     package_version = get_package_version()
@@ -612,7 +722,9 @@ def get_wheel_url():
 
     # Determine wheel URL based on CUDA version, torch version, python version and OS
     wheel_filename = f"{PACKAGE_NAME}-{package_version}+cu{cuda_version}torch{torch_version}cxx11abi{cxx11_abi}-{python_version}-{python_version}-{platform_name}.whl"
-    wheel_url = BASE_WHEEL_URL.format(tag_name=f"v{package_version}", wheel_name=wheel_filename)
+    wheel_url = BASE_WHEEL_URL.format(
+        tag_name=f"v{package_version}", wheel_name=wheel_filename
+    )
     return wheel_url, wheel_filename
 
 
@@ -649,6 +761,7 @@ class CachedWheelsCommand(_bdist_wheel):
             print("Precompiled wheel not found. Building from source...")
             # If the wheel could not be downloaded, build from source
             super().run()
+
 
 setup(
     version=get_package_version(),

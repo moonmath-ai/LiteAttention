@@ -164,7 +164,6 @@ def kernel_fwd(
     SAVE_ACT_INPUT: tl.constexpr,
     ACTIVATION: tl.constexpr,
 ):
-
     """
     Kernel for computing Out = activation(A x W + C)
     - Input has shape (M, K)
@@ -288,20 +287,20 @@ def triton_linear_act(
         weight = weight.contiguous()
     bias = bias.contiguous() if bias is not None else None
 
-    assert (
-        x.dtype == weight.dtype
-    ), f"Input and weight must have the same dtype, got {x.dtype} and {weight.dtype}"
+    assert x.dtype == weight.dtype, (
+        f"Input and weight must have the same dtype, got {x.dtype} and {weight.dtype}"
+    )
     if bias is not None:
-        assert (
-            x.dtype == bias.dtype
-        ), f"Input and bias must have the same dtype, got {x.dtype} and {bias.dtype}"
-    assert (
-        x_reshaped.shape[1] == weight.shape[1]
-    ), f"Incompatible dimensions: {x_reshaped.shape} - {weight.shape}"
+        assert x.dtype == bias.dtype, (
+            f"Input and bias must have the same dtype, got {x.dtype} and {bias.dtype}"
+        )
+    assert x_reshaped.shape[1] == weight.shape[1], (
+        f"Incompatible dimensions: {x_reshaped.shape} - {weight.shape}"
+    )
 
-    assert (
-        bias is None or bias.shape[0] == weight.shape[0]
-    ), "Incompatible dimensions in between weight and bias"
+    assert bias is None or bias.shape[0] == weight.shape[0], (
+        "Incompatible dimensions in between weight and bias"
+    )
 
     M, K = x_reshaped.shape
     N, K = weight.shape
@@ -456,7 +455,6 @@ def kernel_bwd(
     EVEN_K: tl.constexpr,
     ACTIVATION: tl.constexpr,
 ):
-
     """
     Kernel for computing Out = activation(A x W + C)
     - Input has shape (M, K)
@@ -552,12 +550,12 @@ def triton_dgrad_act(
     if weight.stride(0) > 1 and weight.stride(1) > 1:
         weight = weight.contiguous()
 
-    assert (
-        grad_output.dtype == weight.dtype
-    ), f"grad_output and weight must have the same dtype, got {grad_output.dtype} and {weight.dtype}"
-    assert (
-        grad_output_reshaped.shape[1] == weight.shape[0]
-    ), f"Incompatible dimensions: {grad_output_reshaped.shape} - {weight.shape}"
+    assert grad_output.dtype == weight.dtype, (
+        f"grad_output and weight must have the same dtype, got {grad_output.dtype} and {weight.dtype}"
+    )
+    assert grad_output_reshaped.shape[1] == weight.shape[0], (
+        f"Incompatible dimensions: {grad_output_reshaped.shape} - {weight.shape}"
+    )
     if activation != "id":
         assert act_input is not None, f"act_input is required for activation {activation}"
 

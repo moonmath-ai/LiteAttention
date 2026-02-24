@@ -4,12 +4,13 @@ import time
 import pytest
 import torch
 from einops import rearrange
+from transformers import AutoTokenizer, OPTConfig
+from transformers.models.opt.modeling_opt import OPTForCausalLM
+
 from flash_attn.models.gpt import GPTLMHeadModel
 from flash_attn.models.opt import opt_config_to_gpt2_config, remap_state_dict_hf_opt
 from flash_attn.utils.generation import update_graph_cache
 from flash_attn.utils.pretrained import state_dict_from_pretrained
-from transformers import AutoTokenizer, OPTConfig
-from transformers.models.opt.modeling_opt import OPTForCausalLM
 
 
 @pytest.mark.parametrize(
@@ -18,7 +19,9 @@ from transformers.models.opt.modeling_opt import OPTForCausalLM
 # @pytest.mark.parametrize('model_name', ["facebook/opt-350m"])
 def test_opt_state_dict(model_name):
     config = opt_config_to_gpt2_config(OPTConfig.from_pretrained(model_name))
-    pretrained_state_dict = remap_state_dict_hf_opt(state_dict_from_pretrained(model_name), config)
+    pretrained_state_dict = remap_state_dict_hf_opt(
+        state_dict_from_pretrained(model_name), config
+    )
     model = GPTLMHeadModel(config)
     state_dict = model.state_dict()
     assert state_dict.keys() == pretrained_state_dict.keys()
@@ -46,10 +49,14 @@ def test_opt_optimized(model_name):
     config.residual_in_fp32 = getattr(config, "prenorm", True)
     config.pad_vocab_size_multiple = 8
 
-    model = GPTLMHeadModel.from_pretrained(model_name, config, device=device, dtype=dtype)
+    model = GPTLMHeadModel.from_pretrained(
+        model_name, config, device=device, dtype=dtype
+    )
 
     model_ref = OPTForCausalLM.from_pretrained(model_name).to(device=device)
-    model_hf = OPTForCausalLM.from_pretrained(model_name, torch_dtype=dtype).to(device=device)
+    model_hf = OPTForCausalLM.from_pretrained(model_name, torch_dtype=dtype).to(
+        device=device
+    )
 
     model.eval()
     model_ref.eval()
@@ -58,11 +65,15 @@ def test_opt_optimized(model_name):
     torch.manual_seed(0)
     batch_size = 2
     max_seqlen = 256
-    seqlens = torch.randint(max_seqlen // 2, max_seqlen + 1, (batch_size,), device="cuda")
+    seqlens = torch.randint(
+        max_seqlen // 2, max_seqlen + 1, (batch_size,), device="cuda"
+    )
     input_ids = torch.randint(
         0, config.vocab_size, (batch_size, max_seqlen), dtype=torch.long, device="cuda"
     )
-    if model_name != "facebook/opt-350m":  # The OPT-350m projects the embeddings to dimension 512
+    if (
+        model_name != "facebook/opt-350m"
+    ):  # The OPT-350m projects the embeddings to dimension 512
         out = model.transformer(input_ids)
         out_hf = model_hf.model(input_ids).last_hidden_state
         out_ref = model_ref.model(input_ids).last_hidden_state
@@ -71,7 +82,9 @@ def test_opt_optimized(model_name):
         print(f"Output mean diff: {(out - out_ref).abs().mean().item()}")
         print(f"HF fp16 max diff: {(out_hf - out_ref).abs().max().item()}")
         print(f"HF fp16 mean diff: {(out_hf - out_ref).abs().mean().item()}")
-        assert (out - out_ref).abs().max().item() < 3 * (out_hf - out_ref).abs().max().item()
+        assert (out - out_ref).abs().max().item() < 3 * (
+            out_hf - out_ref
+        ).abs().max().item()
 
     logits = model(input_ids).logits
     logits_hf = model_hf(input_ids).logits
@@ -115,7 +128,9 @@ def test_opt_generation(model_name):
     config.fused_mlp = True
     config.fused_dropout_add_ln = True
 
-    model = GPTLMHeadModel.from_pretrained(model_name, config, device=device, dtype=dtype)
+    model = GPTLMHeadModel.from_pretrained(
+        model_name, config, device=device, dtype=dtype
+    )
     model.eval()
 
     torch.manual_seed(0)
@@ -124,9 +139,9 @@ def test_opt_generation(model_name):
     tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=False)
     eos_token_id = tokenizer.eos_token_id
 
-    input_ids = tokenizer("Hello, my dog is cute and he", return_tensors="pt").input_ids.to(
-        device=device
-    )
+    input_ids = tokenizer(
+        "Hello, my dog is cute and he", return_tensors="pt"
+    ).input_ids.to(device=device)
     max_length = 25
     # input_ids = torch.randint(0, 100, (2, 10), dtype=torch.long, device='cuda')
     # max_length = input_ids.shape[1] + 40
@@ -139,7 +154,9 @@ def test_opt_generation(model_name):
         scores.append(model(cur_input_ids).logits[:, -1])
         sequences.append(scores[-1].argmax(dim=-1))
         for _ in range(input_ids.shape[1] + 1, max_length):
-            cur_input_ids = torch.cat([cur_input_ids, rearrange(sequences[-1], "b -> b 1")], dim=-1)
+            cur_input_ids = torch.cat(
+                [cur_input_ids, rearrange(sequences[-1], "b -> b 1")], dim=-1
+            )
             scores.append(model(cur_input_ids).logits[:, -1])
             sequences.append(scores[-1].argmax(dim=-1))
             if eos_token_id is not None and (sequences[-1] == eos_token_id).all():
@@ -166,7 +183,9 @@ def test_opt_generation(model_name):
     if getattr(config, "use_flash_attn", False):
         # Capture graph outside the timing loop
         batch_size, seqlen_og = input_ids.shape
-        model._decoding_cache = update_graph_cache(model, None, batch_size, seqlen_og, max_length)
+        model._decoding_cache = update_graph_cache(
+            model, None, batch_size, seqlen_og, max_length
+        )
         print("With CUDA graph")
         torch.cuda.synchronize()
         start = time.time()
@@ -179,20 +198,27 @@ def test_opt_generation(model_name):
             enable_timing=True,
         )
         torch.cuda.synchronize()
-        print(f"Prompt processing + decoding time: {(time.time() - start) * 1000:.0f}ms")
+        print(
+            f"Prompt processing + decoding time: {(time.time() - start) * 1000:.0f}ms"
+        )
         if verbose:
             print(out_cg.sequences)
         print(tokenizer.batch_decode(out_cg.sequences.tolist()))
 
     del model
 
-    model_hf = OPTForCausalLM.from_pretrained(model_name, torch_dtype=dtype).to(device=device)
+    model_hf = OPTForCausalLM.from_pretrained(model_name, torch_dtype=dtype).to(
+        device=device
+    )
     model_hf.eval()
     print("HF fp16")
     torch.cuda.synchronize()
     start = time.time()
     out_hf = model_hf.generate(
-        input_ids=input_ids, max_length=max_length, return_dict_in_generate=True, output_scores=True
+        input_ids=input_ids,
+        max_length=max_length,
+        return_dict_in_generate=True,
+        output_scores=True,
     )
     torch.cuda.synchronize()
     print(f"Prompt processing + decoding time: {(time.time() - start) * 1000:.0f}ms")
@@ -204,7 +230,10 @@ def test_opt_generation(model_name):
     torch.cuda.synchronize()
     start = time.time()
     out_ref = model_ref.generate(
-        input_ids=input_ids, max_length=max_length, return_dict_in_generate=True, output_scores=True
+        input_ids=input_ids,
+        max_length=max_length,
+        return_dict_in_generate=True,
+        output_scores=True,
     )
     torch.cuda.synchronize()
     print(f"Prompt processing + decoding time: {(time.time() - start) * 1000:.0f}ms")
@@ -232,6 +261,8 @@ def test_opt_generation(model_name):
     assert torch.all(out.sequences == out_ref.sequences)
     assert torch.all(out.sequences == out_hf.sequences)
 
-    assert (torch.stack(out.scores, 1) - torch.stack(out_ref.scores, 1)).abs().max().item() < 3 * (
+    assert (
+        torch.stack(out.scores, 1) - torch.stack(out_ref.scores, 1)
+    ).abs().max().item() < 3 * (
         torch.stack(out_hf.scores, 1) - torch.stack(out_ref.scores, 1)
     ).abs().max().item()

@@ -9,8 +9,12 @@ import warnings
 
 import structlog
 
-from .config import CalibratedCalibConfig, CalibratedConfig, CalibratedRunConfig
-from .config import ConfigList
+from .config import (
+    CalibratedCalibConfig,
+    CalibratedConfig,
+    CalibratedRunConfig,
+    ConfigList,
+)
 
 logger = structlog.get_logger()
 
