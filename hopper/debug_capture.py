@@ -185,7 +185,7 @@ def render_skip_images(
                     for qi, row in enumerate(row_skip):
                         for lo, hi in _decode_skip_list_ranges(row):
                             rect = plt.Rectangle(
-                                (lo * grid_w, qi * grid_h),
+                                (lo * grid_w - 0.5, qi * grid_h - 0.5),
                                 (hi - lo) * grid_w,
                                 grid_h,
                                 facecolor="white",
