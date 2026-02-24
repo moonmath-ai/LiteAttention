@@ -100,6 +100,7 @@ from ._internal.flash_attn_interface import flash_attn_func
 from .calibrated_module import (
     CalibratedCalibConfig,
     CalibratedRunConfig,
+    ConfigList,
     ConfigurableModule,
     ModuleRegistry,
 )
