@@ -1926,6 +1926,10 @@ class LiteAttentionRegistry(ModuleRegistry):
 
         if has_data:
             torch.save(file_data, path)
+            from lite_attention.debug_capture import mean_pct
+
+            print(f"Debug capture saved to {path}")
+            print(f"  Mean tiles computed: {mean_pct(file_data):.1%}")
 
     def save_if_calib(self) -> None:
         """Save calibration results to file if in calibration mode.
