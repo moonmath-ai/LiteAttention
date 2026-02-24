@@ -894,6 +894,18 @@ class LiteAttention(nn.Module, ConfigurableModule):
 
         self.enable_skipping = enable_skipping
 
+        # For disabled timesteps, _get_read_write_lists returned early without
+        # setting metadata that _save_capture needs (head_dim, dtype, seq_len, etc.).
+        if disabled and self._last_dtype is None:
+            v_colmajor = value.shape[-3] == query.shape[-1]
+            self._last_seq_len = (int(query.shape[1]), int(key.shape[1]))
+            self._last_head_dim = query.shape[-1]
+            self._last_v_colmajor = v_colmajor
+            self._last_dtype = torch.int8 if self.use_int8 else query.dtype
+            self._last_device = query.device
+            self._last_num_heads = query.shape[2]
+            self._last_batch_size = query.shape[0]
+
         # softmax_scale: for INT8 use q_scale (1.44269504089 * scale or / sqrt(head_dim)); else use scale as-is
         head_dim = query.shape[-1]
         softmax_scale = (
