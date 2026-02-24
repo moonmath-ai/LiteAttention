@@ -201,6 +201,24 @@ def render_skip_images(
                     plt.close()
 
 
+def mean_pct(data: dict) -> float:
+    """Weighted mean fraction of tiles computed across all modules.
+
+    Weighted by ``seq_len_q * seq_len_k * num_heads`` per module.
+
+    Returns:
+        Fraction in ``[0, 1]``.
+    """
+    weighted_sum = 0.0
+    total_weight = 0.0
+    for mod_data in data["modules"].values():
+        pct = mod_data["pct_per_head"]  # [T, B, H]
+        weight = mod_data["seq_len_q"] * mod_data["seq_len_k"] * pct.shape[2]
+        weighted_sum += pct.mean().item() * weight
+        total_weight += weight
+    return weighted_sum / total_weight if total_weight else 0.0
+
+
 def to_xarray(data: dict):
     """Convert capture data to ``xarray.Dataset`` objects with labeled dimensions.
 
@@ -278,18 +296,20 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Render LiteAttention capture .pt files to PNG images."
+        description="LiteAttention capture .pt file utilities."
     )
+    parser.add_argument("pt_files", nargs="+", help="One or more .pt capture files.")
     parser.add_argument(
-        "pt_files", nargs="+", help="One or more .pt capture files to render."
+        "--images", action="store_true", help="Also render skip-list images to PNG."
     )
     args = parser.parse_args()
 
     for pt_file in args.pt_files:
         pt_path = Path(pt_file)
-        out_dir = pt_path.with_name(pt_path.stem + "_vis")
-        print(f"Loading {pt_path} ...")
         data = load_capture(pt_path)
-        print(f"Rendering to {out_dir} ...")
-        render_skip_images(data, out_dir)
-        print(f"Done: {out_dir}")
+        print(f"{pt_path.stem}: {mean_pct(data):.1%}")
+        if args.images:
+            out_dir = pt_path.with_name(pt_path.stem + "_vis")
+            print(f"  Rendering to {out_dir} ...")
+            render_skip_images(data, out_dir)
+            print(f"  Done: {out_dir}")
