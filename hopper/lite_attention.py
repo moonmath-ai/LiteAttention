@@ -1864,6 +1864,8 @@ class LiteAttentionRegistry(ModuleRegistry):
         for name, module in self.named_modules.items():
             if not module._captured_pct:
                 continue
+            if module._last_dtype is None:
+                continue
             has_data = True
 
             kBlockM, kBlockN = LiteAttention.get_MN(
