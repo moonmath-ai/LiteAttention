@@ -23,6 +23,7 @@ mha_fwd(at::Tensor &q,                            // batch_size x seqlen_q x num
         float threshold,
         bool reverse_skip_list);
 
+#ifndef FLASHATTENTION_DISABLE_VARLEN
 std::vector<at::Tensor>
 mha_varlen_fwd(at::Tensor &q,                               // total_q x num_heads x head_size, total_q := \sum_{i=0}^{b} s_i
                const at::Tensor &k,                         // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i or num_blocks x page_block_size x num_heads_k x head_size if there's a block_table.
@@ -45,6 +46,7 @@ mha_varlen_fwd(at::Tensor &q,                               // total_q x num_hea
                const float softcap,
                const bool return_softmax,
                std::optional<at::Generator> gen_);
+#endif
 
 std::vector<at::Tensor>
 mha_bwd(const at::Tensor &dout,                   // batch_size x seqlen_q x num_heads, x multiple_of(head_size_og, 8)
@@ -67,6 +69,7 @@ mha_bwd(const at::Tensor &dout,                   // batch_size x seqlen_q x num
         std::optional<at::Generator> gen_,
         std::optional<at::Tensor> &rng_state);
 
+#ifndef FLASHATTENTION_DISABLE_VARLEN
 std::vector<at::Tensor>
 mha_varlen_bwd(const at::Tensor &dout,                   // total_q x num_heads x head_size
                const at::Tensor &q,                      // total_q x num_heads x head_size, total_q := \sum_{i=0}^{b} s_i
@@ -92,6 +95,7 @@ mha_varlen_bwd(const at::Tensor &dout,                   // total_q x num_heads 
                const bool deterministic,
                std::optional<at::Generator> gen_,
                std::optional<at::Tensor> &rng_state);
+#endif
 
 std::vector<at::Tensor>
 mha_fwd_kvcache(at::Tensor &q,                                     // batch_size x seqlen_q x num_heads x head_size
@@ -136,9 +140,13 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
               py::arg("attn_write_list") = std::nullopt,
               py::arg("threshold") = 0.0f,
               py::arg("reverse_skip_list") = false);
+#ifndef FLASHATTENTION_DISABLE_VARLEN
         m.def("varlen_fwd", &mha_varlen_fwd, "Forward pass (variable length)");
+#endif
         m.def("bwd", &mha_bwd, "Backward pass");
+#ifndef FLASHATTENTION_DISABLE_VARLEN
         m.def("varlen_bwd", &mha_varlen_bwd, "Backward pass (variable length)");
+#endif
         m.def("fwd_kvcache", &mha_fwd_kvcache, "Forward pass, with KV-cache");
         m.def("get_tile_size_fwd_sm90", [](int head_dim, int head_dim_v, bool is_causal, bool is_local, int element_size,
                                            bool v_colmajor, bool paged_kv_non_TMA, bool softcap, bool is_skipable, bool is_int8) {

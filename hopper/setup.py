@@ -485,7 +485,11 @@ if is_rocm:
     # Rename generated .cpp files to .hip so they are compiled with hipcc as device code
     for p in generated_dir.glob("*.cpp"):
         p.rename(p.with_suffix(".hip"))
-    
+
+    # Copy flash_api.cpp -> flash_api.hip so we only maintain the .cpp (single source of truth)
+    flash_attn_ck_dir = repo_root / "csrc" / "flash_attn_ck"
+    shutil.copy(flash_attn_ck_dir / "flash_api.cpp", flash_attn_ck_dir / "flash_api.hip")
+
     # 2. Collect Sources
     def get_rocm_source(path_str):
         path = Path(path_str)
