@@ -101,9 +101,7 @@ pip install torch packaging einops structlog tomli-w
 
 # Clone and build
 git clone https://github.com/moonmath-ai/LiteAttention.git
-cd LiteAttention/hopper
-
-# Note: If RAM limited, prepend `MAX_JOBS=4`
+cd LiteAttention
 pip install --no-build-isolation .
 ```
 

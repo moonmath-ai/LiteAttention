@@ -12,7 +12,7 @@ build-backend = "setuptools.build_meta"
 name = "lite_attention"
 description = "Lite Attention"
 readme = {file = "./README.md", content-type = "text/markdown"}
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 license = {file = "LICENSE"}
 authors = [
     {name = "Tri Dao", email = "trid@cs.stanford.edu"},
@@ -24,14 +24,10 @@ classifiers = [
     "License :: OSI Approved :: BSD License",
     "Operating System :: Unix",
 ]
-dynamic = ["version"]
+version = "0.4.0"
 
 dependencies = [
     "torch",
-    "setuptools",
-    "packaging",
-    "wheel",
-    "ninja",
     "einops",
     "structlog",
     "tomli-w",
@@ -56,18 +52,35 @@ packages = ["lite_attention", "lite_attention._internal", "lite_attention.utils"
 license-files = ["LICENSE", "LICENSE-BSD", "LICENSE-MIT"]
 
 [tool.setuptools.package-dir]
-lite_attention = "."
-
-[tool.setuptools.dynamic]
-version = {attr = "lite_attention.__version__"}
+lite_attention = "hopper"
 
 [tool.bdist_wheel]
 py-limited-api = "cp39"
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["hopper/tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = ["-v", "--tb=short"]
 
+[tool.uv]
+no-build-isolation-package = ["lite-attention"]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu129"
+url = "https://download.pytorch.org/whl/cu129"
+explicit = true
