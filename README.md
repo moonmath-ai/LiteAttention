@@ -13,19 +13,17 @@ By identifying non-essential tiles early in the generation process and propagati
 
 LiteAttention is actively developed to provide the fastest, most flexible sparse attention for diffusion models. Here is the recent evolution of the codebase:
 
-### v0.4.0 (Latest): Calibration Registry & Dynamic Thresholding
-*   **Calibration Registry:** An experimental feature to automatically search and find per-layer, per-timestep skip thresholds that meet a target error budget. This balances speed and quality better than fixed thresholds.
-*   **Dynamic Thresholding:** Ability to save (`mode="calib"`) and load (`mode="load"`) these optimal threshold configurations from a TOML file.
+### v0.4.0 (Latest): INT8 Quantization & Fixes
+*   **INT8 Quantization:** Added support for INT8 quantization (`use_int8=True`) for Q (per-block) and K (per-block with channel-wise mean smoothing), significantly reducing memory usage and boosting performance.
 *   **Fixes:** Resolved sequence parallelism correctness issues for rectangular QK skip lists and fixed default modes for `torch.compile` support.
 
-### v0.3.x: INT8 Quantization & Bi-directional Consumer
-*   **INT8 Quantization:** Added support for INT8 quantization (`use_int8=True`) for Q (per-block) and K (per-block with channel-wise mean smoothing), significantly reducing memory usage and boosting performance.
+### v0.3.0: Full Producer-Consumer Pipeline
 *   **Full Producer-Consumer Pipeline:** Introduced q-pad and bi-directionality for enhanced execution efficiency and sequence handling.
 
 ### v0.2.0: Programmable Block Processing (`must-do` & `must-skip`)
 *   **Fine-Grained Sequence Control:** Added `must_do_list` and `must_skip_list` parameters. You can now explicitly define token ranges (e.g., prompt tokens vs padding) that *must* always be computed or that can *always* be skipped, bypassing the threshold logic entirely.
 
-### v0.1.0: Initial Release & Core Architecture
+### v0.1.x: Initial Release & Core Architecture
 *   **Evolutionary Computation Skips (QK-Skip):** The core algorithm that maintains a Skip-Mask, identifying non-essential tiles and completely bypassing the attention iteration (QK product, softmax, PV product) in later timesteps.
 *   **Sequence Parallelism:** Introduced `SeqParallelLiteAttention` for multi-GPU scale-out.
 *   **Softmax LSE:** Added the ability to return the softmax log-sum-exp (`return_softmax_lse=True`) for combining partial attention computations (e.g., separating text-to-video vs video-to-video attention).
