@@ -265,13 +265,13 @@ jobs:
           # We don't want to download anything CUDA-related here
           pip install torch --index-url https://download.pytorch.org/whl/cpu
       - name: Build core package
-        working-directory: LiteAttention/hopper
+        working-directory: LiteAttention
         env:
-          FLASH_ATTENTION_SKIP_CUDA_BUILD: "TRUE"
+          LITE_ATTENTION_SKIP_CUDA_BUILD: "TRUE"
         run: |
           python setup.py sdist --dist-dir=dist
       - name: Deploy
-        working-directory: LiteAttention/hopper
+        working-directory: LiteAttention
         env:
           TWINE_USERNAME: "__token__"
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}

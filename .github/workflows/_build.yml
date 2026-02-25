@@ -114,7 +114,7 @@ jobs:
 
       - name: Build wheel
         id: build_wheel
-        working-directory: build-wheel/hopper
+        working-directory: build-wheel
         run: |
           # We want setuptools >= 49.6.0 otherwise we can't compile the extension if system CUDA version is 11.7 and pytorch cuda version is 11.6
           # https://github.com/pytorch/pytorch/blob/664058fa83f1d8eede5d66418abff6e20bd76ca8/torch/utils/cpp_extension.py#L810
@@ -128,8 +128,8 @@ jobs:
 
           export MAX_JOBS=$([ "$MATRIX_CUDA_VERSION" == "129" ] && echo 1 || echo 2)
           export NVCC_THREADS=2
-          export FLASH_ATTENTION_FORCE_BUILD="TRUE"
-          export FLASH_ATTENTION_FORCE_CXX11_ABI=${{ inputs.cxx11_abi }}
+          export LITE_ATTENTION_FORCE_BUILD="TRUE"
+          export LITE_ATTENTION_FORCE_CXX11_ABI=${{ inputs.cxx11_abi }}
 
           # 5h timeout since GH allows max 6h and we want some buffer
           EXIT_CODE=0
@@ -150,13 +150,13 @@ jobs:
 
       - name: Log build logs after timeout
         if: always() && steps.build_wheel.outputs.build_exit_code == 124
-        working-directory: build-wheel/hopper
+        working-directory: build-wheel
         run: |
           ls -al ./
           tar -cvf build.tar . --atime-preserve=replace
 
       - name: Log Built Wheels
-        working-directory: build-wheel/hopper
+        working-directory: build-wheel
         run: |
           ls dist
 
@@ -165,12 +165,12 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: wheel-py${{ inputs.python-version }}-cu${{ inputs.cuda-version }}-torch${{ inputs.torch-version }}-cxx11abi${{ inputs.cxx11_abi }}
-          path: build-wheel/hopper/dist/*.whl
+          path: build-wheel/dist/*.whl
           retention-days: 30
 
       - name: Upload wheel to Release
         if: inputs.upload-to-release && steps.build_wheel.outputs.build_exit_code == '0'
-        working-directory: build-wheel/hopper
+        working-directory: build-wheel
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ inputs.release-version }}
