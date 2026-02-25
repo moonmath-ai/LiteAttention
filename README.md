@@ -13,19 +13,19 @@ By identifying non-essential tiles early in the generation process and propagati
 
 LiteAttention is actively developed to provide the fastest, most flexible sparse attention for diffusion models. Here is the recent evolution of the codebase:
 
-### **v0.4.0 (Latest): Calibration Registry & Dynamic Thresholding**
+### v0.4.0 (Latest): Calibration Registry & Dynamic Thresholding
 *   **Calibration Registry:** An experimental feature to automatically search and find per-layer, per-timestep skip thresholds that meet a target error budget. This balances speed and quality better than fixed thresholds.
 *   **Dynamic Thresholding:** Ability to save (`mode="calib"`) and load (`mode="load"`) these optimal threshold configurations from a TOML file.
 *   **Fixes:** Resolved sequence parallelism correctness issues for rectangular QK skip lists and fixed default modes for `torch.compile` support.
 
-### **v0.3.x: INT8 Quantization & Bi-directional Consumer**
+### v0.3.x: INT8 Quantization & Bi-directional Consumer
 *   **INT8 Quantization:** Added support for INT8 quantization (`use_int8=True`) for Q (per-block) and K (per-block with channel-wise mean smoothing), significantly reducing memory usage and boosting performance.
 *   **Full Producer-Consumer Pipeline:** Introduced q-pad and bi-directionality for enhanced execution efficiency and sequence handling.
 
-### **v0.2.0: Programmable Block Processing (`must-do` & `must-skip`)**
+### v0.2.0: Programmable Block Processing (`must-do` & `must-skip`)
 *   **Fine-Grained Sequence Control:** Added `must_do_list` and `must_skip_list` parameters. You can now explicitly define token ranges (e.g., prompt tokens vs padding) that *must* always be computed or that can *always* be skipped, bypassing the threshold logic entirely.
 
-### **v0.1.0: Initial Release & Core Architecture**
+### v0.1.0: Initial Release & Core Architecture
 *   **Evolutionary Computation Skips (QK-Skip):** The core algorithm that maintains a Skip-Mask, identifying non-essential tiles and completely bypassing the attention iteration (QK product, softmax, PV product) in later timesteps.
 *   **Sequence Parallelism:** Introduced `SeqParallelLiteAttention` for multi-GPU scale-out.
 *   **Softmax LSE:** Added the ability to return the softmax log-sum-exp (`return_softmax_lse=True`) for combining partial attention computations (e.g., separating text-to-video vs video-to-video attention).
@@ -92,6 +92,29 @@ LiteAttention achieves state-of-the-art speeds while maintaining top-tier visual
 LiteAttention requires ninja for fast compilation.
 
 > **Note:** Pre-built wheels for common environments will be added soon to simplify installation.
+
+### Using `uv` (Recommended)
+
+[`uv`](https://docs.astral.sh/uv/) is a fast Rust-based Python package installer.
+
+```bash
+# Clone the repository
+git clone https://github.com/moonmath-ai/LiteAttention.git
+cd LiteAttention
+
+# Create a virtual environment and activate it
+uv venv
+source .venv/bin/activate
+
+# Install dependencies
+uv pip install ninja torch packaging einops structlog tomli-w
+
+# Build and install LiteAttention
+uv pip install --no-build-isolation .
+```
+
+### Using `pip`
+
 ```bash
 # Ensure ninja is working properly
 pip uninstall -y ninja && pip install ninja
@@ -130,7 +153,7 @@ def LiteAttention(
 - `max_batch_size` (int): Maximum batch size to pre-allocate memory for. Defaults to `2`. The actual batch size used during inference can be smaller than this value, but not larger.
 - `reverse_skip_list` (bool): Whether to use the reversed skip list format (internal optimization). Defaults to `True`.
 - `use_int8` (bool): Whether to use Int8 quantization for Q and K. Defaults to `False`. Enables per-block quantization for Q and channel-smoothed per-block quantization for K.
-- `threshold` (float): Log-space threshold for skipping tiles. Controlled from the Registry. Change here only for testing.
+- `threshold` (float): Log-space threshold for skipping tiles. Controlled from the Registry. Change here should be used only for testing.
 
 Replace your standard attention call with a `LiteAttention` instance. **Crucially, instantiate a separate `LiteAttention` object for each layer** so they maintain independent skip states.
 
@@ -170,7 +193,8 @@ must_do_list = [2, 12, 40, 45, 60, 80]
 must_skip_list = [80, 100]
 ```
 
-> ⚠️ **Important:** Skip optimization should *only* be enabled for **video-to-video self-attention**. For cross-attention or text-to-video partial computations, disable skipping using `self.lite_attention.enable_skip_optimization(enable=False)`.
+> [!IMPORTANT] 
+> ⚠️ Skip optimization should *only* be enabled for **video-to-video self-attention**. For cross-attention or text-to-video partial computations, disable skipping using `self.lite_attention.enable_skip_optimization(enable=False)`.
 
 ### 2. Multi-GPU Sequence Parallelism
 When using multi-GPU with sequence parallelism, use `SeqParallelLiteAttention`:
@@ -253,6 +277,6 @@ If you utilize LiteAttention in your research or deployment, please consider cit
 }
 ```
 
-Built upon the incredible foundation of [FlashAttention3](https://github.com/Dao-AILab/flash-attention) by Tri Dao. We also thank the teams behind SparseVideoGen, RadialAttention, SageAttention, Wan2.1, and LTX-Video. 
+Built upon the incredible foundation of [FlashAttention3](https://github.com/Dao-AILab/flash-attention) by Tri Dao.
 
 **License:** LiteAttention inherits the BSD 3-Clause license from FA3 for original code; new LiteAttention additions are distributed under the MIT license. See [LICENSE-BSD](LICENSE-BSD) and [LICENSE-MIT](LICENSE-MIT).
