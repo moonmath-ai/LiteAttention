@@ -277,16 +277,26 @@ def to_xarray(data: dict):
                 },
             )
 
-        ds = xr.Dataset(
-            data_vars,
-            attrs={
-                "module_name": mod_name,
-                "seq_len_q": mod_data["seq_len_q"],
-                "seq_len_k": mod_data["seq_len_k"],
-                "head_dim": mod_data["head_dim"],
-                "use_int8": mod_data["use_int8"],
-            },
-        )
+        if "stats_mean" in mod_data:
+            stats_heads = list(range(mod_data["stats_mean"].shape[0]))
+            for key in ("stats_mean", "stats_std", "stats_max", "stats_min"):
+                data_vars[key] = xr.DataArray(
+                    mod_data[key].numpy(),
+                    dims=["head", "y", "x"],
+                    coords={"head": stats_heads},
+                )
+
+        attrs = {
+            "module_name": mod_name,
+            "seq_len_q": mod_data["seq_len_q"],
+            "seq_len_k": mod_data["seq_len_k"],
+            "head_dim": mod_data["head_dim"],
+            "use_int8": mod_data["use_int8"],
+        }
+        if "stats_count" in mod_data:
+            attrs["stats_count"] = mod_data["stats_count"]
+
+        ds = xr.Dataset(data_vars, attrs=attrs)
         datasets[mod_name] = ds
 
     return datasets

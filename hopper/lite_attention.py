@@ -235,16 +235,24 @@ class LiteAttention(nn.Module, ConfigurableModule):
         self.max_batch_size = max_batch_size
 
         # Debug capture state (set via _enable_capture, cleared via _disable_capture)
-        self._capture_enabled = False  # tier 1: pct for all heads/timesteps
+        self._capture_enabled = False  # pct for all heads/timesteps
         self._captured_pct = []  # [{timestep, pct_per_head, threshold}]
 
-        # Attn map capture (tier 2):
+        # Detailed attn map capture (optional, independent of stats):
         self._capture_attn_map = False
         self._capture_attn_map_timesteps = None  # set[int] | None — None means all
-        self._capture_attn_map_heads = None  # Tensor | None — None means all
-        self._capture_attn_map_batch_indices = torch.tensor([0])
+        self._capture_attn_map_heads = None  # list[int] | None — None means all
+        self._capture_attn_map_batch_indices = None  # list[int] | None — None means all
         self._capture_attn_map_res = 256
         self._captured_maps = []  # [{timestep, skip_list, attn_map}]
+
+        # Stats capture (optional, independent of detailed maps): running statistics at full resolution
+        self._capture_stats = False
+        self._stats_count = 0
+        self._stats_mean = None  # lazily initialized: [n_heads, res, res] float32 CPU
+        self._stats_m2 = None  # [n_heads, res, res] float32 CPU (Welford's M2)
+        self._stats_max = None  # [n_heads, res, res] float32 CPU
+        self._stats_min = None  # [n_heads, res, res] float32 CPU
 
     @staticmethod
     def ceil_div(x, y):
@@ -1172,14 +1180,16 @@ class LiteAttention(nn.Module, ConfigurableModule):
         self,
         attn_map: bool = False,
         attn_map_timesteps: Optional[set] = None,
-        attn_map_heads: Optional[torch.Tensor] = None,
-        attn_map_batch_indices: Optional[torch.Tensor] = None,
+        attn_map_heads: Optional[list] = None,
+        attn_map_batch_indices: Optional[list] = None,
         attn_map_res: int = 256,
+        stats: bool = False,
     ):
         """Enable debug capture on this module.
 
-        Tier 1 (always): capture pct_per_head for all heads/timesteps/batches.
-        Tier 2 (optional): capture attn maps + skip_lists for selected subset.
+        Always: capture pct_per_head for all heads/timesteps/batches.
+        Optional: capture detailed attn maps + skip_lists for selected subset.
+        Optional: running stats (mean/std/max/min) at full resolution across all passes.
         """
         self._capture_enabled = True
         self._captured_pct = []
@@ -1187,13 +1197,16 @@ class LiteAttention(nn.Module, ConfigurableModule):
         self._capture_attn_map = attn_map
         self._capture_attn_map_timesteps = attn_map_timesteps
         self._capture_attn_map_heads = attn_map_heads
-        self._capture_attn_map_batch_indices = (
-            attn_map_batch_indices
-            if attn_map_batch_indices is not None
-            else torch.tensor([0])
-        )
+        self._capture_attn_map_batch_indices = attn_map_batch_indices
         self._capture_attn_map_res = attn_map_res
         self._captured_maps = []
+
+        self._capture_stats = stats
+        self._stats_count = 0
+        self._stats_mean = None
+        self._stats_m2 = None
+        self._stats_max = None
+        self._stats_min = None
 
     def _disable_capture(self):
         """Disable debug capture and clear accumulated data."""
@@ -1203,22 +1216,33 @@ class LiteAttention(nn.Module, ConfigurableModule):
         self._capture_attn_map = False
         self._capture_attn_map_timesteps = None
         self._capture_attn_map_heads = None
-        self._capture_attn_map_batch_indices = torch.tensor([0])
+        self._capture_attn_map_batch_indices = None
         self._capture_attn_map_res = 256
         self._captured_maps = []
+
+        self._capture_stats = False
+        self._stats_count = 0
+        self._stats_mean = None
+        self._stats_m2 = None
+        self._stats_max = None
+        self._stats_min = None
 
     @torch.no_grad()
     def _maybe_capture(self, write_list, threshold, query, key, scale):
         """Capture debug data for the current forward pass if capture is enabled.
 
-        Tier 1 (always when capture enabled): compute pct_per_head for ALL
-        heads and ALL batch items. Cheap — no attention map materialization.
+        Always (when capture enabled): compute pct_per_head for ALL heads and
+        ALL batch items. Cheap — no attention map materialization.
         For disabled timesteps (write_list is None), emits pct=1.0.
 
-        Tier 2 (when attn maps enabled and timestep/head matches): compute
+        Detailed maps (when enabled and timestep/head matches): compute
         downsampled attention maps and save skip_lists for selected subset.
         For disabled timesteps, attn maps are still computed from Q@K^T and
         a synthetic "all tiles computed" skip list is stored.
+
+        Stats (when enabled): accumulate running mean/std/max/min of attention
+        maps at full resolution via Welford's online algorithm across ALL
+        forward passes. Independent of detailed map capture.
 
         Args:
             write_list: The write skip list [batch, heads, qtiles, ktiles+1],
@@ -1232,17 +1256,16 @@ class LiteAttention(nn.Module, ConfigurableModule):
             return
 
         current_timestep = self._config_index - 1
-        real_batch_size = query.shape[0]
-        disabled = write_list is None
-        device = query.device
+        batch_size, seq_len, num_heads, head_dim = query.shape
+        lite_attention_disabled = write_list is None
+        scale = scale or 1.0 / math.sqrt(head_dim)
 
-        # --- Tier 1: pct for ALL heads, ALL batch items ---
-        if disabled:
-            num_heads = query.shape[2]
-            pct_per_head = torch.ones(real_batch_size, num_heads)
+        # --- pct for ALL heads, ALL batch items ---
+        if lite_attention_disabled:
+            pct_per_head = torch.ones(batch_size, num_heads)
         else:
-            pct = self.calc_percentage_per_head(write_list[:real_batch_size])
-            # pct shape: [real_batch, all_heads, qtiles] -> mean over qtiles
+            pct = self.calc_percentage_per_head(write_list[:batch_size])
+            # pct shape: [batch_size, num_heads, qtiles] -> mean over qtiles
             pct_per_head = pct.mean(dim=-1).float().cpu()
 
         self._captured_pct.append(
@@ -1253,74 +1276,138 @@ class LiteAttention(nn.Module, ConfigurableModule):
             }
         )
 
-        # --- Tier 2: attn maps + skip_lists for filtered subset ---
-        if not self._capture_attn_map:
+        # --- Determine what needs attention computation ---
+        capture_stats = self._capture_stats
+
+        capture_attn_map_batch_idxs = (
+            [bi for bi in self._capture_attn_map_batch_indices if bi < batch_size]
+            if self._capture_attn_map_batch_indices is not None
+            else range(batch_size)
+        )
+        capture_attn_map_head_idxs = (
+            [hi for hi in self._capture_attn_map_heads if hi < num_heads]
+            if self._capture_attn_map_heads is not None
+            else range(num_heads)
+        )
+        capture_attn_map = self._capture_attn_map
+        capture_attn_map &= (
+            self._capture_attn_map_timesteps is None
+            or current_timestep in self._capture_attn_map_timesteps
+        )
+
+        if not capture_attn_map and not capture_stats:
             return
 
-        if (
-            self._capture_attn_map_timesteps is not None
-            and current_timestep not in self._capture_attn_map_timesteps
-        ):
-            return
+        # --- Skip list for detailed capture ---
+        if capture_attn_map:
+            if lite_attention_disabled:
+                dtype = torch.int8 if self.use_int8 else query.dtype
+                v_colmajor = (
+                    self._last_v_colmajor
+                    if self._last_v_colmajor is not None
+                    else False
+                )
+                kBlockM, kBlockN = self.get_MN(head_dim, dtype, v_colmajor)
+                qtiles = self.ceil_div(query.shape[1], kBlockM)
+                ktiles = self.ceil_div(key.shape[1], kBlockN)
+                captured_skip = torch.zeros(
+                    len(capture_attn_map_batch_idxs),
+                    len(capture_attn_map_head_idxs),
+                    qtiles,
+                    ktiles + 1,
+                    dtype=torch.int16,
+                )
+                captured_skip[:, :, :, 0] = 2
+                captured_skip[:, :, :, 1] = ktiles - 1
+                captured_skip[:, :, :, 2] = -1
+            else:
+                captured_skip = (
+                    write_list[capture_attn_map_batch_idxs][
+                        :, capture_attn_map_head_idxs
+                    ]
+                    .clone()
+                    .to(dtype=torch.int16, device="cpu")
+                )
 
-        batch_idx = self._capture_attn_map_batch_indices.to(device)
-        batch_idx = batch_idx[batch_idx < real_batch_size]
-        if batch_idx.numel() == 0:
-            return
-
-        # Resolve heads: None means all heads
-        if self._capture_attn_map_heads is not None:
-            head_idx = self._capture_attn_map_heads.to(device)
-        else:
-            num_heads = query.shape[2]
-            head_idx = torch.arange(num_heads, device=device)
-
-        # Skip list: real or synthetic "all tiles computed"
-        if disabled:
-            head_dim = query.shape[-1]
-            dtype = torch.int8 if self.use_int8 else query.dtype
-            v_colmajor = (
-                self._last_v_colmajor if self._last_v_colmajor is not None else False
-            )
-            kBlockM, kBlockN = self.get_MN(head_dim, dtype, v_colmajor)
-            qtiles = self.ceil_div(query.shape[1], kBlockM)
-            ktiles = self.ceil_div(key.shape[1], kBlockN)
-            captured_skip = torch.zeros(
-                len(batch_idx), len(head_idx), qtiles, ktiles + 1, dtype=torch.int16
-            )
-            captured_skip[:, :, :, 0] = 2
-            captured_skip[:, :, :, 1] = ktiles - 1
-            captured_skip[:, :, :, 2] = -1
-        else:
-            captured_skip = (
-                write_list[batch_idx][:, head_idx]
-                .clone()
-                .to(dtype=torch.int16, device="cpu")
-            )
-
-        # Compute downsampled attention maps
-        res = self._capture_attn_map_res
+        # --- Compute attention maps per head ---
         attn_maps = []
-        raw_scale = (1.0 / math.sqrt(query.shape[-1])) if scale is None else scale
-        for bi in batch_idx:
+        for bi in capture_attn_map_batch_idxs:
             head_maps = []
-            for hi in head_idx:
+            for hi_loop_idx, hi in enumerate(capture_attn_map_head_idxs):
                 q_h = query[bi, :, hi, :].unsqueeze(0).unsqueeze(0)
                 k_h = key[bi, :, hi, :].unsqueeze(0).unsqueeze(0)
-                qk = (q_h.float() @ k_h.float().transpose(-2, -1)) * raw_scale
-                attn = torch.softmax(qk, dim=-1)
-                attn_down = F.adaptive_max_pool2d(attn, output_size=(res, res))
-                head_maps.append(attn_down[0, 0].half().cpu())
-            attn_maps.append(torch.stack(head_maps))
-        attn_maps = torch.stack(attn_maps)  # [n_batch_sel, n_heads_sel, res, res]
+                qk = (q_h.float() @ k_h.float().transpose(-2, -1)) * scale
+                attn = torch.softmax(qk, dim=-1)  # [1, 1, seq_q, seq_k]
 
-        self._captured_maps.append(
-            {
-                "timestep": current_timestep,
-                "skip_list": captured_skip,  # [n_batch_sel, n_heads_sel, qtiles, ktiles+1]
-                "attn_map": attn_maps,  # [n_batch_sel, n_heads_sel, res, res]
-            }
-        )
+                # Detailed map pooling
+                if capture_attn_map:
+                    if self._capture_attn_map_res < seq_len:
+                        attn_down = F.adaptive_max_pool2d(
+                            attn,
+                            output_size=(
+                                self._capture_attn_map_res,
+                                self._capture_attn_map_res,
+                            ),
+                        )
+                    else:
+                        attn_down = attn
+                    head_maps.append(attn_down[0, 0].half().cpu())
+
+                # Stats accumulation at full resolution (batch 0 only)
+                if capture_stats:
+                    val = attn[0, 0].float().cpu()
+
+                    # Lazy init on first call
+                    if self._stats_mean is None:
+                        n_heads = len(capture_attn_map_head_idxs)
+                        h, w = val.shape
+                        self._stats_mean = torch.zeros(
+                            n_heads, h, w, dtype=torch.float32
+                        )
+                        self._stats_m2 = torch.zeros(n_heads, h, w, dtype=torch.float32)
+                        self._stats_max = torch.full(
+                            (n_heads, h, w), float("-inf"), dtype=torch.float32
+                        )
+                        self._stats_min = torch.full(
+                            (n_heads, h, w), float("inf"), dtype=torch.float32
+                        )
+
+                    # Welford's online algorithm
+                    self._stats_count += (
+                        1 if hi_loop_idx == 0 else 0
+                    )  # increment once per pass
+                    count = self._stats_count
+                    mean_h = self._stats_mean[hi_loop_idx]
+                    delta = val - mean_h
+                    mean_h.add_(delta / count)
+                    delta2 = val - mean_h
+                    self._stats_m2[hi_loop_idx].add_(delta * delta2)
+                    torch.maximum(
+                        self._stats_max[hi_loop_idx],
+                        val,
+                        out=self._stats_max[hi_loop_idx],
+                    )
+                    torch.minimum(
+                        self._stats_min[hi_loop_idx],
+                        val,
+                        out=self._stats_min[hi_loop_idx],
+                    )
+
+                del qk, attn  # free GPU memory
+
+            if head_maps:
+                attn_maps.append(torch.stack(head_maps))
+
+        if attn_maps:
+            self._captured_maps.append(
+                {
+                    "timestep": current_timestep,
+                    "skip_list": captured_skip,
+                    "attn_map": torch.stack(
+                        attn_maps
+                    ),  # [n_batch_sel, n_heads_sel, res, res],
+                }
+            )
 
     def visualize_skips(
         self,
@@ -1799,38 +1886,36 @@ class LiteAttentionRegistry(ModuleRegistry):
         attn_map_heads: Optional[list] = None,
         attn_map_batch_indices: Optional[list] = None,
         attn_map_res: int = 256,
+        stats: bool = False,
     ) -> None:
         """Enable debug capture on all modules.
 
         All modules always capture pct_per_head for every timestep and head.
         Attn maps + skip_lists are captured only for the filtered subset.
+        Stats (mean/std/max/min) are accumulated at full resolution on the same
+        subset of modules that get attn maps, across ALL forward passes.
 
         Args:
             save_path: Path for the .pt capture file (written by save()).
-            attn_map_modules: Which modules capture attn maps. Can be:
+            attn_map_modules: Which modules capture attn maps (and stats). Can be:
                 - list[str]: exact module names
                 - Callable[[str], bool]: predicate on module name
                 - None: all modules (when attn_map_res > 0)
             attn_map_timesteps: Timestep indices for map capture, or None for all.
             attn_map_heads: Head indices for map capture, or None for all.
-            attn_map_batch_indices: Batch indices for map capture. Defaults to [0].
+            attn_map_batch_indices: Batch indices for map capture, or None for all.
             attn_map_res: Resolution for downsampled attention maps.
                 Set to 0 to skip attention map capture entirely.
+            stats: Enable running stats accumulation at full resolution.
         """
         self._capture_path = Path(save_path)
 
-        heads_t = torch.tensor(attn_map_heads) if attn_map_heads is not None else None
         timesteps_set = (
             set(attn_map_timesteps) if attn_map_timesteps is not None else None
         )
-        batch_t = (
-            torch.tensor(attn_map_batch_indices)
-            if attn_map_batch_indices is not None
-            else torch.tensor([0])
-        )
 
         for name, module in self.named_modules.items():
-            # Determine if this module should capture attn maps
+            # Determine if this module should capture attn maps (and stats)
             capture_maps = False
             if attn_map_res > 0:
                 if attn_map_modules is None:
@@ -1843,9 +1928,10 @@ class LiteAttentionRegistry(ModuleRegistry):
             module._enable_capture(
                 attn_map=capture_maps,
                 attn_map_timesteps=timesteps_set,
-                attn_map_heads=heads_t,
-                attn_map_batch_indices=batch_t,
+                attn_map_heads=attn_map_heads,
+                attn_map_batch_indices=attn_map_batch_indices,
                 attn_map_res=attn_map_res,
+                stats=stats and capture_maps,
             )
 
     def save(self) -> None:
@@ -1886,13 +1972,9 @@ class LiteAttentionRegistry(ModuleRegistry):
                 torch.int8 if module.use_int8 else module._last_dtype,
             )
 
-            # --- Tier 1: pct for all timesteps/heads ---
-            timesteps = torch.tensor(
-                [d["timestep"] for d in module._captured_pct], dtype=torch.int64
-            )
-            thresholds = torch.tensor(
-                [d["threshold"] for d in module._captured_pct], dtype=torch.float32
-            )
+            # --- pct for all timesteps/heads ---
+            timesteps = [d["timestep"] for d in module._captured_pct]
+            thresholds = [d["threshold"] for d in module._captured_pct]
             pct_per_head = torch.stack(
                 [d["pct_per_head"] for d in module._captured_pct]
             )  # [T_all, B, H_all]
@@ -1909,23 +1991,23 @@ class LiteAttentionRegistry(ModuleRegistry):
                 "kBlockN": kBlockN,
             }
 
-            # --- Tier 2: attn maps + skip_lists for filtered subset ---
+            # --- Detailed attn maps + skip_lists for filtered subset ---
             if module._captured_maps:
-                map_timesteps = torch.tensor(
-                    [d["timestep"] for d in module._captured_maps], dtype=torch.int64
-                )
+                map_timesteps = [d["timestep"] for d in module._captured_maps]
                 skip_lists = torch.stack(
                     [d["skip_list"] for d in module._captured_maps]
                 )
                 attn_maps = torch.stack([d["attn_map"] for d in module._captured_maps])
 
-                # Resolve heads tensor
                 if module._capture_attn_map_heads is not None:
-                    map_heads = module._capture_attn_map_heads.cpu()
+                    map_heads = module._capture_attn_map_heads
                 else:
-                    map_heads = torch.arange(pct_per_head.shape[-1])
+                    map_heads = list(range(pct_per_head.shape[-1]))
 
-                map_batch = module._capture_attn_map_batch_indices.cpu()
+                if module._capture_attn_map_batch_indices is not None:
+                    map_batch = module._capture_attn_map_batch_indices
+                else:
+                    map_batch = list(range(pct_per_head.shape[1]))
 
                 mod_data["attn_maps"] = attn_maps
                 mod_data["skip_lists"] = skip_lists
@@ -1933,6 +2015,15 @@ class LiteAttentionRegistry(ModuleRegistry):
                 mod_data["map_heads"] = map_heads
                 mod_data["map_batch_indices"] = map_batch
                 mod_data["attn_map_res"] = module._capture_attn_map_res
+
+            # --- Running stats (independent of detailed maps) ---
+            if module._stats_count > 0 and module._stats_mean is not None:
+                count = module._stats_count
+                mod_data["stats_mean"] = module._stats_mean.float()
+                mod_data["stats_std"] = (module._stats_m2 / count).sqrt().float()
+                mod_data["stats_max"] = module._stats_max.float()
+                mod_data["stats_min"] = module._stats_min.float()
+                mod_data["stats_count"] = module._stats_count
 
             file_data["modules"][name] = mod_data
 
