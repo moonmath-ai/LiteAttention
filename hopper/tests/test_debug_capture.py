@@ -68,10 +68,10 @@ def test_pct_captured_for_all_modules_and_timesteps(qkv, tmp_path):
     assert "modules" in data
     for name in registry.named_modules:
         mod_data = data["modules"][name]
-        assert mod_data["timesteps"].shape[0] == 5
+        assert len(mod_data["timesteps"]) == 5
         # pct_per_head: [T=5, B=1, H=8]
         assert mod_data["pct_per_head"].shape == (5, BATCH, HEADS)
-        assert mod_data["thresholds"].shape == (5,)
+        assert len(mod_data["thresholds"]) == 5
         assert "attn_maps" not in mod_data
         assert "skip_lists" not in mod_data
 
@@ -98,13 +98,13 @@ def test_pct_shape_with_maps_enabled(qkv, tmp_path):
         mod_data = data["modules"][name]
         # pct always has ALL timesteps and ALL heads
         assert mod_data["pct_per_head"].shape == (3, BATCH, HEADS)
-        assert mod_data["timesteps"].shape[0] == 3
+        assert len(mod_data["timesteps"]) == 3
 
     # attn0 has maps for timesteps 0 and 2 only
     attn0 = data["modules"]["attn0"]
     assert "attn_maps" in attn0
-    assert torch.equal(attn0["map_timesteps"], torch.tensor([0, 2]))
-    assert torch.equal(attn0["map_heads"], torch.tensor([0, 3]))
+    assert attn0["map_timesteps"] == [0, 2]
+    assert attn0["map_heads"] == [0, 3]
     assert attn0["attn_maps"].shape == (2, 1, 2, 32, 32)
     assert attn0["skip_lists"].shape[0] == 2  # 2 map timesteps
 
@@ -191,8 +191,8 @@ def test_attn_map_timestep_filter(qkv, tmp_path):
 
     data = load_capture(save_path)
     for mod_data in data["modules"].values():
-        assert mod_data["timesteps"].shape[0] == 5  # pct has all 5
-        assert torch.equal(mod_data["map_timesteps"], torch.tensor([1, 3]))
+        assert len(mod_data["timesteps"]) == 5  # pct has all 5
+        assert mod_data["map_timesteps"] == [1, 3]
         assert mod_data["attn_maps"].shape[0] == 2
 
 
@@ -214,7 +214,7 @@ def test_attn_map_head_filter(qkv, tmp_path):
     data = load_capture(save_path)
     for mod_data in data["modules"].values():
         assert mod_data["pct_per_head"].shape[2] == HEADS  # pct has all heads
-        assert torch.equal(mod_data["map_heads"], torch.tensor([0, 5]))
+        assert mod_data["map_heads"] == [0, 5]
         assert mod_data["attn_maps"].shape[2] == 2  # maps only for 2 heads
 
 
@@ -235,13 +235,13 @@ def test_save_preserves_data(qkv, tmp_path):
     registry.save()
 
     data1 = load_capture(save_path)
-    n1 = list(data1["modules"].values())[0]["timesteps"].shape[0]
+    n1 = len(list(data1["modules"].values())[0]["timesteps"])
 
     warmup_all(registry, q, k, v, n=3)
     registry.save()
 
     data2 = load_capture(save_path)
-    n2 = list(data2["modules"].values())[0]["timesteps"].shape[0]
+    n2 = len(list(data2["modules"].values())[0]["timesteps"])
     assert n2 == n1 + 3
 
 
@@ -361,8 +361,8 @@ def test_render_skip_images_skips_modules_without_maps(tmp_path):
     data = {
         "modules": {
             "no_maps": {
-                "timesteps": torch.tensor([0]),
-                "thresholds": torch.tensor([-8.0]),
+                "timesteps": [0],
+                "thresholds": [-8.0],
                 "pct_per_head": torch.zeros(1, 1, 1),
                 "seq_len_q": 256,
                 "seq_len_k": 256,
@@ -375,3 +375,207 @@ def test_render_skip_images_skips_modules_without_maps(tmp_path):
     }
     # Should not raise — just produces no images
     render_skip_images(data, output_dir=tmp_path / "vis")
+
+
+# ===========================================================================
+# Stats capture
+# ===========================================================================
+
+
+def test_stats_captured_basic(qkv, tmp_path):
+    """stats=True captures running statistics at full resolution."""
+    q, k, v = qkv
+    model = SimpleModel()
+    registry = LiteAttentionRegistry.from_model(model, mode="const", threshold=-8.0)
+    save_path = tmp_path / "capture.pt"
+
+    registry.enable_capture(
+        save_path=save_path,
+        attn_map_modules=["attn0"],
+        attn_map_heads=[0],
+        attn_map_batch_indices=[0],
+        attn_map_res=32,
+        stats=True,
+    )
+    warmup_all(registry, q, k, v, n=3)
+    registry.save()
+
+    data = load_capture(save_path)
+    attn0 = data["modules"]["attn0"]
+
+    # Stats should be present for attn0 (which has map capture + stats)
+    assert "stats_mean" in attn0
+    assert "stats_std" in attn0
+    assert "stats_max" in attn0
+    assert "stats_min" in attn0
+    assert attn0["stats_count"] == 3
+
+    # Shape: [n_batch_sel=1, n_head_sel=1, seq_q, seq_k]
+    assert attn0["stats_mean"].shape == (1, 1, SEQ_LEN, SEQ_LEN)
+    assert attn0["stats_std"].shape == (1, 1, SEQ_LEN, SEQ_LEN)
+    assert attn0["stats_max"].shape == (1, 1, SEQ_LEN, SEQ_LEN)
+    assert attn0["stats_min"].shape == (1, 1, SEQ_LEN, SEQ_LEN)
+    assert attn0["stats_batch_indices"] == [0]
+    assert attn0["stats_heads"] == [0]
+
+    # attn1 should NOT have stats (not in attn_map_modules)
+    attn1 = data["modules"]["attn1"]
+    assert "stats_mean" not in attn1
+
+
+def test_stats_not_captured_when_disabled(qkv, tmp_path):
+    """stats=False (default) does not capture statistics."""
+    q, k, v = qkv
+    model = SimpleModel()
+    registry = LiteAttentionRegistry.from_model(model, mode="const", threshold=-8.0)
+    save_path = tmp_path / "capture.pt"
+
+    registry.enable_capture(
+        save_path=save_path,
+        attn_map_modules=["attn0"],
+        attn_map_res=32,
+    )
+    warmup_all(registry, q, k, v, n=2)
+    registry.save()
+
+    data = load_capture(save_path)
+    assert "stats_mean" not in data["modules"]["attn0"]
+
+
+def test_stats_values_are_valid(qkv, tmp_path):
+    """Stats values are within valid ranges for softmax outputs."""
+    q, k, v = qkv
+    model = SimpleModel()
+    registry = LiteAttentionRegistry.from_model(model, mode="const", threshold=-8.0)
+    save_path = tmp_path / "capture.pt"
+
+    registry.enable_capture(
+        save_path=save_path,
+        attn_map_modules=["attn0"],
+        attn_map_heads=[0],
+        attn_map_batch_indices=[0],
+        attn_map_res=64,
+        stats=True,
+    )
+    warmup_all(registry, q, k, v, n=3)
+    registry.save()
+
+    data = load_capture(save_path)
+    attn0 = data["modules"]["attn0"]
+
+    # Softmax outputs are in [0, 1]
+    assert attn0["stats_mean"].min() >= 0.0
+    assert attn0["stats_mean"].max() <= 1.0
+    assert attn0["stats_max"].min() >= 0.0
+    assert attn0["stats_max"].max() <= 1.0
+    assert attn0["stats_min"].min() >= 0.0
+    assert attn0["stats_min"].max() <= 1.0
+
+    # std is non-negative
+    assert attn0["stats_std"].min() >= 0.0
+
+    # min <= mean <= max
+    assert (attn0["stats_min"] <= attn0["stats_mean"] + 1e-6).all()
+    assert (attn0["stats_mean"] <= attn0["stats_max"] + 1e-6).all()
+
+
+def test_stats_accumulate_all_timesteps(qkv, tmp_path):
+    """Stats accumulate across ALL forward passes, regardless of attn_map_timesteps."""
+    q, k, v = qkv
+    model = SimpleModel()
+    registry = LiteAttentionRegistry.from_model(model, mode="const", threshold=-8.0)
+    save_path = tmp_path / "capture.pt"
+
+    registry.enable_capture(
+        save_path=save_path,
+        attn_map_modules=["attn0"],
+        attn_map_timesteps=[0, 2],  # only capture maps for timesteps 0 and 2
+        attn_map_heads=[0],
+        attn_map_batch_indices=[0],
+        attn_map_res=32,
+        stats=True,
+    )
+    warmup_all(registry, q, k, v, n=5)
+    registry.save()
+
+    data = load_capture(save_path)
+    attn0 = data["modules"]["attn0"]
+
+    # Detailed maps only captured for timesteps 0 and 2
+    assert attn0["map_timesteps"] == [0, 2]
+    assert attn0["attn_maps"].shape[0] == 2
+
+    # Stats accumulated over ALL 5 timesteps
+    assert attn0["stats_count"] == 5
+
+
+def test_stats_multiple_heads_and_batches(tmp_path):
+    """Stats capture with multiple heads and batches has correct shape."""
+    torch.manual_seed(42)
+    torch.cuda.manual_seed(42)
+    batch = 2
+    q = torch.randn(
+        batch, SEQ_LEN, HEADS, HEAD_DIM, device="cuda", dtype=torch.bfloat16
+    )
+    k = torch.randn(
+        batch, SEQ_LEN, HEADS, HEAD_DIM, device="cuda", dtype=torch.bfloat16
+    )
+    v = torch.randn(
+        batch, SEQ_LEN, HEADS, HEAD_DIM, device="cuda", dtype=torch.bfloat16
+    )
+
+    model = SimpleModel(max_batch_size=batch)
+    registry = LiteAttentionRegistry.from_model(model, mode="const", threshold=-8.0)
+    save_path = tmp_path / "capture.pt"
+
+    sel_heads = [0, 3, 7]
+    sel_batch = [0, 1]
+    registry.enable_capture(
+        save_path=save_path,
+        attn_map_modules=["attn0"],
+        attn_map_heads=sel_heads,
+        attn_map_batch_indices=sel_batch,
+        attn_map_res=64,
+        stats=True,
+    )
+    warmup_all(registry, q, k, v, n=2)
+    registry.save()
+
+    data = load_capture(save_path)
+    attn0 = data["modules"]["attn0"]
+
+    assert attn0["stats_mean"].shape == (
+        len(sel_batch),
+        len(sel_heads),
+        SEQ_LEN,
+        SEQ_LEN,
+    )
+    assert attn0["stats_batch_indices"] == sel_batch
+    assert attn0["stats_heads"] == sel_heads
+    assert attn0["stats_count"] == 2
+
+
+def test_stats_all_heads_all_batches(qkv, tmp_path):
+    """Stats with None heads/batch captures all heads and batches."""
+    q, k, v = qkv
+    model = SimpleModel()
+    registry = LiteAttentionRegistry.from_model(model, mode="const", threshold=-8.0)
+    save_path = tmp_path / "capture.pt"
+
+    registry.enable_capture(
+        save_path=save_path,
+        attn_map_modules=["attn0"],
+        attn_map_heads=None,
+        attn_map_batch_indices=None,
+        attn_map_res=64,
+        stats=True,
+    )
+    warmup_all(registry, q, k, v, n=2)
+    registry.save()
+
+    data = load_capture(save_path)
+    attn0 = data["modules"]["attn0"]
+
+    assert attn0["stats_mean"].shape == (BATCH, HEADS, SEQ_LEN, SEQ_LEN)
+    assert attn0["stats_batch_indices"] == list(range(BATCH))
+    assert attn0["stats_heads"] == list(range(HEADS))

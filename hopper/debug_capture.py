@@ -146,11 +146,11 @@ def render_skip_images(
         ]
 
         for ti, t in enumerate(map_timesteps):
-            t_val = int(t.item())
+            t_val = int(t)
             for bi_idx, b in enumerate(map_batch_indices):
-                b_val = int(b.item())
+                b_val = int(b)
                 for hi_idx, h in enumerate(map_heads):
-                    h_val = int(h.item())
+                    h_val = int(h)
 
                     img_dir = output_dir / mod_name / f"batch_{b_val}" / f"head_{h_val}"
                     os.makedirs(img_dir, exist_ok=True)
@@ -158,13 +158,13 @@ def render_skip_images(
                     attn_map = attn_maps[ti, bi_idx, hi_idx].float()
 
                     # Look up pct from pct_per_head_all
-                    t_all_idx = (all_timesteps == t).nonzero(as_tuple=True)[0]
-                    if t_all_idx.numel() > 0:
+                    try:
+                        t_all_idx = all_timesteps.index(t_val)
                         pct = (
-                            float(pct_per_head_all[t_all_idx[0], b_val, h_val].item())
+                            float(pct_per_head_all[t_all_idx, b_val, h_val].item())
                             * 100
                         )
-                    else:
+                    except (ValueError, AttributeError):
                         pct = 0.0
 
                     plt.figure(figsize=(6, 6))
@@ -237,7 +237,7 @@ def to_xarray(data: dict):
 
     datasets = {}
     for mod_name, mod_data in data["modules"].items():
-        timesteps = mod_data["timesteps"].numpy()
+        timesteps = mod_data["timesteps"]
         n_batch = mod_data["pct_per_head"].shape[1]
         n_heads = mod_data["pct_per_head"].shape[2]
 
@@ -254,9 +254,9 @@ def to_xarray(data: dict):
         }
 
         if "attn_maps" in mod_data:
-            map_ts = mod_data["map_timesteps"].numpy()
-            map_heads = mod_data["map_heads"].numpy()
-            map_batch = mod_data["map_batch_indices"].numpy()
+            map_ts = mod_data["map_timesteps"]
+            map_heads = mod_data["map_heads"]
+            map_batch = mod_data["map_batch_indices"]
 
             data_vars["skip_lists"] = xr.DataArray(
                 mod_data["skip_lists"].numpy(),
