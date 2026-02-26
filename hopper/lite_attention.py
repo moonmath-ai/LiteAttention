@@ -1353,7 +1353,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
                         attn_down = attn
                     head_maps.append(attn_down[0, 0].half().cpu())
 
-                # Stats accumulation at full resolution (batch 0 only)
+                # Stats accumulation at full resolution
                 if capture_stats:
                     val = attn[0, 0].float().cpu()
 
