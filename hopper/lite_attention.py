@@ -1279,12 +1279,12 @@ class LiteAttention(nn.Module, ConfigurableModule):
         # --- Determine what needs attention computation ---
         capture_stats = self._capture_stats
 
-        capture_attn_map_batch_idxs = (
+        capture_batch_idxs = (
             [bi for bi in self._capture_attn_map_batch_indices if bi < batch_size]
             if self._capture_attn_map_batch_indices is not None
             else range(batch_size)
         )
-        capture_attn_map_head_idxs = (
+        capture_head_idxs = (
             [hi for hi in self._capture_attn_map_heads if hi < num_heads]
             if self._capture_attn_map_heads is not None
             else range(num_heads)
@@ -1311,8 +1311,8 @@ class LiteAttention(nn.Module, ConfigurableModule):
                 qtiles = self.ceil_div(query.shape[1], kBlockM)
                 ktiles = self.ceil_div(key.shape[1], kBlockN)
                 captured_skip = torch.zeros(
-                    len(capture_attn_map_batch_idxs),
-                    len(capture_attn_map_head_idxs),
+                    len(capture_batch_idxs),
+                    len(capture_head_idxs),
                     qtiles,
                     ktiles + 1,
                     dtype=torch.int16,
@@ -1322,18 +1322,16 @@ class LiteAttention(nn.Module, ConfigurableModule):
                 captured_skip[:, :, :, 2] = -1
             else:
                 captured_skip = (
-                    write_list[capture_attn_map_batch_idxs][
-                        :, capture_attn_map_head_idxs
-                    ]
+                    write_list[capture_batch_idxs][:, capture_head_idxs]
                     .clone()
                     .to(dtype=torch.int16, device="cpu")
                 )
 
         # --- Compute attention maps per head ---
         attn_maps = []
-        for bi in capture_attn_map_batch_idxs:
+        for bi in capture_batch_idxs:
             head_maps = []
-            for hi_loop_idx, hi in enumerate(capture_attn_map_head_idxs):
+            for hi_loop_idx, hi in enumerate(capture_head_idxs):
                 q_h = query[bi, :, hi, :].unsqueeze(0).unsqueeze(0)
                 k_h = key[bi, :, hi, :].unsqueeze(0).unsqueeze(0)
                 qk = (q_h.float() @ k_h.float().transpose(-2, -1)) * scale
@@ -1357,7 +1355,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
 
                     # Lazy init on first call
                     if self._stats_mean is None:
-                        n_heads = len(capture_attn_map_head_idxs)
+                        n_heads = len(capture_head_idxs)
                         h, w = val.shape
                         self._stats_mean = torch.zeros(
                             n_heads, h, w, dtype=torch.float32
