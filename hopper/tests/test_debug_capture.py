@@ -85,6 +85,7 @@ def test_pct_shape_with_maps_enabled(qkv, tmp_path):
 
     registry.enable_capture(
         save_path=save_path,
+        attn_map=True,
         attn_map_modules=["attn0"],
         attn_map_timesteps=[0, 2],
         attn_map_heads=[0, 3],
@@ -124,7 +125,7 @@ def test_attn_maps_all_modules_when_modules_none(qkv, tmp_path):
     registry = LiteAttentionRegistry.from_model(model, mode="const", threshold=-8.0)
     save_path = tmp_path / "capture.pt"
 
-    registry.enable_capture(save_path=save_path, attn_map_res=32)
+    registry.enable_capture(save_path=save_path, attn_map=True, attn_map_res=32)
     warmup_all(registry, q, k, v, n=2)
     registry.save()
 
@@ -143,6 +144,7 @@ def test_attn_map_module_filter_list(qkv, tmp_path):
 
     registry.enable_capture(
         save_path=save_path,
+        attn_map=True,
         attn_map_modules=["attn0"],
         attn_map_res=32,
     )
@@ -163,6 +165,7 @@ def test_attn_map_module_filter_callable(qkv, tmp_path):
 
     registry.enable_capture(
         save_path=save_path,
+        attn_map=True,
         attn_map_modules=lambda name: "1" in name,
         attn_map_res=32,
     )
@@ -183,6 +186,7 @@ def test_attn_map_timestep_filter(qkv, tmp_path):
 
     registry.enable_capture(
         save_path=save_path,
+        attn_map=True,
         attn_map_timesteps=[1, 3],
         attn_map_res=32,
     )
@@ -205,6 +209,7 @@ def test_attn_map_head_filter(qkv, tmp_path):
 
     registry.enable_capture(
         save_path=save_path,
+        attn_map=True,
         attn_map_heads=[0, 5],
         attn_map_res=32,
     )
@@ -230,7 +235,7 @@ def test_save_preserves_data(qkv, tmp_path):
     registry = LiteAttentionRegistry.from_model(model, mode="const", threshold=-8.0)
     save_path = tmp_path / "capture.pt"
 
-    registry.enable_capture(save_path=save_path, attn_map_res=0)
+    registry.enable_capture(save_path=save_path, attn_map=True, attn_map_res=0)
     warmup_all(registry, q, k, v, n=2)
     registry.save()
 
@@ -288,6 +293,7 @@ def test_capture_batch_out_of_range(qkv, tmp_path):
 
     registry.enable_capture(
         save_path=save_path,
+        attn_map=True,
         attn_map_batch_indices=[0, 5],
         attn_map_res=32,
     )
@@ -339,6 +345,7 @@ def test_render_skip_images(qkv, tmp_path):
 
     registry.enable_capture(
         save_path=save_path,
+        attn_map=True,
         attn_map_heads=[0],
         attn_map_timesteps=[0],
         attn_map_batch_indices=[0],
@@ -391,6 +398,7 @@ def test_stats_captured_basic(qkv, tmp_path):
 
     registry.enable_capture(
         save_path=save_path,
+        attn_map=True,
         attn_map_modules=["attn0"],
         attn_map_heads=[0],
         attn_map_batch_indices=[0],
@@ -432,6 +440,7 @@ def test_stats_not_captured_when_disabled(qkv, tmp_path):
 
     registry.enable_capture(
         save_path=save_path,
+        attn_map=True,
         attn_map_modules=["attn0"],
         attn_map_res=32,
     )
@@ -451,6 +460,7 @@ def test_stats_values_are_valid(qkv, tmp_path):
 
     registry.enable_capture(
         save_path=save_path,
+        attn_map=True,
         attn_map_modules=["attn0"],
         attn_map_heads=[0],
         attn_map_batch_indices=[0],
@@ -488,6 +498,7 @@ def test_stats_accumulate_all_timesteps(qkv, tmp_path):
 
     registry.enable_capture(
         save_path=save_path,
+        attn_map=True,
         attn_map_modules=["attn0"],
         attn_map_timesteps=[0, 2],  # only capture maps for timesteps 0 and 2
         attn_map_heads=[0],
@@ -532,6 +543,7 @@ def test_stats_multiple_heads_and_batches(tmp_path):
     sel_batch = [0, 1]
     registry.enable_capture(
         save_path=save_path,
+        attn_map=True,
         attn_map_modules=["attn0"],
         attn_map_heads=sel_heads,
         attn_map_batch_indices=sel_batch,
@@ -564,6 +576,7 @@ def test_stats_all_heads_all_batches(qkv, tmp_path):
 
     registry.enable_capture(
         save_path=save_path,
+        attn_map=True,
         attn_map_modules=["attn0"],
         attn_map_heads=None,
         attn_map_batch_indices=None,
