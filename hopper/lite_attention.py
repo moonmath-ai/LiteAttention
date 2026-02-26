@@ -1887,6 +1887,7 @@ class LiteAttentionRegistry(ModuleRegistry):
     def enable_capture(
         self,
         save_path: str | Path,
+        attn_map: bool = False,
         attn_map_modules: Union[list, typing.Callable, None] = None,
         attn_map_timesteps: Optional[list] = None,
         attn_map_heads: Optional[list] = None,
@@ -1899,19 +1900,19 @@ class LiteAttentionRegistry(ModuleRegistry):
         All modules always capture pct_per_head for every timestep and head.
         Attn maps + skip_lists are captured only for the filtered subset.
         Stats (mean/std/max/min) are accumulated at full resolution on the same
-        subset of modules that get attn maps, across ALL forward passes.
+        subset of modules, across ALL forward passes.
 
         Args:
             save_path: Path for the .pt capture file (written by save()).
-            attn_map_modules: Which modules capture attn maps (and stats). Can be:
+            attn_map: Enable detailed attention map capture.
+            attn_map_modules: Which modules capture attn maps and/or stats. Can be:
                 - list[str]: exact module names
                 - Callable[[str], bool]: predicate on module name
-                - None: all modules (when attn_map_res > 0)
+                - None: all modules
             attn_map_timesteps: Timestep indices for map capture, or None for all.
             attn_map_heads: Head indices for map capture, or None for all.
             attn_map_batch_indices: Batch indices for map capture, or None for all.
             attn_map_res: Resolution for downsampled attention maps.
-                Set to 0 to skip attention map capture entirely.
             stats: Enable running stats accumulation at full resolution.
         """
         self._capture_path = Path(save_path)
@@ -1921,23 +1922,21 @@ class LiteAttentionRegistry(ModuleRegistry):
         )
 
         for name, module in self.named_modules.items():
-            # Determine if this module should capture attn maps (and stats)
-            capture_maps = False
-            if attn_map_res > 0:
-                if attn_map_modules is None:
-                    capture_maps = True
-                elif callable(attn_map_modules):
-                    capture_maps = attn_map_modules(name)
-                else:
-                    capture_maps = name in attn_map_modules
+            # Determine if this module is in the selected subset
+            if attn_map_modules is None:
+                selected = True
+            elif callable(attn_map_modules):
+                selected = attn_map_modules(name)
+            else:
+                selected = name in attn_map_modules
 
             module._enable_capture(
-                attn_map=capture_maps,
+                attn_map=attn_map and selected,
                 attn_map_timesteps=timesteps_set,
                 attn_map_heads=attn_map_heads,
                 attn_map_batch_indices=attn_map_batch_indices,
                 attn_map_res=attn_map_res,
-                stats=stats and capture_maps,
+                stats=stats and selected,
             )
 
     def save(self) -> None:
