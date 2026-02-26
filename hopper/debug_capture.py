@@ -278,12 +278,13 @@ def to_xarray(data: dict):
             )
 
         if "stats_mean" in mod_data:
-            stats_heads = list(range(mod_data["stats_mean"].shape[0]))
+            stats_batch = mod_data["stats_batch_indices"]
+            stats_heads = mod_data["stats_heads"]
             for key in ("stats_mean", "stats_std", "stats_max", "stats_min"):
                 data_vars[key] = xr.DataArray(
                     mod_data[key].numpy(),
-                    dims=["head", "y", "x"],
-                    coords={"head": stats_heads},
+                    dims=["stats_batch", "stats_head", "y", "x"],
+                    coords={"stats_batch": stats_batch, "stats_head": stats_heads},
                 )
 
         attrs = {

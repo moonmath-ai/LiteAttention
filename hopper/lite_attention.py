@@ -249,10 +249,14 @@ class LiteAttention(nn.Module, ConfigurableModule):
         # Stats capture (optional, independent of detailed maps): running statistics at full resolution
         self._capture_stats = False
         self._stats_count = 0
-        self._stats_mean = None  # lazily initialized: [n_heads, res, res] float32 CPU
-        self._stats_m2 = None  # [n_heads, res, res] float32 CPU (Welford's M2)
-        self._stats_max = None  # [n_heads, res, res] float32 CPU
-        self._stats_min = None  # [n_heads, res, res] float32 CPU
+        self._stats_mean = (
+            None  # lazily initialized: [n_batches, n_heads, seq_q, seq_k] float32 CPU
+        )
+        self._stats_m2 = (
+            None  # [n_batches, n_heads, seq_q, seq_k] float32 CPU (Welford's M2)
+        )
+        self._stats_max = None  # [n_batches, n_heads, seq_q, seq_k] float32 CPU
+        self._stats_min = None  # [n_batches, n_heads, seq_q, seq_k] float32 CPU
 
     @staticmethod
     def ceil_div(x, y):
@@ -1329,9 +1333,9 @@ class LiteAttention(nn.Module, ConfigurableModule):
 
         # --- Compute attention maps per head ---
         attn_maps = []
-        for bi in capture_batch_idxs:
+        for bi_idx, bi in enumerate(capture_batch_idxs):
             head_maps = []
-            for hi_loop_idx, hi in enumerate(capture_head_idxs):
+            for hi_idx, hi in enumerate(capture_head_idxs):
                 q_h = query[bi, :, hi, :].unsqueeze(0).unsqueeze(0)
                 k_h = key[bi, :, hi, :].unsqueeze(0).unsqueeze(0)
                 qk = (q_h.float() @ k_h.float().transpose(-2, -1)) * scale
@@ -1355,38 +1359,44 @@ class LiteAttention(nn.Module, ConfigurableModule):
 
                     # Lazy init on first call
                     if self._stats_mean is None:
+                        n_batches = len(capture_batch_idxs)
                         n_heads = len(capture_head_idxs)
                         h, w = val.shape
                         self._stats_mean = torch.zeros(
-                            n_heads, h, w, dtype=torch.float32
+                            n_batches, n_heads, h, w, dtype=torch.float32
                         )
-                        self._stats_m2 = torch.zeros(n_heads, h, w, dtype=torch.float32)
+                        self._stats_m2 = torch.zeros(
+                            n_batches, n_heads, h, w, dtype=torch.float32
+                        )
                         self._stats_max = torch.full(
-                            (n_heads, h, w), float("-inf"), dtype=torch.float32
+                            (n_batches, n_heads, h, w),
+                            float("-inf"),
+                            dtype=torch.float32,
                         )
                         self._stats_min = torch.full(
-                            (n_heads, h, w), float("inf"), dtype=torch.float32
+                            (n_batches, n_heads, h, w),
+                            float("inf"),
+                            dtype=torch.float32,
                         )
 
                     # Welford's online algorithm
-                    self._stats_count += (
-                        1 if hi_loop_idx == 0 else 0
-                    )  # increment once per pass
+                    if bi_idx == 0 and hi_idx == 0:
+                        self._stats_count += 1
                     count = self._stats_count
-                    mean_h = self._stats_mean[hi_loop_idx]
-                    delta = val - mean_h
-                    mean_h.add_(delta / count)
-                    delta2 = val - mean_h
-                    self._stats_m2[hi_loop_idx].add_(delta * delta2)
+                    mean_bh = self._stats_mean[bi_idx, hi_idx]
+                    delta = val - mean_bh
+                    mean_bh.add_(delta / count)
+                    delta2 = val - mean_bh
+                    self._stats_m2[bi_idx, hi_idx].add_(delta * delta2)
                     torch.maximum(
-                        self._stats_max[hi_loop_idx],
+                        self._stats_max[bi_idx, hi_idx],
                         val,
-                        out=self._stats_max[hi_loop_idx],
+                        out=self._stats_max[bi_idx, hi_idx],
                     )
                     torch.minimum(
-                        self._stats_min[hi_loop_idx],
+                        self._stats_min[bi_idx, hi_idx],
                         val,
-                        out=self._stats_min[hi_loop_idx],
+                        out=self._stats_min[bi_idx, hi_idx],
                     )
 
                 del qk, attn  # free GPU memory
@@ -2015,11 +2025,23 @@ class LiteAttentionRegistry(ModuleRegistry):
             # --- Running stats (independent of detailed maps) ---
             if module._stats_count > 0 and module._stats_mean is not None:
                 count = module._stats_count
-                mod_data["stats_mean"] = module._stats_mean.float()
+                mod_data["stats_mean"] = (
+                    module._stats_mean.float()
+                )  # [B_sel, H_sel, h, w]
                 mod_data["stats_std"] = (module._stats_m2 / count).sqrt().float()
                 mod_data["stats_max"] = module._stats_max.float()
                 mod_data["stats_min"] = module._stats_min.float()
                 mod_data["stats_count"] = module._stats_count
+                if module._capture_attn_map_batch_indices is not None:
+                    mod_data["stats_batch_indices"] = (
+                        module._capture_attn_map_batch_indices
+                    )
+                else:
+                    mod_data["stats_batch_indices"] = list(range(pct_per_head.shape[1]))
+                if module._capture_attn_map_heads is not None:
+                    mod_data["stats_heads"] = module._capture_attn_map_heads
+                else:
+                    mod_data["stats_heads"] = list(range(pct_per_head.shape[-1]))
 
             file_data["modules"][name] = mod_data
 
