@@ -1341,16 +1341,14 @@ class LiteAttention(nn.Module, ConfigurableModule):
 
                 # Detailed map pooling
                 if capture_attn_map:
-                    if self._capture_attn_map_res < seq_len:
-                        attn_down = F.adaptive_max_pool2d(
-                            attn,
-                            output_size=(
-                                self._capture_attn_map_res,
-                                self._capture_attn_map_res,
-                            ),
-                        )
-                    else:
-                        attn_down = attn
+                    res = self._capture_attn_map_res
+                    attn_down = F.adaptive_max_pool2d(
+                        attn,
+                        output_size=(
+                            min(res, attn.shape[-2]),
+                            min(res, attn.shape[-1]),
+                        ),
+                    )
                     head_maps.append(attn_down[0, 0].half().cpu())
 
                 # Stats accumulation at full resolution
