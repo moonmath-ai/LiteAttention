@@ -62,7 +62,6 @@ testpaths = ["hopper/tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = ["-v", "--tb=short"]
 
 [tool.uv]
 no-build-isolation-package = ["lite-attention"]
