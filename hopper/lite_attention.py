@@ -1357,8 +1357,14 @@ class LiteAttention(nn.Module, ConfigurableModule):
                 qk = (q_h.float() @ k_h.float().transpose(-2, -1)) * scale
                 # Block-level max of pre-softmax QK scores
                 if capture_qk_block_map:
-                    # TODO: qk down needs to work on qk_padded instead of qk.
-                    qk_down = F.adaptive_max_pool2d(qk, output_size=(qtiles, ktiles))
+                    pad_q = (kBlockM - qk.shape[-2] % kBlockM) % kBlockM
+                    pad_k = (kBlockN - qk.shape[-1] % kBlockN) % kBlockN
+                    qk_padded = F.pad(qk, (0, pad_k, 0, pad_q), value=float("-inf"))
+                    qk_down = F.max_pool2d(
+                        qk_padded,
+                        kernel_size=(kBlockM, kBlockN),
+                        stride=(kBlockM, kBlockN),
+                    )
                     head_qk_block_maps.append(qk_down[0, 0].half().cpu())
 
                 attn = (
