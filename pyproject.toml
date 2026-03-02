@@ -84,3 +84,7 @@ explicit = true
 name = "pytorch-cu129"
 url = "https://download.pytorch.org/whl/cu129"
 explicit = true
+
+[tool.ruff]
+line-length = 88
+exclude = ['csrc/composable_kernel', 'csrc/cutlass']
