@@ -4,11 +4,15 @@ import time
 
 import pytest
 import torch
-from flash_attn.models.gpt import GPTLMHeadModel
-from flash_attn.models.gpt_neox import gpt_neox_config_to_gpt2_config, remap_state_dict_hf_gpt_neox
-from flash_attn.utils.pretrained import state_dict_from_pretrained
 from transformers import AutoTokenizer, GPTNeoXConfig
 from transformers.models.gpt_neox.modeling_gpt_neox import GPTNeoXForCausalLM
+
+from flash_attn.models.gpt import GPTLMHeadModel
+from flash_attn.models.gpt_neox import (
+    gpt_neox_config_to_gpt2_config,
+    remap_state_dict_hf_gpt_neox,
+)
+from flash_attn.utils.pretrained import state_dict_from_pretrained
 
 
 @pytest.mark.parametrize("model_name", ["EleutherAI/gpt-neox-20b"])
@@ -17,7 +21,9 @@ def test_gptj_state_dict(model_name):
     pretrained_state_dict = remap_state_dict_hf_gpt_neox(
         state_dict_from_pretrained(model_name), config
     )
-    model = GPTLMHeadModel(config, device="meta")  # Without device='meta' init is very slow
+    model = GPTLMHeadModel(
+        config, device="meta"
+    )  # Without device='meta' init is very slow
     state_dict = model.state_dict()
     assert state_dict.keys() == pretrained_state_dict.keys()
     for k in state_dict.keys():
@@ -52,13 +58,17 @@ def test_gpt_neox_optimized(model_name):
     config.fused_dropout_add_ln = True
     config.residual_in_fp32 = True
 
-    model = GPTLMHeadModel.from_pretrained(model_name, config, device=device, dtype=dtype)
+    model = GPTLMHeadModel.from_pretrained(
+        model_name, config, device=device, dtype=dtype
+    )
     model.eval()
 
     torch.manual_seed(0)
     batch_size = 2
     max_seqlen = 256
-    seqlens = torch.randint(max_seqlen // 2, max_seqlen + 1, (batch_size,), device=device)
+    seqlens = torch.randint(
+        max_seqlen // 2, max_seqlen + 1, (batch_size,), device=device
+    )
     input_ids = torch.randint(
         0, config.vocab_size, (batch_size, max_seqlen), dtype=torch.long, device=device
     )
@@ -89,8 +99,12 @@ def test_gpt_neox_optimized(model_name):
     print(f"Output mean diff: {(out - out_ref).abs().mean().item()}")
     print(f"HF fp16 max diff: {(out_hf - out_ref).abs().max().item()}")
     print(f"HF fp16 mean diff: {(out_hf - out_ref).abs().mean().item()}")
-    assert (out - out_ref).abs().max().item() < 2 * (out_hf - out_ref).abs().max().item()
-    assert (out - out_ref).abs().mean().item() < 2 * (out_hf - out_ref).abs().mean().item()
+    assert (out - out_ref).abs().max().item() < 2 * (
+        out_hf - out_ref
+    ).abs().max().item()
+    assert (out - out_ref).abs().mean().item() < 2 * (
+        out_hf - out_ref
+    ).abs().mean().item()
 
     print(f"Logits max diff: {(logits - logits_ref).abs().max().item()}")
     print(f"Logits mean diff: {(logits - logits_ref).abs().mean().item()}")

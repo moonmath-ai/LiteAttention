@@ -15,7 +15,7 @@ try:
 except ImportError:
     CrossEntropyLoss = torch.nn.CrossEntropyLoss
 
-__all__ = ['Perplexity']
+__all__ = ["Perplexity"]
 
 
 class Perplexity(Metric):
@@ -34,6 +34,7 @@ class Perplexity(Metric):
         >>> metric(preds, target)
         tensor(5.2545)
     """
+
     is_differentiable = True
     higher_is_better = False
     full_state_update = False
@@ -42,13 +43,20 @@ class Perplexity(Metric):
 
     def __init__(self, **kwargs: Dict[str, Any]):
         super().__init__(**kwargs)
-        self.add_state("total_log_probs", default=torch.tensor(0.0, dtype=torch.float64),
-                       dist_reduce_fx="sum")
-        self.add_state("count", default=torch.tensor(0, dtype=torch.int64), dist_reduce_fx="sum")
+        self.add_state(
+            "total_log_probs",
+            default=torch.tensor(0.0, dtype=torch.float64),
+            dist_reduce_fx="sum",
+        )
+        self.add_state(
+            "count", default=torch.tensor(0, dtype=torch.int64), dist_reduce_fx="sum"
+        )
 
         self.loss_fn = CrossEntropyLoss()
 
-    def update(self, preds: Tensor, target: Tensor, loss: Optional[Tensor] = None) -> None:  # type: ignore
+    def update(
+        self, preds: Tensor, target: Tensor, loss: Optional[Tensor] = None
+    ) -> None:  # type: ignore
         """Compute and store intermediate statistics for Perplexity.
         Args:
             preds:

@@ -138,24 +138,24 @@ def make_instr_desc(
     if N < 8 or N > 256 or (N & 7):
         raise ValueError("N must be a multiple of 8 in the range 8…256")
 
-    m_dim = M >> 4            # 5-bit field
-    n_dim = N >> 3            # 6-bit field
+    m_dim = M >> 4  # 5-bit field
+    n_dim = N >> 3  # 6-bit field
 
     # --- pack the bit-fields -----------------------------------------------------
     desc = 0
-    desc |= (0                 & 0x3) << 0        # sparse_id2 (always 0 here)
-    desc |= (int(is_sparse)    & 0x1) << 2        # sparse_flag
-    desc |= (int(c_sat)        & 0x1) << 3        # saturate
-    desc |= (c_fmt             & 0x3) << 4        # c_format
-    desc |= (a_fmt             & 0x7) << 7        # a_format
-    desc |= (b_fmt             & 0x7) << 10       # b_format
-    desc |= (int(a_neg)        & 0x1) << 13       # a_negate
-    desc |= (int(b_neg)        & 0x1) << 14       # b_negate
-    desc |= (int(a_major)      & 0x1) << 15       # a_major
-    desc |= (int(b_major)      & 0x1) << 16       # b_major
-    desc |= (n_dim             & 0x3F) << 17      # n_dim (6 bits)
-    desc |= (m_dim             & 0x1F) << 24      # m_dim (5 bits)
-    desc |= (int(max_shift)    & 0x3) << 30       # max_shift (2 bits)
+    desc |= (0 & 0x3) << 0  # sparse_id2 (always 0 here)
+    desc |= (int(is_sparse) & 0x1) << 2  # sparse_flag
+    desc |= (int(c_sat) & 0x1) << 3  # saturate
+    desc |= (c_fmt & 0x3) << 4  # c_format
+    desc |= (a_fmt & 0x7) << 7  # a_format
+    desc |= (b_fmt & 0x7) << 10  # b_format
+    desc |= (int(a_neg) & 0x1) << 13  # a_negate
+    desc |= (int(b_neg) & 0x1) << 14  # b_negate
+    desc |= (int(a_major) & 0x1) << 15  # a_major
+    desc |= (int(b_major) & 0x1) << 16  # b_major
+    desc |= (n_dim & 0x3F) << 17  # n_dim (6 bits)
+    desc |= (m_dim & 0x1F) << 24  # m_dim (5 bits)
+    desc |= (int(max_shift) & 0x3) << 30  # max_shift (2 bits)
 
     return desc & 0xFFFF_FFFF  # ensure 32-bit result
 

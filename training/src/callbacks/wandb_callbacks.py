@@ -72,7 +72,9 @@ class UploadCodeAsArtifact(Callback):
             # get .git folder
             # https://alexwlchan.net/2020/11/a-python-function-to-ignore-a-path-with-git-info-exclude/
             git_dir_path = Path(
-                subprocess.check_output(["git", "rev-parse", "--git-dir"]).strip().decode("utf8")
+                subprocess.check_output(["git", "rev-parse", "--git-dir"])
+                .strip()
+                .decode("utf8")
             ).resolve()
 
             for path in Path(self.code_dir).resolve().rglob("*"):
@@ -82,7 +84,10 @@ class UploadCodeAsArtifact(Callback):
                     and not str(path).startswith(str(git_dir_path))  # noqa: W503
                     # ignore files ignored by git
                     and (  # noqa: W503
-                        subprocess.run(["git", "check-ignore", "-q", str(path)]).returncode == 1
+                        subprocess.run(
+                            ["git", "check-ignore", "-q", str(path)]
+                        ).returncode
+                        == 1
                     )
                 ):
                     code.add_file(str(path), name=str(path.relative_to(self.code_dir)))
@@ -167,7 +172,9 @@ class LogConfusionMatrix(Callback):
             sn.heatmap(confusion_matrix, annot=True, annot_kws={"size": 8}, fmt="g")
 
             # names should be uniqe or else charts from different experiments in wandb will overlap
-            experiment.log({f"confusion_matrix/{experiment.name}": wandb.Image(plt)}, commit=False)
+            experiment.log(
+                {f"confusion_matrix/{experiment.name}": wandb.Image(plt)}, commit=False
+            )
 
             # according to wandb docs this should also work but it crashes
             # experiment.log(f{"confusion_matrix/{experiment.name}": plt})
@@ -233,7 +240,9 @@ class LogF1PrecRecHeatmap(Callback):
             )
 
             # names should be uniqe or else charts from different experiments in wandb will overlap
-            experiment.log({f"f1_p_r_heatmap/{experiment.name}": wandb.Image(plt)}, commit=False)
+            experiment.log(
+                {f"f1_p_r_heatmap/{experiment.name}": wandb.Image(plt)}, commit=False
+            )
 
             # reset plot
             plt.clf()

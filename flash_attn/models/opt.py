@@ -17,6 +17,7 @@ def remap_state_dict_hf_opt(state_dict, config):
         return key
 
     state_dict = OrderedDict((key_mapping_model(k), v) for k, v in state_dict.items())
+
     # Word embedding and position embedding
     def key_mapping_emb(key):
         key = re.sub(r"^transformer.embed_tokens.", "transformer.embeddings.word_embeddings.", key)

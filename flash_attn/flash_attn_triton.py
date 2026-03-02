@@ -835,7 +835,7 @@ def _flash_attn_forward(q, k, v, bias=None, causal=False, softmax_scale=None):
             bias_type = "matrix"
         else:
             raise RuntimeError(
-                "Last 2 dimensions of bias must be (1, seqlen_k)" " or (seqlen_q, seqlen_k)"
+                "Last 2 dimensions of bias must be (1, seqlen_k) or (seqlen_q, seqlen_k)"
             )
         bias = bias.expand(batch, nheads, seqlen_q, seqlen_k)
     bias_strides = (bias.stride(0), bias.stride(1), bias.stride(2)) if has_bias else (0, 0, 0)
@@ -944,7 +944,7 @@ def _flash_attn_backward(
             bias_type = "matrix"
         else:
             raise RuntimeError(
-                "Last 2 dimensions of bias must be (1, seqlen_k)" " or (seqlen_q, seqlen_k)"
+                "Last 2 dimensions of bias must be (1, seqlen_k) or (seqlen_q, seqlen_k)"
             )
         bias = bias.expand(batch, nheads, seqlen_q, seqlen_k)
     bias_strides = (bias.stride(0), bias.stride(1), bias.stride(2)) if has_bias else (0, 0, 0)

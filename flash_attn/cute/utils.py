@@ -1,15 +1,14 @@
 # Copyright (c) 2025, Tri Dao.
 
 import math
-from typing import Type, Callable, Optional, Tuple
+from typing import Callable, Optional, Tuple, Type
 
 import cutlass
 import cutlass.cute as cute
-
 from cutlass import Float32, Int32
-from cutlass.cutlass_dsl import T, dsl_user_op
-from cutlass._mlir.dialects import nvvm, llvm, arith, vector
+from cutlass._mlir.dialects import arith, llvm, nvvm, vector
 from cutlass.cute.runtime import from_dlpack
+from cutlass.cutlass_dsl import T, dsl_user_op
 
 
 def convert_from_dlpack(x, leading_dim, alignment=16, divisibility=1) -> cute.Tensor:
@@ -219,6 +218,7 @@ def log2f(a: float | Float32, *, loc=None, ip=None) -> Float32:
         )
     )
 
+
 @dsl_user_op
 def logf(a: float | Float32, *, loc=None, ip=None) -> Float32:
     return log2f(a, loc=loc, ip=ip) * math.log(2.0)
@@ -265,7 +265,9 @@ def fmax_reduce(
         local_max[0] = fmax(local_max[0], local_max[1])
         local_max[2] = fmax(local_max[2], local_max[3])
         local_max[0] = fmax(local_max[0], local_max[2])
-        return local_max[0] if cutlass.const_expr(init_val is None) else fmax(local_max[0], init_val)
+        return (
+            local_max[0] if cutlass.const_expr(init_val is None) else fmax(local_max[0], init_val)
+        )
     else:
         # [2025-06-15] x.reduce only seems to use 50% 3-input max and 50% 2-input max
         # We instead force the 3-input max.
@@ -360,7 +362,9 @@ def elem_pointer(x: cute.Tensor, coord: cute.Coord, *, loc=None, ip=None) -> cut
 def elem_pointer_i64(x: cute.Tensor, coord: cute.Coord, *, loc=None, ip=None) -> cute.Pointer:
     flat_coord_i64 = tuple(cutlass.Int64(c) for c in cute.flatten(coord))
     flat_stride = cute.flatten_to_tuple(x.stride)
-    assert len(flat_coord_i64) == len(flat_stride), "Coordinate and stride must have the same length"
+    assert len(flat_coord_i64) == len(flat_stride), (
+        "Coordinate and stride must have the same length"
+    )
     offset = sum(c * s for c, s in zip(flat_coord_i64, flat_stride))
     return x.iterator + cute.crd2idx(coord, x.layout, loc=loc, ip=ip)
 
@@ -444,7 +448,10 @@ def shr_u32(val: cutlass.Uint32, shift: cutlass.Uint32, *, loc=None, ip=None) ->
     return cutlass.Uint32(
         llvm.inline_asm(
             T.i32(),
-            [cutlass.Uint32(val).ir_value(loc=loc, ip=ip), cutlass.Uint32(shift).ir_value(loc=loc, ip=ip)],
+            [
+                cutlass.Uint32(val).ir_value(loc=loc, ip=ip),
+                cutlass.Uint32(shift).ir_value(loc=loc, ip=ip),
+            ],
             "shr.s32 $0, $1, $2;",
             "=r,r,r",
             has_side_effects=False,
@@ -470,7 +477,9 @@ def warp_prefix_sum(val: cutlass.Int32, lane: Optional[cutlass.Int32] = None) ->
 
 
 @dsl_user_op
-def cvt_f16x2_f32(a: float | Float32, b: float | Float32, to_dtype: Type, *, loc=None, ip=None) -> cutlass.Int32:
+def cvt_f16x2_f32(
+    a: float | Float32, b: float | Float32, to_dtype: Type, *, loc=None, ip=None
+) -> cutlass.Int32:
     assert to_dtype in [cutlass.BFloat16, cutlass.Float16], "to_dtype must be BFloat16 or Float16"
     return cutlass.Int32(
         llvm.inline_asm(
@@ -489,7 +498,9 @@ def cvt_f16x2_f32(a: float | Float32, b: float | Float32, to_dtype: Type, *, loc
 def cvt_f16(src: cute.Tensor, dst: cute.Tensor):
     assert cute.size(dst.shape) == cute.size(src.shape), "dst and src must have the same size"
     assert cute.size(src.shape) % 2 == 0, "src must have an even number of elements"
-    assert dst.element_type in [cutlass.BFloat16, cutlass.Float16], "dst must be BFloat16 or Float16"
+    assert dst.element_type in [cutlass.BFloat16, cutlass.Float16], (
+        "dst must be BFloat16 or Float16"
+    )
     assert src.element_type is Float32, "src must be Float32"
     dst_i32 = cute.recast_tensor(dst, cutlass.Int32)
     assert cute.size(dst_i32.shape) * 2 == cute.size(src.shape)
@@ -542,8 +553,12 @@ def e2e_asm2(x: Float32, y: Float32, *, loc=None, ip=None) -> Tuple[Float32, Flo
     out0 = Float32(llvm.extractvalue(T.f32(), out_f32x2, [0], loc=loc, ip=ip))
     out1 = Float32(llvm.extractvalue(T.f32(), out_f32x2, [1], loc=loc, ip=ip))
     return out0, out1
+
+
 @dsl_user_op
-def domain_offset_aligned(coord: cute.Coord, tensor: cute.Tensor, *, loc=None, ip=None) -> cute.Tensor:
+def domain_offset_aligned(
+    coord: cute.Coord, tensor: cute.Tensor, *, loc=None, ip=None
+) -> cute.Tensor:
     assert isinstance(tensor.iterator, cute.Pointer)
     # We assume that applying the offset does not change the pointer alignment
     new_ptr = cute.make_ptr(
@@ -559,9 +574,9 @@ def domain_offset_aligned(coord: cute.Coord, tensor: cute.Tensor, *, loc=None, i
 def domain_offset_i64(coord: cute.Coord, tensor: cute.Tensor, *, loc=None, ip=None) -> cute.Tensor:
     flat_coord_i64 = tuple(cutlass.Int64(c) for c in cute.flatten(coord))
     flat_stride = cute.flatten_to_tuple(tensor.stride)
-    assert len(flat_coord_i64) == len(
-        flat_stride
-    ), "Coordinate and stride must have the same length"
+    assert len(flat_coord_i64) == len(flat_stride), (
+        "Coordinate and stride must have the same length"
+    )
     offset = sum(c * s for c, s in zip(flat_coord_i64, flat_stride))
     assert isinstance(tensor.iterator, cute.Pointer)
     # HACK: we assume that applying the offset does not change the pointer alignment
@@ -587,5 +602,7 @@ def coord_offset_i64(
         tensor.memspace,
         assumed_align=tensor.iterator.max_alignment,
     )
-    new_layout = cute.slice_(tensor.layout, (*[None] * dim, 0, *[None] * (cute.rank(tensor) - dim - 1)))
+    new_layout = cute.slice_(
+        tensor.layout, (*[None] * dim, 0, *[None] * (cute.rank(tensor) - dim - 1))
+    )
     return cute.make_tensor(new_ptr, new_layout)

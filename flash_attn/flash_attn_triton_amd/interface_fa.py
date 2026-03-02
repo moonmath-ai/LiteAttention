@@ -1,36 +1,41 @@
-import torch
 import os
-from .fwd_prefill import attention_prefill_forward_triton_impl
-from .bwd_prefill import attention_prefill_backward_triton_impl
-from .bwd_prefill_split import attention_prefill_backward_triton_split_impl
-from .bwd_prefill_fused import _flash_attn_backward as attention_prefill_backward_triton_fused_impl
-from .bwd_prefill_onekernel import attention_prefill_backward_triton_split_oneKernel_impl
-from .fwd_decode import attention_decode_forward_triton_impl
-from .fwd_ref import attention_forward_pytorch_ref_impl
-from .bwd_ref import attention_backward_pytorch_ref_impl
-from .utils import DEBUG, USE_REF, MetaData, get_shapes_from_layout, is_fp8
-from einops import rearrange, repeat
-from flash_attn.layers.rotary import apply_rotary_emb
 from typing import Literal, Optional, Union
 
-def fwd(q: torch.Tensor,
-        k: torch.Tensor,
-        v: torch.Tensor,
-        out: Optional[torch.Tensor],
-        alibi_slopes: Optional[torch.Tensor],
-        dropout_p: float,
-        softmax_scale: float,
-        causal: bool,
-        window_size_left: int,
-        window_size_right: int,
-        softcap: float,
-        return_softmax: bool,
-        gen_: Optional[torch.Tensor] = None,
-        descale_q: Optional[torch.Tensor] = None,
-        descale_k: Optional[torch.Tensor] = None,
-        descale_v: Optional[torch.Tensor] = None,
-        descale_o: Optional[torch.Tensor] = None
-    ):
+import torch
+from einops import rearrange, repeat
+
+from flash_attn.layers.rotary import apply_rotary_emb
+
+from .bwd_prefill import attention_prefill_backward_triton_impl
+from .bwd_prefill_fused import _flash_attn_backward as attention_prefill_backward_triton_fused_impl
+from .bwd_prefill_onekernel import attention_prefill_backward_triton_split_oneKernel_impl
+from .bwd_prefill_split import attention_prefill_backward_triton_split_impl
+from .bwd_ref import attention_backward_pytorch_ref_impl
+from .fwd_decode import attention_decode_forward_triton_impl
+from .fwd_prefill import attention_prefill_forward_triton_impl
+from .fwd_ref import attention_forward_pytorch_ref_impl
+from .utils import DEBUG, USE_REF, MetaData, get_shapes_from_layout, is_fp8
+
+
+def fwd(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    out: Optional[torch.Tensor],
+    alibi_slopes: Optional[torch.Tensor],
+    dropout_p: float,
+    softmax_scale: float,
+    causal: bool,
+    window_size_left: int,
+    window_size_right: int,
+    softcap: float,
+    return_softmax: bool,
+    gen_: Optional[torch.Tensor] = None,
+    descale_q: Optional[torch.Tensor] = None,
+    descale_k: Optional[torch.Tensor] = None,
+    descale_v: Optional[torch.Tensor] = None,
+    descale_o: Optional[torch.Tensor] = None,
+):
 
     if DEBUG:
         print()
@@ -54,7 +59,9 @@ def fwd(q: torch.Tensor,
 
     if is_fp8(q):
         assert out is not None, "fp8 output tensor should be passed in."
-        assert (descale_q is not None) and (descale_k is not None) and (descale_v is not None), f"For fp8, you need to pass descale factors for q, k and v"
+        assert (descale_q is not None) and (descale_k is not None) and (descale_v is not None), (
+            f"For fp8, you need to pass descale factors for q, k and v"
+        )
     else:
         out = torch.zeros_like(q) if out is None else out.zero_()
 
@@ -76,7 +83,9 @@ def fwd(q: torch.Tensor,
 
     if dropout_p > 0.0:
         metadata.need_dropout(dropout_p)
-        rng_state = torch.as_tensor([metadata.philox_seed, metadata.philox_offset]) # as_tensors uses the underlying data and doesnot cast
+        rng_state = torch.as_tensor(
+            [metadata.philox_seed, metadata.philox_offset]
+        )  # as_tensors uses the underlying data and doesnot cast
     else:
         rng_state = None
 
@@ -88,54 +97,56 @@ def fwd(q: torch.Tensor,
         if DEBUG:
             print("Using reference implementation")
         softmax_lse_ref, sd_mask_ref = attention_forward_pytorch_ref_impl(
-                                                q,
-                                                k,
-                                                v,
-                                                out,
-                                                metadata.sm_scale,
-                                                metadata.alibi_slopes,
-                                                metadata.causal,
-                                                metadata.layout,
-                                                metadata.cu_seqlens_q,
-                                                metadata.cu_seqlens_k,
-                                                metadata.max_seqlens_q,
-                                                metadata.max_seqlens_k,
-                                                metadata.dropout_p,
-                                                metadata.philox_seed,
-                                                metadata.philox_offset,
-                                                metadata.use_exp2)
-        softmax_lse=softmax_lse_ref
-        sd_mask=sd_mask_ref
+            q,
+            k,
+            v,
+            out,
+            metadata.sm_scale,
+            metadata.alibi_slopes,
+            metadata.causal,
+            metadata.layout,
+            metadata.cu_seqlens_q,
+            metadata.cu_seqlens_k,
+            metadata.max_seqlens_q,
+            metadata.max_seqlens_k,
+            metadata.dropout_p,
+            metadata.philox_seed,
+            metadata.philox_offset,
+            metadata.use_exp2,
+        )
+        softmax_lse = softmax_lse_ref
+        sd_mask = sd_mask_ref
     else:
         if DEBUG:
             print("Using Triton implementation")
         softmax_lse_triton, sd_mask_triton = attention_prefill_forward_triton_impl(
-                                                q,
-                                                k,
-                                                v,
-                                                out,
-                                                metadata.sm_scale,
-                                                metadata.alibi_slopes,
-                                                metadata.causal,
-                                                None,
-                                                metadata.layout,
-                                                metadata.cu_seqlens_q,
-                                                metadata.cu_seqlens_k,
-                                                metadata.max_seqlens_q,
-                                                metadata.max_seqlens_k,
-                                                metadata.cache_seqlens,
-                                                metadata.cache_batch_idx,
-                                                metadata.dropout_p,
-                                                metadata.philox_seed,
-                                                metadata.philox_offset,
-                                                metadata.return_scores,
-                                                metadata.use_exp2,
-                                                descale_q,
-                                                descale_k,
-                                                descale_v,
-                                                descale_o)
-        softmax_lse=softmax_lse_triton
-        sd_mask=sd_mask_triton
+            q,
+            k,
+            v,
+            out,
+            metadata.sm_scale,
+            metadata.alibi_slopes,
+            metadata.causal,
+            None,
+            metadata.layout,
+            metadata.cu_seqlens_q,
+            metadata.cu_seqlens_k,
+            metadata.max_seqlens_q,
+            metadata.max_seqlens_k,
+            metadata.cache_seqlens,
+            metadata.cache_batch_idx,
+            metadata.dropout_p,
+            metadata.philox_seed,
+            metadata.philox_offset,
+            metadata.return_scores,
+            metadata.use_exp2,
+            descale_q,
+            descale_k,
+            descale_v,
+            descale_o,
+        )
+        softmax_lse = softmax_lse_triton
+        sd_mask = sd_mask_triton
 
     if DEBUG:
         print("flash_attn_triton_amd.py::fwd outputs")
@@ -143,11 +154,14 @@ def fwd(q: torch.Tensor,
         if is_fp8(out):
             print("descale_o:", descale_o, descale_o.shape if descale_o is not None else None)
         print("softmax_lse:", softmax_lse, softmax_lse.shape)
-        print("sd_mask:", sd_mask, sd_mask.shape if sd_mask is not None else None )
+        print("sd_mask:", sd_mask, sd_mask.shape if sd_mask is not None else None)
 
     return out, softmax_lse, sd_mask, rng_state
 
-BWD_MODE = os.environ.get('BWD_MODE', 'split').lower()
+
+BWD_MODE = os.environ.get("BWD_MODE", "split").lower()
+
+
 def bwd(
     dout: torch.Tensor,
     q: torch.Tensor,
@@ -167,7 +181,7 @@ def bwd(
     softcap: float,
     deterministic: bool,
     gen_: Optional[torch.Tensor] = None,
-    rng_state:Optional[torch.Tensor] = None,
+    rng_state: Optional[torch.Tensor] = None,
     descale_q: Optional[torch.Tensor] = None,
     descale_k: Optional[torch.Tensor] = None,
     descale_v: Optional[torch.Tensor] = None,
@@ -333,7 +347,7 @@ def bwd(
                 dropout_p,
                 philox_seed,
                 philox_offset,
-                False
+                False,
             )
             delta = delta_triton
         else:
@@ -352,33 +366,34 @@ def bwd(
             print("descale_dq:", descale_dq, descale_dq.shape if descale_dq is not None else None)
     return dq, dk, dv, delta
 
+
 def varlen_fwd(
-        q: torch.Tensor,
-        k: torch.Tensor,
-        v: torch.Tensor,
-        out: Optional[torch.Tensor],
-        cu_seqlens_q: torch.Tensor,
-        cu_seqlens_k: torch.Tensor,
-        seqused_k: Optional[torch.Tensor],
-        leftpad_k: Optional[torch.Tensor],
-        block_table_: Optional[torch.Tensor],
-        alibi_slopes: Optional[torch.Tensor],
-        max_seqlen_q: int,
-        max_seqlen_k: int,
-        dropout_p: float,
-        softmax_scale: float,
-        zero_tensors: bool ,
-        causal: bool ,
-        window_size_left: int,
-        window_size_right: int,
-        softcap: float,
-        return_softmax: bool,
-        gen_: Optional[torch.Tensor] = None,
-        descale_q: Optional[torch.Tensor] = None,
-        descale_k: Optional[torch.Tensor] = None,
-        descale_v: Optional[torch.Tensor] = None,
-        descale_o: Optional[torch.Tensor] = None
-    ):
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    out: Optional[torch.Tensor],
+    cu_seqlens_q: torch.Tensor,
+    cu_seqlens_k: torch.Tensor,
+    seqused_k: Optional[torch.Tensor],
+    leftpad_k: Optional[torch.Tensor],
+    block_table_: Optional[torch.Tensor],
+    alibi_slopes: Optional[torch.Tensor],
+    max_seqlen_q: int,
+    max_seqlen_k: int,
+    dropout_p: float,
+    softmax_scale: float,
+    zero_tensors: bool,
+    causal: bool,
+    window_size_left: int,
+    window_size_right: int,
+    softcap: float,
+    return_softmax: bool,
+    gen_: Optional[torch.Tensor] = None,
+    descale_q: Optional[torch.Tensor] = None,
+    descale_k: Optional[torch.Tensor] = None,
+    descale_v: Optional[torch.Tensor] = None,
+    descale_o: Optional[torch.Tensor] = None,
+):
 
     if DEBUG:
         print()
@@ -403,7 +418,9 @@ def varlen_fwd(
 
     if is_fp8(q):
         assert out is not None, "fp8 output tensor should be passed in."
-        assert (descale_q is not None) and (descale_k is not None) and (descale_v is not None), f"For fp8, you need to pass descale factors for q, k and v"
+        assert (descale_q is not None) and (descale_k is not None) and (descale_v is not None), (
+            f"For fp8, you need to pass descale factors for q, k and v"
+        )
     else:
         out = torch.zeros_like(q) if out is None else out.zero_()
 
@@ -411,11 +428,15 @@ def varlen_fwd(
     metadata = MetaData(sm_scale=softmax_scale)
     if return_softmax:
         metadata.return_scores = True
-    metadata.set_varlen_params(cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k)  # set layout to "thd" and other metdata
+    metadata.set_varlen_params(
+        cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k
+    )  # set layout to "thd" and other metdata
     assert metadata.layout is not None
 
     # get shapes
-    batch, nheads_q, nheads_k, head_size , seqlen_q, seqlen_k = get_shapes_from_layout(q, k, metadata.layout, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k)
+    batch, nheads_q, nheads_k, head_size, seqlen_q, seqlen_k = get_shapes_from_layout(
+        q, k, metadata.layout, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k
+    )
 
     if causal:
         metadata.need_causal(True)
@@ -425,7 +446,9 @@ def varlen_fwd(
 
     if dropout_p > 0.0:
         metadata.need_dropout(dropout_p)
-        rng_state = torch.as_tensor([metadata.philox_seed, metadata.philox_offset]) # as_tensors uses the underlying data and doesnot cast
+        rng_state = torch.as_tensor(
+            [metadata.philox_seed, metadata.philox_offset]
+        )  # as_tensors uses the underlying data and doesnot cast
     else:
         rng_state = None
 
@@ -437,63 +460,65 @@ def varlen_fwd(
         if DEBUG:
             print("Using reference implementation")
         softmax_lse_ref, sd_mask_ref = attention_forward_pytorch_ref_impl(
-                                                q,
-                                                k,
-                                                v,
-                                                out,
-                                                metadata.sm_scale,
-                                                metadata.alibi_slopes,
-                                                metadata.causal,
-                                                metadata.layout,
-                                                metadata.cu_seqlens_q,
-                                                metadata.cu_seqlens_k,
-                                                metadata.max_seqlens_q,
-                                                metadata.max_seqlens_k,
-                                                metadata.dropout_p,
-                                                metadata.philox_seed,
-                                                metadata.philox_offset,
-                                                metadata.use_exp2)
-        softmax_lse=softmax_lse_ref
-        sd_mask=sd_mask_ref
+            q,
+            k,
+            v,
+            out,
+            metadata.sm_scale,
+            metadata.alibi_slopes,
+            metadata.causal,
+            metadata.layout,
+            metadata.cu_seqlens_q,
+            metadata.cu_seqlens_k,
+            metadata.max_seqlens_q,
+            metadata.max_seqlens_k,
+            metadata.dropout_p,
+            metadata.philox_seed,
+            metadata.philox_offset,
+            metadata.use_exp2,
+        )
+        softmax_lse = softmax_lse_ref
+        sd_mask = sd_mask_ref
     else:
         if DEBUG:
             print("Using Triton implementation")
         softmax_lse_triton, sd_mask_triton = attention_prefill_forward_triton_impl(
-                                                            q,
-                                                            k,
-                                                            v,
-                                                            out,
-                                                            metadata.sm_scale,
-                                                            metadata.alibi_slopes,
-                                                            metadata.causal,
-                                                            None,
-                                                            metadata.layout,
-                                                            metadata.cu_seqlens_q,
-                                                            metadata.cu_seqlens_k,
-                                                            metadata.max_seqlens_q,
-                                                            metadata.max_seqlens_k,
-                                                            metadata.cache_seqlens,
-                                                            metadata.cache_batch_idx,
-                                                            metadata.dropout_p,
-                                                            metadata.philox_seed,
-                                                            metadata.philox_offset,
-                                                            metadata.return_scores,
-                                                            metadata.use_exp2,
-                                                            descale_q,
-                                                            descale_k,
-                                                            descale_v,
-                                                            descale_o)
-        softmax_lse=softmax_lse_triton
-        sd_mask=sd_mask_triton
+            q,
+            k,
+            v,
+            out,
+            metadata.sm_scale,
+            metadata.alibi_slopes,
+            metadata.causal,
+            None,
+            metadata.layout,
+            metadata.cu_seqlens_q,
+            metadata.cu_seqlens_k,
+            metadata.max_seqlens_q,
+            metadata.max_seqlens_k,
+            metadata.cache_seqlens,
+            metadata.cache_batch_idx,
+            metadata.dropout_p,
+            metadata.philox_seed,
+            metadata.philox_offset,
+            metadata.return_scores,
+            metadata.use_exp2,
+            descale_q,
+            descale_k,
+            descale_v,
+            descale_o,
+        )
+        softmax_lse = softmax_lse_triton
+        sd_mask = sd_mask_triton
 
     if DEBUG:
         print("varlen_fwd outputs")
         print("out:", out, out.shape)
         print("softmax_lse:", softmax_lse, softmax_lse.shape)
-        print("sd_mask:", sd_mask, sd_mask.shape if sd_mask is not None else None )
-
+        print("sd_mask:", sd_mask, sd_mask.shape if sd_mask is not None else None)
 
     return out, softmax_lse, sd_mask, rng_state
+
 
 def varlen_bwd(
     dout: torch.Tensor,
@@ -518,7 +543,7 @@ def varlen_bwd(
     window_size_right: int,
     softcap: float,
     deterministic: bool,
-    gen_ : Optional[torch.Tensor] = None,
+    gen_: Optional[torch.Tensor] = None,
     rng_state: Optional[torch.Tensor] = None,
     descale_q: Optional[torch.Tensor] = None,
     descale_k: Optional[torch.Tensor] = None,
@@ -554,9 +579,9 @@ def varlen_bwd(
         print("deterministic:", deterministic)
         print("gen_:", gen_)
         print("rng_state:", rng_state)
-        print("descale_q:", descale_q, descale_q.shape if descale_q is not None  else None)
-        print("descale_k:", descale_k, descale_k.shape if descale_k is not None  else None)
-        print("descale_v:", descale_v, descale_v.shape if descale_v is not None  else None)
+        print("descale_q:", descale_q, descale_q.shape if descale_q is not None else None)
+        print("descale_k:", descale_k, descale_k.shape if descale_k is not None else None)
+        print("descale_v:", descale_v, descale_v.shape if descale_v is not None else None)
         print("descale_do:", descale_do, descale_do.shape if descale_do else None)
 
     dq = torch.zeros_like(q) if dq is None else dq.zero_()
@@ -599,7 +624,7 @@ def varlen_bwd(
         delta = delta_ref
     else:
         if DEBUG:
-            print("Using Triton implementation") 
+            print("Using Triton implementation")
         delta_triton = attention_prefill_backward_triton_split_impl(
             dout,
             q,
@@ -642,28 +667,29 @@ def varlen_bwd(
 
     return dq, dk, dv, delta
 
+
 def fwd_kvcache(
-        q: torch.Tensor,
-        k_cache: torch.Tensor,
-        v_cache: torch.Tensor,
-        k: Optional[torch.Tensor],
-        v: Optional[torch.Tensor],
-        cache_seqlens: Optional[Union[(int, torch.Tensor)]],
-        rotary_cos: Optional[torch.Tensor],
-        rotary_sin: Optional[torch.Tensor],
-        cache_batch_idx: Optional[torch.Tensor],
-        cache_leftpad: Optional[torch.Tensor],
-        block_table: Optional[torch.Tensor],
-        alibi_slopes: Optional[torch.Tensor],
-        out: Optional[torch.Tensor],
-        softmax_scale: float,
-        causal: bool,
-        window_size_left: int,
-        window_size_right: int,
-        softcap: float,
-        rotary_interleaved: bool,
-        num_splits: int
-    ):
+    q: torch.Tensor,
+    k_cache: torch.Tensor,
+    v_cache: torch.Tensor,
+    k: Optional[torch.Tensor],
+    v: Optional[torch.Tensor],
+    cache_seqlens: Optional[Union[(int, torch.Tensor)]],
+    rotary_cos: Optional[torch.Tensor],
+    rotary_sin: Optional[torch.Tensor],
+    cache_batch_idx: Optional[torch.Tensor],
+    cache_leftpad: Optional[torch.Tensor],
+    block_table: Optional[torch.Tensor],
+    alibi_slopes: Optional[torch.Tensor],
+    out: Optional[torch.Tensor],
+    softmax_scale: float,
+    causal: bool,
+    window_size_left: int,
+    window_size_right: int,
+    softcap: float,
+    rotary_interleaved: bool,
+    num_splits: int,
+):
 
     if DEBUG:
         print()
@@ -673,9 +699,9 @@ def fwd_kvcache(
         print("v_cache:", v_cache, v_cache.shape)
         print("k:", k, k.shape if k is not None else None)
         print("v:", v, v.shape if v is not None else None)
-        print("cache_seqlens:", cache_seqlens )
-        print("rotary_cos:",rotary_cos )
-        print("rotary_sin:",rotary_sin)
+        print("cache_seqlens:", cache_seqlens)
+        print("rotary_cos:", rotary_cos)
+        print("rotary_sin:", rotary_sin)
         print("cache_batch_idx:", cache_batch_idx)
         print("cache_leftpad:", cache_leftpad)
         print("block_table:", block_table)
@@ -688,7 +714,7 @@ def fwd_kvcache(
         print("softcap:", softcap)
         print("rotary_interleaved:", rotary_interleaved)
         print("num_splits:", num_splits)
-        
+
     # output
     out = torch.zeros_like(q) if out is None else out.zero_()
 
@@ -707,7 +733,7 @@ def fwd_kvcache(
         metadata.need_causal(True)
 
     if alibi_slopes is not None:
-        batch, _ , nheads_q, _= q.shape
+        batch, _, nheads_q, _ = q.shape
         metadata.need_alibi(alibi_slopes, batch, nheads_q)
 
     # rotary boolean
@@ -717,7 +743,7 @@ def fwd_kvcache(
 
     # Rotary Embedding Implementation
     if apply_rotary:
-        if metadata.causal:     # NOTE: when support is added. Add `or metadata.local`
+        if metadata.causal:  # NOTE: when support is added. Add `or metadata.local`
             q_ro = apply_rotary_emb(
                 q,
                 metadata.rotary_cos,
@@ -748,7 +774,7 @@ def fwd_kvcache(
         q, k_new = q_ro.to(q.dtype), k_ro.to(q.dtype)
 
     # launch kernel
-    DECODE_KERNEL= True # os.environ.get('DECODE_KERNEL', '0').lower() in ('1', 'true', 'yes')
+    DECODE_KERNEL = True  # os.environ.get('DECODE_KERNEL', '0').lower() in ('1', 'true', 'yes')
     if DECODE_KERNEL:
         softmax_lse_triton = attention_decode_forward_triton_impl(
             q,
@@ -766,32 +792,33 @@ def fwd_kvcache(
         )
     else:
         softmax_lse_triton, sd_mask_triton = attention_prefill_forward_triton_impl(
-                                                q,
-                                                k_cache,
-                                                v_cache,
-                                                out,
-                                                metadata.sm_scale,
-                                                metadata.alibi_slopes,
-                                                metadata.causal,
-                                                None,
-                                                metadata.layout,
-                                                metadata.cu_seqlens_q,
-                                                metadata.cu_seqlens_k,
-                                                metadata.max_seqlens_q,
-                                                metadata.max_seqlens_k,
-                                                metadata.cache_seqlens,
-                                                metadata.cache_batch_idx,
-                                                metadata.dropout_p,
-                                                metadata.philox_seed,
-                                                metadata.philox_offset,
-                                                metadata.return_scores,
-                                                metadata.use_exp2,
-                                                None,
-                                                None,
-                                                None,
-                                                None)
+            q,
+            k_cache,
+            v_cache,
+            out,
+            metadata.sm_scale,
+            metadata.alibi_slopes,
+            metadata.causal,
+            None,
+            metadata.layout,
+            metadata.cu_seqlens_q,
+            metadata.cu_seqlens_k,
+            metadata.max_seqlens_q,
+            metadata.max_seqlens_k,
+            metadata.cache_seqlens,
+            metadata.cache_batch_idx,
+            metadata.dropout_p,
+            metadata.philox_seed,
+            metadata.philox_offset,
+            metadata.return_scores,
+            metadata.use_exp2,
+            None,
+            None,
+            None,
+            None,
+        )
     softmax_lse = softmax_lse_triton
-    
+
     if DEBUG:
         print("out:", out, out.shape)
         print("softmax_lse:", softmax_lse, softmax_lse.shape)
