@@ -309,7 +309,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
 
         # Calculate percentage: (tiles computed) / (total tiles)
         num_of_k_tiles = (
-            read_list.shape[-1] - 1
+            read_list.shape[-1] - 2
         )  # fixme: this is wrong when we use max_len
         return real_not_skipped_per_head / num_of_k_tiles
 
