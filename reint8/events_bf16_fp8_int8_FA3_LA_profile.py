@@ -4,13 +4,14 @@ Example script for Flash Attention with FP8 inputs.
 Designed for benchmarking with ncu (NVIDIA Compute Profiler).
 
 Configuration:
-- Head dimension: 128
+- Head dimension: configurable via --headdim (default: 128)
 - Sequence length: ~16k
 - FP8 (float8_e4m3fn) inputs
 """
 
-import torch
+import argparse
 import math
+import torch
 
 def compute_error_metrics(output, reference, name):
     """Compute and print error metrics between output and reference."""
@@ -92,7 +93,21 @@ def quantize_to_fp8(tensor, fp8_dtype=torch.float8_e4m3fn):
 from lite_attention import LiteAttention
 from flash_attn_interface import flash_attn_func
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Profile BF16/FP8/INT8 Flash Attention and LiteAttention.")
+    parser.add_argument(
+        "--headdim",
+        type=int,
+        default=128,
+        help="Head dimension (default: 128)",
+    )
+    return parser.parse_args()
+
+
 def main():
+    args = parse_args()
+    headdim = args.headdim
+
     # Configuration
     device = 'cuda'
     batch_size = 2
@@ -101,7 +116,6 @@ def main():
     # seqlen = 2**14  # ~16k as requested
     seqlen = 19 + 2**16  # ~16k as requested
     num_heads = 32  # Adjust based on your model
-    headdim = 128   # As requested
     causal = False  # Set to True for autoregressive (causal) attention, False for bidirectional
     
     # Ensure we're on CUDA
@@ -440,7 +454,7 @@ def main():
     print("All forward passes completed successfully!")
     print("="*70)
     print("\nTo benchmark with ncu, run:")
-    print(f"  ncu --set full python {__file__}")
+    print(f"  ncu --set full python {__file__} [--headdim HEADDIM]")
 
 
 if __name__ == "__main__":
