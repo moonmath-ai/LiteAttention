@@ -15,7 +15,7 @@ Requires an H100/H200 GPU, CUDA >= 12.3, and a C++20 compiler.
 
 ```bash
 git submodule update --init
-MAX_JOBS=$(nproc) NVCC_THREADS=4 \
+NVCC_THREADS=4 \
 LITE_ATTENTION_DISABLE_BACKWARD=TRUE \
 LITE_ATTENTION_DISABLE_FP16=TRUE \
 LITE_ATTENTION_DISABLE_FP8=TRUE \
@@ -59,7 +59,7 @@ rsync -avz --delete --exclude='.venv' --exclude='build/' --exclude='*.so' \
 On the remote, build and test:
 ```bash
 cd ~/code/LiteAttention
-MAX_JOBS=$(nproc) NVCC_THREADS=4 \
+NVCC_THREADS=4 \
 LITE_ATTENTION_DISABLE_BACKWARD=TRUE \
 LITE_ATTENTION_DISABLE_FP16=TRUE \
 LITE_ATTENTION_DISABLE_FP8=TRUE \
