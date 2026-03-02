@@ -323,13 +323,13 @@ def test_flash_attn_output(
         )
         # window_size = (-1, -1) if not local else (16, 0)
         if dtype == torch.float8_e4m3fn:
-            q_descale, k_descale, v_descale = [
+            q_descale, k_descale, v_descale, p_descale = [
                 torch.rand(batch_size, nheads_kv, device=device, dtype=torch.float32)
                 * 2
-                for _ in range(3)
+                for _ in range(4)
             ]
         else:
-            q_descale, k_descale, v_descale = None, None, None
+            q_descale, k_descale, v_descale, p_descale = None, None, None, None
         q, k, v = [x.detach().to(dtype).requires_grad_() for x in (q_ref, k_ref, v_ref)]
         qv = qv_ref.detach().to(dtype).requires_grad_() if has_qv else None
         if V_colmajor:
@@ -348,6 +348,7 @@ def test_flash_attn_output(
             q_descale=q_descale,
             k_descale=k_descale,
             v_descale=v_descale,
+            p_descale=p_descale,
             window_size=window_size,
             attention_chunk=attention_chunk,
             softcap=softcap,
@@ -363,6 +364,7 @@ def test_flash_attn_output(
             q_descale=q_descale,
             k_descale=k_descale,
             v_descale=v_descale,
+            p_descale=p_descale,
             window_size=window_size,
             attention_chunk=attention_chunk,
             softcap=softcap,
@@ -399,6 +401,7 @@ def test_flash_attn_output(
                 q_descale=q_descale,
                 k_descale=k_descale,
                 v_descale=v_descale,
+                p_descale=p_descale,
                 window_size=window_size,
                 attention_chunk=attention_chunk,
                 softcap=softcap,
@@ -680,7 +683,7 @@ def test_flash3_bw_compatibility() -> None:
             "Tensor? cu_seqlens_k_new=None, Tensor? seqused_q=None, Tensor? seqused_k=None, "
             "int? max_seqlen_q=None, int? max_seqlen_k=None, Tensor? page_table=None, "
             "Tensor? kv_batch_idx=None, Tensor? leftpad_k=None, Tensor? rotary_cos=None, Tensor? rotary_sin=None, "
-            "Tensor? seqlens_rotary=None, Tensor? q_descale=None, Tensor? k_descale=None, Tensor? v_descale=None, "
+            "Tensor? seqlens_rotary=None, Tensor? q_descale=None, Tensor? k_descale=None, Tensor? v_descale=None, Tensor? p_descale=None, "
             "float? softmax_scale=None, bool is_causal=False, int window_size_left=-1, int window_size_right=-1, "
             "int attention_chunk=0, float softcap=0., bool is_rotary_interleaved=False, "
             "Tensor? scheduler_metadata=None, int num_splits=0, bool? pack_gqa=None, int sm_margin=0) "

@@ -281,6 +281,7 @@ def attention_ref(
     q_descale=None,
     k_descale=None,
     v_descale=None,
+    p_descale=None,
     window_size=(-1, -1),  # -1 means infinite window size
     attention_chunk=0,
     sink_token_length=0,
@@ -400,6 +401,8 @@ def attention_ref(
     if intermediate_dtype is not None:
         attention_drop = attention_drop.to(intermediate_dtype).to(attention_drop.dtype)
     output = torch.einsum("bhts,bshd->bthd", attention_drop, v * dropout_scaling)
+    if p_descale is not None:
+        output = output * rearrange(p_descale, "b h -> b 1 h 1")
     if query_padding_mask is not None:
         output.masked_fill_(rearrange(~query_padding_mask, "b s -> b s 1 1"), 0.0)
     return output.to(dtype=dtype_og), attention.to(dtype=dtype_og)

@@ -722,6 +722,7 @@
         std::optional<at::Tensor> q_descale_,  // (b, h_k), not (b, h)
         std::optional<at::Tensor> k_descale_,  // (b, h_k)
         std::optional<at::Tensor> v_descale_,  // (b, h_k)
+        std::optional<at::Tensor> p_descale_,  // (b, h_k) for PV FP8
         std::optional<double> softmax_scale_,
         bool is_causal,
         int64_t window_size_left,
@@ -1347,6 +1348,19 @@
          } else {
              params.v_descale_ptr = nullptr;
          }
+         // p_descale only for FP8 (PV matmul output rescaling)
+         if (q_type == at::ScalarType::Float8_e4m3fn && p_descale_.has_value()) {
+             auto p_descale = p_descale_.value();
+             CHECK_DEVICE(p_descale);
+             CHECK_SHAPE(p_descale, batch_size, num_heads_k);
+             params.p_descale_ptr = p_descale.data_ptr<float>();
+             params.p_descale_batch_stride = p_descale.stride(0);
+             params.p_descale_head_stride = p_descale.stride(1);
+         } else {
+             params.p_descale_ptr = nullptr;
+             params.p_descale_batch_stride = 0;
+             params.p_descale_head_stride = 0;
+         }
      }
  
      #ifdef FLASHATTENTION_DISABLE_LOCAL
@@ -1909,6 +1923,7 @@
         "Tensor? q_descale = None,"
         "Tensor? k_descale = None,"
         "Tensor? v_descale = None,"
+        "Tensor? p_descale = None,"
         "float? softmax_scale = None,"
         "bool is_causal = False,"
         "int window_size_left = -1,"

@@ -260,10 +260,12 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream)
         params.q_descale_ptr,
         params.k_descale_ptr,
         params.v_descale_ptr,
+        params.p_descale_ptr,
         // CuTe stride patterns for FP8 descaling tensors
         {params.q_descale_batch_stride, params.q_descale_head_stride}, // Q descale strides (FP8)
         {params.k_descale_batch_stride, params.k_descale_head_stride}, // K descale strides (FP8)
         {params.v_descale_batch_stride, params.v_descale_head_stride}, // V descale strides
+        {params.p_descale_batch_stride, params.p_descale_head_stride}, // P descale strides (FP8 PV)
         // INT8 descale strides (batch, head, block)
         {params.q_descale_batch_stride, params.q_descale_head_stride, params.q_descale_block_stride}, // Q descale strides (INT8)
         {params.k_descale_batch_stride, params.k_descale_head_stride, params.k_descale_block_stride}, // K descale strides (INT8)

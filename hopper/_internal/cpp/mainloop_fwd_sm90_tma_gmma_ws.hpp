@@ -458,8 +458,8 @@ namespace flash
             ShapePageTable const shape_pagetable;
             StridePageTable const stride_pagetable;
             float const softmax_scale;
-            float const *ptr_q_descale, *ptr_k_descale, *ptr_v_descale;
-            StrideDescale const stride_q_descale, stride_k_descale, stride_v_descale;
+            float const *ptr_q_descale, *ptr_k_descale, *ptr_v_descale, *ptr_p_descale;
+            StrideDescale const stride_q_descale, stride_k_descale, stride_v_descale, stride_p_descale;
             StrideDescaleINT8 const stride_q_descale_int8, stride_k_descale_int8;  // For INT8 per-block descaling
             int const window_size_left = -1, window_size_right = -1, attention_chunk = 0;
             float const softcap_val;
@@ -517,8 +517,8 @@ namespace flash
             TMA_V tma_load_V_new;
             TMA_Qv tma_load_Qv;
             float const softmax_scale_log2;
-            float const *ptr_q_descale, *ptr_k_descale, *ptr_v_descale;
-            StrideDescale const stride_q_descale, stride_k_descale, stride_v_descale;
+            float const *ptr_q_descale, *ptr_k_descale, *ptr_v_descale, *ptr_p_descale;
+            StrideDescale const stride_q_descale, stride_k_descale, stride_v_descale, stride_p_descale;
             StrideDescaleINT8 const stride_q_descale_int8, stride_k_descale_int8;  // For INT8 per-block descaling
             float const softcap_val;
             int const window_size_left, window_size_right;
@@ -640,8 +640,8 @@ namespace flash
                     cutlass::FastDivmod(cute::ceil_div(get<2>(args.shape_Q), get<2>(args.shape_K))),
                     tma_load_Q, tma_load_K, tma_load_V, tma_load_K_new, tma_load_V_new, tma_load_Qv,
                     !Has_softcap ? float(args.softmax_scale * M_LOG2E) : float(args.softcap_val * M_LOG2E),
-                    args.ptr_q_descale, args.ptr_k_descale, args.ptr_v_descale,
-                    args.stride_q_descale, args.stride_k_descale, args.stride_v_descale,
+                    args.ptr_q_descale, args.ptr_k_descale, args.ptr_v_descale, args.ptr_p_descale,
+                    args.stride_q_descale, args.stride_k_descale, args.stride_v_descale, args.stride_p_descale,
                     args.stride_q_descale_int8, args.stride_k_descale_int8,
                     !Has_softcap ? 0.f : args.softmax_scale / args.softcap_val,
                     args.window_size_left, args.window_size_right, attention_chunk_divmod,
@@ -1787,7 +1787,8 @@ namespace flash
                 flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP), tOrV(_, _, _, smem_pipe_read.index()), tOrO);
                 // For INT8, V is bf16, so no v_descale needed (use Is_FP8)
                 float const v_descale = !Is_FP8 || params.ptr_v_descale == nullptr ? 1.0f : params.ptr_v_descale[bidb * get<0>(params.stride_v_descale) + bidh_kv * get<1>(params.stride_v_descale)];
-                cute::copy(softmax.finalize(v_descale), scores_scale);
+                float const p_descale = params.ptr_p_descale == nullptr ? 1.0f : params.ptr_p_descale[bidb * get<0>(params.stride_p_descale) + bidh_kv * get<1>(params.stride_p_descale)];
+                cute::copy(softmax.finalize(v_descale * p_descale), scores_scale);
                 if constexpr (LargeHeadDimV)
                 {
                     cutlass::arch::NamedBarrier::sync(NumMmaThreads, static_cast<uint32_t>(FwdNamedBarriers::PEmpty) /*id*/);
@@ -2002,7 +2003,8 @@ namespace flash
                 cutlass::arch::NamedBarrier::arrive(NumMmaThreadsQK + (Use_TMA_Q ? cutlass::NumThreadsPerWarp : NumProducerThreads), static_cast<uint32_t>(FwdNamedBarriers::QueryEmpty) /*id*/);
                 // For INT8, V is bf16, so no v_descale needed (use Is_FP8)
                 float const v_descale = !Is_FP8 || params.ptr_v_descale == nullptr ? 1.0f : params.ptr_v_descale[bidb * get<0>(params.stride_v_descale) + bidh_kv * get<1>(params.stride_v_descale)];
-                Tensor scores_scale = softmax.finalize(v_descale);
+                float const p_descale = params.ptr_p_descale == nullptr ? 1.0f : params.ptr_p_descale[bidb * get<0>(params.stride_p_descale) + bidh_kv * get<1>(params.stride_p_descale)];
+                Tensor scores_scale = softmax.finalize(v_descale * p_descale);
 
                 if constexpr (LargeHeadDimV)
                 {

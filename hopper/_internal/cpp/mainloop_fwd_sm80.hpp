@@ -200,8 +200,8 @@ struct CollectiveMainloopFwdSm80 {
         ShapePageTable const shape_pagetable;
         StridePageTable const stride_pagetable;
         float const softmax_scale;
-        float const* ptr_q_descale, *ptr_k_descale, *ptr_v_descale;
-        StrideDescale const stride_q_descale, stride_k_descale, stride_v_descale;
+        float const* ptr_q_descale, *ptr_k_descale, *ptr_v_descale, *ptr_p_descale;
+        StrideDescale const stride_q_descale, stride_k_descale, stride_v_descale, stride_p_descale;
         int const window_size_left = -1, window_size_right = -1, attention_chunk = 0;
         float const softcap_val;
         int const num_splits;
@@ -245,8 +245,8 @@ struct CollectiveMainloopFwdSm80 {
         cutlass::FastDivmod page_size_divmod;
         cutlass::FastDivmod qhead_per_khead_divmod;
         float const softmax_scale_log2;
-        float const* ptr_q_descale, *ptr_k_descale, *ptr_v_descale;
-        StrideDescale const stride_q_descale, stride_k_descale, stride_v_descale;
+        float const* ptr_q_descale, *ptr_k_descale, *ptr_v_descale, *ptr_p_descale;
+        StrideDescale const stride_q_descale, stride_k_descale, stride_v_descale, stride_p_descale;
         float const softcap_val;
         int const window_size_left, window_size_right;
         cutlass::FastDivmod attention_chunk_divmod;
@@ -294,8 +294,8 @@ struct CollectiveMainloopFwdSm80 {
                 cutlass::FastDivmod(int(get<0>(args.shape_K))),
                 cutlass::FastDivmod(cute::ceil_div(get<2>(args.shape_Q), get<2>(args.shape_K))),
                 !Has_softcap ? float(args.softmax_scale * M_LOG2E) : float(args.softcap_val * M_LOG2E),
-                args.ptr_q_descale, args.ptr_k_descale, args.ptr_v_descale,
-                args.stride_q_descale, args.stride_k_descale, args.stride_v_descale,
+                args.ptr_q_descale, args.ptr_k_descale, args.ptr_v_descale, args.ptr_p_descale,
+                args.stride_q_descale, args.stride_k_descale, args.stride_v_descale, args.stride_p_descale,
                 !Has_softcap ? 0.f : args.softmax_scale / args.softcap_val,
                 args.window_size_left, args.window_size_right, attention_chunk_divmod,
                 !Split ? 1 : args.num_splits,
@@ -650,7 +650,8 @@ struct CollectiveMainloopFwdSm80 {
             }
         }
         float const v_descale = !Is_FP8 || params.ptr_v_descale == nullptr ? 1.0f : params.ptr_v_descale[bidb * get<0>(params.stride_v_descale) + bidh_kv * get<1>(params.stride_v_descale)];
-        Tensor scores_scale = softmax.finalize(v_descale);
+        float const p_descale = params.ptr_p_descale == nullptr ? 1.0f : params.ptr_p_descale[bidb * get<0>(params.stride_p_descale) + bidh_kv * get<1>(params.stride_p_descale)];
+        Tensor scores_scale = softmax.finalize(v_descale * p_descale);
         softmax.rescale_o(tOrO, scores_scale);
         if constexpr (Is_FP8) { flash::permute_output_fp8(tOrO); }
         return true;
