@@ -88,7 +88,7 @@ def test_pct_shape_with_maps_enabled(qkv, tmp_path):
         attn_map=True,
         attn_map_modules=["attn0"],
         attn_map_timesteps=[0, 2],
-        attn_map_heads=[0, 3],
+        heads=[0, 3],
         attn_map_res=32,
     )
     warmup_all(registry, q, k, v, n=3)
@@ -210,7 +210,7 @@ def test_attn_map_head_filter(qkv, tmp_path):
     registry.enable_capture(
         save_path=save_path,
         attn_map=True,
-        attn_map_heads=[0, 5],
+        heads=[0, 5],
         attn_map_res=32,
     )
     warmup_all(registry, q, k, v, n=1)
@@ -294,7 +294,7 @@ def test_capture_batch_out_of_range(qkv, tmp_path):
     registry.enable_capture(
         save_path=save_path,
         attn_map=True,
-        attn_map_batch_indices=[0, 5],
+        batches=[0, 5],
         attn_map_res=32,
     )
     warmup_all(registry, q, k, v, n=1)
@@ -346,9 +346,9 @@ def test_render_skip_images(qkv, tmp_path):
     registry.enable_capture(
         save_path=save_path,
         attn_map=True,
-        attn_map_heads=[0],
+        heads=[0],
         attn_map_timesteps=[0],
-        attn_map_batch_indices=[0],
+        batches=[0],
         attn_map_res=32,
     )
     warmup_all(registry, q, k, v, n=1)
@@ -400,8 +400,8 @@ def test_stats_captured_basic(qkv, tmp_path):
         save_path=save_path,
         attn_map=True,
         attn_map_modules=["attn0"],
-        attn_map_heads=[0],
-        attn_map_batch_indices=[0],
+        heads=[0],
+        batches=[0],
         attn_map_res=32,
         stats=True,
     )
@@ -462,8 +462,8 @@ def test_stats_values_are_valid(qkv, tmp_path):
         save_path=save_path,
         attn_map=True,
         attn_map_modules=["attn0"],
-        attn_map_heads=[0],
-        attn_map_batch_indices=[0],
+        heads=[0],
+        batches=[0],
         attn_map_res=64,
         stats=True,
     )
@@ -501,8 +501,8 @@ def test_stats_accumulate_all_timesteps(qkv, tmp_path):
         attn_map=True,
         attn_map_modules=["attn0"],
         attn_map_timesteps=[0, 2],  # only capture maps for timesteps 0 and 2
-        attn_map_heads=[0],
-        attn_map_batch_indices=[0],
+        heads=[0],
+        batches=[0],
         attn_map_res=32,
         stats=True,
     )
@@ -545,8 +545,8 @@ def test_stats_multiple_heads_and_batches(tmp_path):
         save_path=save_path,
         attn_map=True,
         attn_map_modules=["attn0"],
-        attn_map_heads=sel_heads,
-        attn_map_batch_indices=sel_batch,
+        heads=sel_heads,
+        batches=sel_batch,
         attn_map_res=64,
         stats=True,
     )
@@ -578,8 +578,8 @@ def test_stats_all_heads_all_batches(qkv, tmp_path):
         save_path=save_path,
         attn_map=True,
         attn_map_modules=["attn0"],
-        attn_map_heads=None,
-        attn_map_batch_indices=None,
+        heads=None,
+        batches=None,
         attn_map_res=64,
         stats=True,
     )

@@ -119,7 +119,9 @@ def render_skip_images(
         kBlockN = mod_data["kBlockN"]
         map_timesteps = mod_data["map_timesteps"]
         map_heads = mod_data["map_heads"]
-        map_batch_indices = mod_data["map_batch_indices"]
+        map_batch_indices = mod_data.get(
+            "map_batches", mod_data.get("map_batch_indices")
+        )
         skip_lists = mod_data["skip_lists"]
         attn_maps = mod_data["attn_maps"]
         seq_len_q = mod_data["seq_len_q"]
@@ -256,7 +258,7 @@ def to_xarray(data: dict):
         if "attn_maps" in mod_data:
             map_ts = mod_data["map_timesteps"]
             map_heads = mod_data["map_heads"]
-            map_batch = mod_data["map_batch_indices"]
+            map_batch = mod_data.get("map_batches", mod_data.get("map_batch_indices"))
 
             data_vars["skip_lists"] = xr.DataArray(
                 mod_data["skip_lists"].numpy(),

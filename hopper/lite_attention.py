@@ -1947,8 +1947,8 @@ class LiteAttentionRegistry(ModuleRegistry):
                 - Callable[[str], bool]: predicate on module name
                 - None: all modules
             attn_map_timesteps: Timestep indices for map capture, or None for all.
-            attn_map_heads: Head indices for map capture, or None for all.
-            attn_map_batch_indices: Batch indices for map capture, or None for all.
+            heads: Head indices for map/stats capture, or None for all.
+            batches: Batch indices for map/stats capture, or None for all.
             attn_map_res: Resolution for downsampled attention maps.
             qk_block_map: Enable block-level max of pre-softmax QK scores.
             stats: Enable running stats accumulation at full resolution.
@@ -2081,14 +2081,12 @@ class LiteAttentionRegistry(ModuleRegistry):
                 mod_data["stats_max"] = module._stats_max.float()
                 mod_data["stats_min"] = module._stats_min.float()
                 mod_data["stats_count"] = module._stats_count
-                if module._capture_attn_map_batch_indices is not None:
-                    mod_data["stats_batch_indices"] = (
-                        module._capture_attn_map_batch_indices
-                    )
+                if module._capture_map_batches is not None:
+                    mod_data["stats_batch_indices"] = module._capture_map_batches
                 else:
                     mod_data["stats_batch_indices"] = list(range(pct_per_head.shape[1]))
-                if module._capture_attn_map_heads is not None:
-                    mod_data["stats_heads"] = module._capture_attn_map_heads
+                if module._capture_map_heads is not None:
+                    mod_data["stats_heads"] = module._capture_map_heads
                 else:
                     mod_data["stats_heads"] = list(range(pct_per_head.shape[-1]))
 
