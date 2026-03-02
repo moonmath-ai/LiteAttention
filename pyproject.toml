@@ -87,4 +87,4 @@ explicit = true
 
 [tool.ruff]
 line-length = 88
-exclude = ['csrc/composable_kernel', 'csrc/cutlass']
+exclude = ['csrc/']
