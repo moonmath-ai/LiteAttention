@@ -333,31 +333,31 @@ class FlashAttnFunc(torch.autograd.Function):
             )
         # out, q, k, v, out_padded, softmax_lse = _flash_attn_forward(
         out, softmax_lse, *rest = _flash_attn_forward(
-            q,
-            k,
-            v,
-            None,
-            None,  # k_new, v_new
-            qv,  # qv
-            None,  # out
-            None,
-            None,
-            None,  # cu_seqlens_q/k/k_new
-            None,
-            None,  # seqused_q/k
-            None,
-            None,  # max_seqlen_q/k
-            None,
-            None,
-            None,  # page_table, kv_batch_idx, leftpad_k,
-            None,
-            None,
-            None,  # rotary_cos/sin, seqlens_rotary
-            q_descale,
-            k_descale,
-            v_descale,
-            use_int8,
-            softmax_scale,
+            q=q,
+            k=k,
+            v=v,
+            k_new=None,
+            v_new=None,  # k_new, v_new
+            qv=qv,  # qv
+            out=None,  # out
+            cu_seqlens_q=None,
+            cu_seqlens_k=None,
+            cu_seqlens_k_new=None,  # cu_seqlens_q/k/k_new
+            seqused_q=None,  # seqused_q/k
+            seqused_k=None,  # max_seqlen_q/k
+            max_seqlen_q=None,
+            max_seqlen_k=None,
+            page_table=None,  # page_table, kv_batch_idx, leftpad_k,
+            kv_batch_idx=None,
+            leftpad_k=None,
+            rotary_cos=None,
+            rotary_sin=None,
+            seqlens_rotary=None,
+            q_descale=q_descale,
+            k_descale=k_descale,
+            v_descale=v_descale,
+            use_int8=use_int8,
+            softmax_scale=softmax_scale,
             causal=causal,
             window_size=window_size,
             attention_chunk=attention_chunk,
