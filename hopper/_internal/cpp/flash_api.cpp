@@ -748,8 +748,10 @@
      bool is_sm8x = dprops->major >= 8;
      TORCH_CHECK(is_sm8x, "FlashAttention only supports Ampere GPUs or newer.");
  
+    const bool fp8_v = v.scalar_type() == at::ScalarType::Float8_e4m3fn;
+
     // Inline INT8 quantization: if use_int8 is true and Q/K are bf16/fp16, quantize them directly
-    if (use_int8) {
+    if (use_int8 || fp8_v) {
         auto q_orig_type = q.scalar_type();
         TORCH_CHECK(q_orig_type == at::ScalarType::Half || q_orig_type == at::ScalarType::BFloat16,
                     "INT8 quantization requires Q and K to be fp16 or bf16");
@@ -772,7 +774,8 @@
         
         // Get tile sizes
         auto [block_m, block_n, mma_pv_is_rs, intra_wg_overlap] = tile_size_fwd_sm90(
-            head_dim, head_dim, false, false, 1, v_colmajor, false, false, is_skipable, true);
+            head_dim, head_dim, false, false, 1, v_colmajor, false, false, is_skipable, !fp8_v);
+            // head_dim, head_dim, false, false, 1, v_colmajor, false, false, is_skipable, true);
          
          const int num_q_blocks = (seqlen_q + block_m - 1) / block_m;
          const int num_k_blocks = (seqlen_k + block_n - 1) / block_n;
@@ -829,8 +832,9 @@
      }
  
      auto q_type = q.scalar_type();
-     TORCH_CHECK(q_type == at::ScalarType::Half || q_type == at::ScalarType::BFloat16 || q_type == at::ScalarType::Float8_e4m3fn || q_type == torch::kInt8,
-                 "FlashAttention only supports fp16, bf16, fp8_e4m3, and int8 data type");
+    //  TORCH_CHECK(q_type == at::ScalarType::Half || q_type == at::ScalarType::BFloat16 || q_type == at::ScalarType::Float8_e4m3fn || q_type == torch::kInt8,
+     TORCH_CHECK(q_type == at::ScalarType::Half || q_type == at::ScalarType::BFloat16 || q_type == torch::kInt8,
+                 "FlashAttention only supports fp16, bf16, and int8 data type");
      if (dprops->major < 9) {
          TORCH_CHECK(q_type == at::ScalarType::Half || q_type == at::ScalarType::BFloat16,
                      "FlashAttention on Ampere/Ada cards only supports fp16 and bf16 data type");
@@ -838,7 +842,7 @@
      TORCH_CHECK(k.scalar_type() == q_type, "query and key must have the same dtype");
      // For INT8, Q and K are int8 but V is bf16
      if (q_type == torch::kInt8) {
-         TORCH_CHECK(v.scalar_type() == torch::kBFloat16, "For INT8 attention, value must be bf16");
+         TORCH_CHECK(v.scalar_type() == torch::kBFloat16 || v.scalar_type() == at::ScalarType::Float8_e4m3fn, "For INT8 attention, value must be bf16 or fp8");
      } else {
          TORCH_CHECK(v.scalar_type() == q_type, "query and value must have the same dtype");
      }
@@ -1306,19 +1310,19 @@
              auto q_descale = q_descale_.value();
              CHECK_DEVICE(q_descale);
              if (is_int8) {
-                 // INT8: 3D tensor (batch, heads, m_blocks)
-                 TORCH_CHECK(q_descale.dim() == 3, "q_descale must be 3D for INT8 (batch, heads, m_blocks)");
-                 params.q_descale_ptr = q_descale.data_ptr<float>();
-                 params.q_descale_batch_stride = q_descale.stride(0);
-                 params.q_descale_head_stride = q_descale.stride(1);
-                 params.q_descale_block_stride = q_descale.stride(2);
+                // INT8: 3D tensor (batch, heads, m_blocks)
+                TORCH_CHECK(q_descale.dim() == 3, "q_descale must be 3D for INT8 (batch, heads, m_blocks)");
+                params.q_descale_ptr = q_descale.data_ptr<float>();
+                params.q_descale_batch_stride = q_descale.stride(0);
+                params.q_descale_head_stride = q_descale.stride(1);
+                params.q_descale_block_stride = q_descale.stride(2);
              } else {
-                 // FP8: 2D tensor (batch, heads)
-             CHECK_SHAPE(q_descale, batch_size, num_heads_k);
-             params.q_descale_ptr = q_descale.data_ptr<float>();
-             params.q_descale_batch_stride = q_descale.stride(0);
-             params.q_descale_head_stride = q_descale.stride(1);
-                 params.q_descale_block_stride = 0;  // Not used for FP8
+                // FP8: 2D tensor (batch, heads)
+                CHECK_SHAPE(q_descale, batch_size, num_heads_k);
+                params.q_descale_ptr = q_descale.data_ptr<float>();
+                params.q_descale_batch_stride = q_descale.stride(0);
+                params.q_descale_head_stride = q_descale.stride(1);
+                params.q_descale_block_stride = 0;  // Not used for FP8
              }
          } else {
              params.q_descale_ptr = nullptr;
@@ -1328,26 +1332,27 @@
              auto k_descale = k_descale_.value();
              CHECK_DEVICE(k_descale);
              if (is_int8) {
-                 // INT8: 3D tensor (batch, heads, n_blocks)
-                 TORCH_CHECK(k_descale.dim() == 3, "k_descale must be 3D for INT8 (batch, heads, n_blocks)");
-                 params.k_descale_ptr = k_descale.data_ptr<float>();
-                 params.k_descale_batch_stride = k_descale.stride(0);
-                 params.k_descale_head_stride = k_descale.stride(1);
-                 params.k_descale_block_stride = k_descale.stride(2);
+                // INT8: 3D tensor (batch, heads, n_blocks)
+                TORCH_CHECK(k_descale.dim() == 3, "k_descale must be 3D for INT8 (batch, heads, n_blocks)");
+                params.k_descale_ptr = k_descale.data_ptr<float>();
+                params.k_descale_batch_stride = k_descale.stride(0);
+                params.k_descale_head_stride = k_descale.stride(1);
+                params.k_descale_block_stride = k_descale.stride(2);
              } else {
-                 // FP8: 2D tensor (batch, heads)
-             CHECK_SHAPE(k_descale, batch_size, num_heads_k);
-             params.k_descale_ptr = k_descale.data_ptr<float>();
-             params.k_descale_batch_stride = k_descale.stride(0);
-             params.k_descale_head_stride = k_descale.stride(1);
-                 params.k_descale_block_stride = 0;  // Not used for FP8
+                // FP8: 2D tensor (batch, heads)
+                CHECK_SHAPE(k_descale, batch_size, num_heads_k);
+                params.k_descale_ptr = k_descale.data_ptr<float>();
+                params.k_descale_batch_stride = k_descale.stride(0);
+                params.k_descale_head_stride = k_descale.stride(1);
+                params.k_descale_block_stride = 0;  // Not used for FP8
              }
          } else {
              params.k_descale_ptr = nullptr;
              params.k_descale_block_stride = 0;
          }
          // v_descale only for FP8, not INT8 (INT8 has bf16 V)
-         if (q_type == at::ScalarType::Float8_e4m3fn && v_descale_.has_value()) {
+        //  if (q_type == at::ScalarType::Float8_e4m3fn && v_descale_.has_value()) {
+         if (fp8_v && v_descale_.has_value()) {
              auto v_descale = v_descale_.value();
              CHECK_DEVICE(v_descale);
              CHECK_SHAPE(v_descale, batch_size, num_heads_k);
