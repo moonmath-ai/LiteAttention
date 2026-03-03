@@ -167,6 +167,7 @@ def main():
     # Initialize LiteAttention instances for warmup
     lite_attn_warmup = LiteAttention(enable_skipping=False)
     lite_attn_int8_warmup = LiteAttention(enable_skipping=False, use_int8=True)
+    lite_attn_fp8_int8_warmup = LiteAttention(enable_skipping=False, use_int8=False)
 
     # Prepare FP8 tensors for warmup
     q_fp8_warmup, descale_q_warmup = quantize_to_fp8(q)
@@ -194,6 +195,8 @@ def main():
         )
         # INT8 LiteAttention
         _ = lite_attn_int8_warmup(q, k, v, scale=softmax_scale)
+        # FP8+INT8 LiteAttention (fp8 value triggers fp8+int8 path; q,k stay bf16)
+        _ = lite_attn_fp8_int8_warmup(q, k, v_fp8_warmup, scale=softmax_scale)
 
     torch.cuda.synchronize()
     print(f"Warmup completed ({warmup_iters} iterations per kernel)")
@@ -329,6 +332,30 @@ def main():
     compute_error_metrics(out_int8, out_bf16_ref, "INT8 LiteAttention")
 
     # ============================================================================
+    # FP8+INT8 Forward Pass (LiteAttention with fp8 inputs and int8 enabled)
+    # ============================================================================
+    print("\n" + "=" * 70)
+    print("Running FP8+INT8 forward pass (LiteAttention with FP8 inputs and int8 enabled)...")
+    print("=" * 70)
+
+    # LiteAttention(use_int8=True) + FP8 Q,K,V triggers fp8+int8 kernel path (use_fp8 from value.dtype.itemsize == 1)
+    lite_attn_fp8_int8 = LiteAttention(enable_skipping=False, use_int8=False)
+
+    torch.cuda.synchronize()
+    # q,k bf16; v fp8 — value.dtype.itemsize==1 triggers fp8+int8 path
+    out_fp8_int8 = lite_attn_fp8_int8(
+        q,
+        k,
+        v_fp8,
+        scale=softmax_scale,
+    )
+    torch.cuda.synchronize()
+
+    print(f"FP8+INT8 Output shape: {out_fp8_int8.shape}")
+    print(f"FP8+INT8 Output dtype: {out_fp8_int8.dtype}")
+    compute_error_metrics(out_fp8_int8, out_bf16_ref, "FP8+INT8 LiteAttention")
+
+    # ============================================================================
     # Summary of all error metrics
     # ============================================================================
     print("\n" + "=" * 70)
@@ -340,6 +367,7 @@ def main():
         ("FP8 (no descale)", out_fp8_no_descale),
         ("FP8 (with descale)", out_fp8_with_descale),
         ("INT8 LiteAttention", out_int8),
+        ("FP8+INT8 LiteAttention", out_fp8_int8),
     ]
 
     print(

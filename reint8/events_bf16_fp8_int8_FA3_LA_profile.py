@@ -168,6 +168,8 @@ def main():
     k_fp8_warmup, descale_k_warmup = quantize_to_fp8(k)
     v_fp8_warmup, descale_v_warmup = quantize_to_fp8(v)
     
+    # FP8+INT8 LiteAttention warmup (needs fp8 inputs)
+    lite_attn_fp8_int8_warmup = LiteAttention(enable_skipping=False, use_int8=False)
     for i in range(warmup_iters):
         # BF16 FA3
         _ = flash_attn_func(q, k, v, softmax_scale=softmax_scale, causal=causal, window_size=(-1, -1))
@@ -179,6 +181,8 @@ def main():
                            q_descale=descale_q_warmup, k_descale=descale_k_warmup, v_descale=descale_v_warmup)
         # INT8 LiteAttention
         _ = lite_attn_int8_warmup(q, k, v, scale=softmax_scale)
+        # FP8+INT8 LiteAttention (fp8 value triggers fp8+int8 path; q,k stay bf16)
+        _ = lite_attn_fp8_int8_warmup(q, k, v_fp8_warmup, scale=softmax_scale)
     
     torch.cuda.synchronize()
     print(f"Warmup completed ({warmup_iters} iterations per kernel)")
@@ -399,6 +403,41 @@ def main():
     compute_error_metrics(out_int8, out_bf16_ref, "INT8 LiteAttention")
     
     # ============================================================================
+    # FP8+INT8 Forward Pass (LiteAttention with fp8 inputs and int8 enabled)
+    # ============================================================================
+    print("\n" + "="*70)
+    print("Running FP8+INT8 forward pass (LiteAttention with FP8 inputs and int8 enabled)...")
+    print("="*70)
+    
+    # LiteAttention(use_int8=True) + FP8 Q,K,V triggers fp8+int8 kernel path (use_fp8 from value.dtype.itemsize == 1)
+    lite_attn_fp8_int8 = LiteAttention(enable_skipping=False, use_int8=False)
+    
+    torch.cuda.synchronize()
+    
+    # Single forward pass for output (q,k bf16; v fp8 — value.dtype.itemsize==1 triggers fp8+int8 path)
+    out_fp8_int8 = lite_attn_fp8_int8(
+        q,
+        k,
+        v_fp8,
+        scale=softmax_scale,
+    )
+    torch.cuda.synchronize()
+    
+    # Timing loop
+    start_event.record()
+    for _ in range(num_timing_iters):
+        _ = lite_attn_fp8_int8(q, k, v_fp8, scale=softmax_scale)
+    end_event.record()
+    torch.cuda.synchronize()
+    elapsed_time_ms = start_event.elapsed_time(end_event) / num_timing_iters
+    
+    print(f"FP8+INT8 Output shape: {out_fp8_int8.shape}")
+    print(f"FP8+INT8 Output dtype: {out_fp8_int8.dtype}")
+    print(f"FP8+INT8 LiteAttention Latency: {elapsed_time_ms:.4f} ms (avg over {num_timing_iters} iterations)")
+    latency_fp8_int8 = elapsed_time_ms
+    compute_error_metrics(out_fp8_int8, out_bf16_ref, "FP8+INT8 LiteAttention")
+    
+    # ============================================================================
     # Summary of all error metrics
     # ============================================================================
     print("\n" + "="*70)
@@ -410,6 +449,7 @@ def main():
         ("FP8 (no descale)", out_fp8_no_descale),
         ("FP8 (with descale)", out_fp8_with_descale),
         ("INT8 LiteAttention", out_int8),
+        ("FP8+INT8 LiteAttention", out_fp8_int8),
     ]
     
     print(f"\n{'Method':<25} {'Max Abs Err':<14} {'Mean Abs Err':<14} {'RMSE':<14} {'Cosine Sim':<12}")
@@ -441,6 +481,7 @@ def main():
         ("FP8 (no descale)", latency_fp8_no_descale),
         ("FP8 (with descale)", latency_fp8_with_descale),
         ("INT8 LiteAttention", latency_int8),
+        ("FP8+INT8 LiteAttention", latency_fp8_int8),
     ]
     
     print(f"\n{'Method':<25} {'Latency (ms)':<15} {'Speedup vs Ref':<15}")
