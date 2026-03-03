@@ -648,10 +648,14 @@ namespace flash
             // To reduce the number of instructions, we instead pre-multiply softmax_scale / softcap_val
             // (assigning it to params.softcap_val) and pre-multiply softcap_val * log2(e)
             // (assigning it to params.softmax_scale_log2).
+            // Params.stride_Qv is StrideV; when V_colmajor convert args.stride_Qv (StrideQK) to ( _1, row_stride, head_stride, batch_stride )
+            StrideV stride_Qv_params = cute::conditional_return<!V_colmajor>(
+                args.stride_Qv,
+                make_stride(_1{}, get<0>(args.stride_Qv), get<2>(args.stride_Qv), get<3>(args.stride_Qv)));
             return {args.ptr_Q, args.shape_Q, args.stride_Q, shape_Q_packed, stride_Q_packed,
                     args.ptr_K, args.shape_K, args.stride_K, args.ptr_V, args.headdim_v, args.stride_V,
                     args.ptr_K_new, args.shape_K_new, args.stride_K_new, args.ptr_V_new, args.stride_V_new,
-                    args.ptr_Qv, args.stride_Qv, shape_Qv_packed, stride_Qv_packed,
+                    args.ptr_Qv, stride_Qv_params, shape_Qv_packed, stride_Qv_packed,
                     args.ptr_rotary_cos, args.shape_rotary, args.stride_rotary_cos,
                     args.ptr_rotary_sin, args.stride_rotary_sin, args.is_rotary_interleaved,
                     args.ptr_pagetable, args.shape_pagetable, args.stride_pagetable,
@@ -875,11 +879,15 @@ namespace flash
             // For INT8: use skip_list_storage to store dequantization scalars (one per pipeline stage, no alignment requirement)
 
             // Use ElementV for V operations (bfloat16 for INT8 mode)
-            using PagedKVManager_t = PagedKVManager<get<1>(TileShape_MNK{}), get<2>(TileShape_MNK{}), get<1>(TileShape_MNK_PV{}), NumProducerThreads, Element, ElementV, Transpose_V || !IntraWGOverlap /*KV_Same_Iter*/>;
+            using PagedKVManager_t = PagedKVManager<get<1>(TileShape_MNK{}), get<2>(TileShape_MNK{}), get<1>(TileShape_MNK_PV{}), NumProducerThreads, ElementQK, ElementV, Transpose_V || !IntraWGOverlap /*KV_Same_Iter*/>;
+            // PagedKVManager expects StrideKV = (row_stride, _1, head_stride, batch_stride). When V_colmajor, params.stride_V is (_1, dim_stride, head_stride, batch_stride); convert to (dim_stride, _1, head_stride, batch_stride).
+            typename PagedKVManager_t::StrideKV stride_V_for_paged = cute::conditional_return<!V_colmajor>(
+                params.stride_V,
+                make_stride(get<1>(params.stride_V), _1{}, get<2>(params.stride_V), get<3>(params.stride_V)));
             PagedKVManager_t paged_kv_manager(
                 params.ptr_pagetable, params.shape_pagetable, params.stride_pagetable,
                 params.ptr_K, params.shape_K, params.stride_K,
-                params.ptr_V, params.headdim_v, params.stride_V,
+                params.ptr_V, params.headdim_v, stride_V_for_paged,
                 params.page_size_divmod, params.blockN_per_page_size_divmod,
                 bidb_kv, bidh_kv, thread_idx, seqlen_info.seqlen_k, seqlen_info.leftpad_k, bidb_kv_idx);
 
@@ -2364,11 +2372,14 @@ namespace flash
             // This is used to index into the batch dimension of mK and mV
             int const bidb_kv_idx = !is_varlen_k && !params.ptr_pagetable ? bidb_kv : 0;
 
-            using PagedKVManager_t = PagedKVManager<get<1>(TileShape_MNK{}), get<2>(TileShape_MNK{}), get<1>(TileShape_MNK_PV{}), NumMmaThreads, Element, ElementV, true /*KV_Same_Iter*/, 2 /*LoadsPerRow_LB*/>;
+            using PagedKVManager_t = PagedKVManager<get<1>(TileShape_MNK{}), get<2>(TileShape_MNK{}), get<1>(TileShape_MNK_PV{}), NumMmaThreads, ElementQK, ElementV, true /*KV_Same_Iter*/, 2 /*LoadsPerRow_LB*/>;
+            typename PagedKVManager_t::StrideKV stride_V_for_paged_append = cute::conditional_return<!V_colmajor>(
+                params.stride_V,
+                make_stride(get<1>(params.stride_V), _1{}, get<2>(params.stride_V), get<3>(params.stride_V)));
             PagedKVManager_t paged_kv_manager(
                 params.ptr_pagetable, params.shape_pagetable, params.stride_pagetable,
                 params.ptr_K, params.shape_K, params.stride_K,
-                params.ptr_V, params.headdim_v, params.stride_V,
+                params.ptr_V, params.headdim_v, stride_V_for_paged_append,
                 params.page_size_divmod, params.blockN_per_page_size_divmod,
                 bidb_kv, bidh_kv, thread_idx, seqlen_k_new, offset_k, bidb_kv_idx
                 // passing offset_k instead of leftpad_k will move the PageTable pointer to the right position

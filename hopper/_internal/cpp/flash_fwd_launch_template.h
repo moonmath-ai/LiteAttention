@@ -209,6 +209,12 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream)
             make_stride(params.v_row_stride, _1{}, params.v_head_stride, !is_varlen_k ? params.v_batch_stride : 0),
             // Column-major V layout: (head_dim, seqlen, num_heads, batch) strides
             make_stride(_1{}, params.v_dim_stride, params.v_head_stride, !is_varlen_k ? params.v_batch_stride : 0));
+    typename CollectiveMainloop::StrideV vnew_strides =
+        cute::conditional_return<!V_colmajor>(
+            make_stride(params.vnew_row_stride, _1{}, params.vnew_head_stride, !is_varlen_k_new ? params.vnew_batch_stride : 0),
+            make_stride(_1{}, params.v_dim_stride, params.vnew_head_stride, !is_varlen_k_new ? params.vnew_batch_stride : 0));
+    // Arguments.stride_Qv is always StrideQK (row-major); Params.stride_Qv is StrideV (converted in to_underlying_arguments when V_colmajor).
+    typename CollectiveMainloop::StrideQK qv_strides = make_stride(params.qv_row_stride, _1{}, params.qv_head_stride, !is_varlen_q ? params.qv_batch_stride : 0);
     // Construct mainloop arguments using CuTe's tensor abstraction
     // CuTe tensor arguments combine data pointers with shape and stride information
     typename CollectiveMainloop::Arguments mainloop_args{
@@ -241,11 +247,11 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream)
         // ptr_V_new
         static_cast<ElementV const *>(params.vnew_ptr),
         // stride_V_new
-        {params.vnew_row_stride, _1{}, params.vnew_head_stride, !is_varlen_k_new ? params.vnew_batch_stride : 0}, // stride_V_new: CuTe stride pattern for new V tensor
+        vnew_strides, // stride_V_new: CuTe stride pattern for new V tensor (row-major or col-major per V_colmajor)
         // ptr_Qv
         static_cast<ElementQK const *>(params.qv_ptr),
         // stride_Qv
-        {params.qv_row_stride, _1{}, params.qv_head_stride, !is_varlen_q ? params.qv_batch_stride : 0}, // stride_Qv: CuTe stride for fused QV tensor
+        qv_strides, // stride_Qv: CuTe stride for fused QV tensor (row-major or col-major per V_colmajor)
         static_cast<ElementQK const *>(params.rotary_cos_ptr),
         {params.seqlen_k, params.rotary_dim / 2}, // shape_rotary: CuTe shape for rotary embeddings, the seqlen shape doesn't matter
         {params.rotary_dim / 2, _1{}},            // stride_rotary_cos: CuTe stride pattern for cosine values
