@@ -1508,7 +1508,7 @@ namespace flash
             {
                 if (get<1>(params.shape_rotary) > 0)
                 { // Apply rotary to Q
-                    using Rotary_t = Rotary<kBlockM, kHeadDim, NumMmaThreadsQK, Element, !(Is_causal || Is_local) /*FixedPosition*/>;
+                    using Rotary_t = Rotary<kBlockM, kHeadDim, NumMmaThreadsQK, ElementQK, !(Is_causal || Is_local) /*FixedPosition*/>;
                     Rotary_t rotary(params.ptr_rotary_cos, params.shape_rotary, params.stride_rotary_cos,
                                     params.ptr_rotary_sin, params.stride_rotary_sin,
                                     params.is_rotary_interleaved, thread_idx, seqlen_q,
@@ -1543,7 +1543,7 @@ namespace flash
 
             if constexpr (MmaQK_is_RS)
             {
-                using SmemCopyAtomQ = Copy_Atom<cute::SM75_U32x4_LDSM_N, Element>;
+                using SmemCopyAtomQ = Copy_Atom<cute::SM75_U32x4_LDSM_N, ElementQK>;
                 auto smem_tiled_copy_Q = make_tiled_copy_A(SmemCopyAtomQ{}, tiled_mma_qk);
                 auto smem_thr_copy_Q = smem_tiled_copy_Q.get_thread_slice(thread_idx);
                 Tensor tSrQ_copy_view = smem_thr_copy_Q.retile_D(tSrQ);
@@ -1562,7 +1562,7 @@ namespace flash
             // In INT8 mode: converts int32 to float and multiplies by dequan_s to dequantize
             // auto convert_qk_accum_to_float = [&](auto& tSrS_ambiguous_type, float dequan_s) {
             auto convert_qk_accum_to_float = [&](auto& tSrS_ambiguous_type) {
-                if constexpr (Is_INT8) {
+                if constexpr (Is_8Bit) {
                     // // Tensor tSrS_converted = make_tensor_like<ElementAccum>(tSrS_ambiguous_type);
                     // Reinterpret the same tensor with ElementAccum type (static cast)
                     return recast<ElementAccum>(tSrS_ambiguous_type);
@@ -1587,7 +1587,7 @@ namespace flash
                 }
                 flash::gemm</*zero_init=*/true, /*wg_wait=*/-1>(tiled_mma_qk, tSrQ, tSrK(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
                 warpgroup_wait<0>();
-                if constexpr (Is_INT8){
+                if constexpr (Is_8Bit){
                     // Load dequantization scalar from shared memory (already multiplied by softmax_scale_log2)
                     softmax.set_dequan_s(shared_storage.skip_list_storage.descale_array[smem_pipe_read.index()]);
                 }
@@ -1599,7 +1599,7 @@ namespace flash
                     consumer_wait(pipeline_v, smem_pipe_read);
                     flash::gemm</*zero_init=*/false, /*wg_wait=*/0>(tiled_mma_qv, tSrQv, tSrV(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
                 }
-                if constexpr (!Is_INT8){
+                if constexpr (!Is_8Bit){
                     scoremod_premask_fn(tSrS_ambiguous_type);
                 }
                 mask.template apply<true /*Seqlenk_mask*/, Is_causal, Is_local>(tSrS_ambiguous_type, m_block, n_block);
@@ -1622,7 +1622,7 @@ namespace flash
                 auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
 
                 // softmax.template online_softmax</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
-                if constexpr (!Is_INT8){
+                if constexpr (!Is_8Bit){
                     // interesting! if we use tSrS_ambiguous_type here the result is incorrect!
                     // AND LA without optimization becomes faster then FA3 baseline!
                     softmax.template online_softmax</*Is_first=*/true, /*Check_inf=*/true>(tSrS);
@@ -1704,7 +1704,7 @@ namespace flash
                     flash::gemm</*zero_init=*/false, /*wg_wait=*/-1>(tiled_mma_pv, cute::conditional_return<MmaPV_is_RS>(tOrP, tOsP), tOrV(_, _, _, smem_pipe_read_v.index()), tOrO);
                     warp_scheduler_barrier_arrive();
 
-                    if constexpr (Is_INT8){
+                    if constexpr (Is_8Bit){
                         // Load dequantization scalar from shared memory (already multiplied by softmax_scale_log2)
                         softmax.set_dequan_s(shared_storage.skip_list_storage.descale_array[smem_pipe_read.index()]);
                     }
@@ -1718,7 +1718,7 @@ namespace flash
                         consumer_wait(pipeline_v, smem_pipe_read);
                         flash::gemm</*zero_init=*/false, /*wg_wait=*/0>(tiled_mma_qv, tSrQv, tSrV(_, _, _, smem_pipe_read.index()), tSrS_ambiguous_type);
                     }
-                    if constexpr (!Is_INT8){
+                    if constexpr (!Is_8Bit){
                         scoremod_premask_fn(tSrS_ambiguous_type);
                     }
                     mask_fn(tSrS_ambiguous_type, new_n_block);
@@ -1744,7 +1744,7 @@ namespace flash
                     }
 
                     auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
-                    if constexpr (!Is_INT8){
+                    if constexpr (!Is_8Bit){
                         softmax.template online_softmax</*Is_first=*/false, Check_inf>(tSrS);
                     } else {
                         softmax.template online_softmax_dequantize</*Is_first=*/false, Check_inf>(tSrS_ambiguous_type, tSrS);
@@ -1912,12 +1912,12 @@ namespace flash
                         warpgroup_wait<0>();
                     }
 
-                    if constexpr (!Is_INT8){
+                    if constexpr (!Is_8Bit){
                         scoremod_premask_fn(tSrS_ambiguous_type);
                     }
                     mask_fn(tSrS_ambiguous_type, new_n_block);
 
-                    if constexpr (Is_INT8){
+                    if constexpr (Is_8Bit){
                         // Load dequantization scalar from shared memory (already multiplied by softmax_scale_log2)
                         softmax.set_dequan_s(shared_storage.skip_list_storage.descale_array[smem_pipe_read.index()]);
                     }
@@ -1938,7 +1938,7 @@ namespace flash
                     }
 
                     auto tSrS = convert_qk_accum_to_float(tSrS_ambiguous_type);
-                    if constexpr (!Is_INT8){
+                    if constexpr (!Is_8Bit){
                         softmax.template online_softmax<Is_first_iter, Check_inf>(tSrS);
                     } else {
                         softmax.template online_softmax_dequantize<Is_first_iter, Check_inf>(tSrS_ambiguous_type, tSrS);
