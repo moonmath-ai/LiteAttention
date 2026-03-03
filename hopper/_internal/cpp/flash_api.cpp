@@ -76,7 +76,8 @@
      params = {};
  
      params.is_bf16 = q.dtype() == torch::kBFloat16;
-     params.is_e4m3 = q.dtype() == torch::kFloat8_e4m3fn;
+    //  params.is_e4m3 = q.dtype() == torch::kFloat8_e4m3fn;
+     params.is_e4m3 = v.dtype() == torch::kFloat8_e4m3fn;
      params.is_int8 = q.dtype() == torch::kInt8;
  
      // Set the pointers and strides.
