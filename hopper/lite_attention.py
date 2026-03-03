@@ -801,6 +801,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
         return_softmax_lse: bool = False,
         must_do_list: list = None,
         must_skip_list: list = None,
+        v_descale: Optional[torch.Tensor] = None,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """
         Perform Flash Attention 3 computation with optional skip list optimization.
@@ -900,6 +901,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
                     reverse_skip_list=self.reverse_skip_list,
                     phase=(self._phase == 1) if self.reverse_skip_list else False,
                     use_int8=self.use_int8,
+                    v_descale=v_descale,
                 )
                 # we switch read <-> write manually; we remember to flip phase
                 self._phase = 1 - self._phase
@@ -916,6 +918,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
                     reverse_skip_list=self.reverse_skip_list,
                     phase=(self._phase == 1) if self.reverse_skip_list else False,
                     use_int8=self.use_int8,
+                    v_descale=v_descale,
                 )
                 # and we must flip back
                 self._phase = 1 - self._phase
@@ -986,6 +989,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
             # phase=(self._phase == (1 if custom_read_list is None else 0)) if self.reverse_skip_list else False,
             phase=(self._phase == 1) if self.reverse_skip_list else False,
             use_int8=self.use_int8,
+            v_descale=v_descale,
         )
 
         # Record calibration results and advance timestep

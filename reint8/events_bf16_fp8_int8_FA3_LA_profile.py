@@ -114,7 +114,8 @@ def main():
     # seqlen = 16384  # ~16k as requested
     # seqlen = 19 + 2**14  # ~16k as requested
     # seqlen = 2**14  # ~16k as requested
-    seqlen = 19 + 2**16  # ~16k as requested
+    # seqlen = 19 + 2**16  # ~16k as requested
+    seqlen = 19 + 2**12  # ~16k as requested
     num_heads = 32  # Adjust based on your model
     causal = False  # Set to True for autoregressive (causal) attention, False for bidirectional
     
@@ -426,7 +427,7 @@ def main():
     # Timing loop
     start_event.record()
     for _ in range(num_timing_iters):
-        _ = lite_attn_fp8_int8(q, k, v_fp8, scale=softmax_scale)
+        _ = lite_attn_fp8_int8(q, k, v_fp8, scale=softmax_scale, v_descale=descale_v)
     end_event.record()
     torch.cuda.synchronize()
     elapsed_time_ms = start_event.elapsed_time(end_event) / num_timing_iters
