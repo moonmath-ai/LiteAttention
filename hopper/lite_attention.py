@@ -530,7 +530,8 @@ class LiteAttention(nn.Module, ConfigurableModule):
 
         # Determine if value tensor is column-major (affects tile size selection)
         v_colmajor = value.shape[-3] == head_dim
-        dtype = torch.int8 if self.use_int8 else query.dtype
+        # dtype = torch.int8 if self.use_int8 else query.dtype
+        dtype = torch.int8 if self.use_int8 else value.dtype
         device = query.device
 
         # Allocate for max_batch_size to avoid reallocation on batch size changes.
@@ -718,7 +719,8 @@ class LiteAttention(nn.Module, ConfigurableModule):
         # Extract tensor properties needed for tile size calculation
         head_dim = query.shape[-1]
         v_colmajor = value.shape[-3] == head_dim
-        dtype = torch.int8 if use_int8 else query.dtype
+        # dtype = torch.int8 if use_int8 else query.dtype
+        dtype = torch.int8 if use_int8 else value.dtype
         device = query.device
 
         # Get tile dimensions (kBlockM, kBlockN)
@@ -866,6 +868,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
         else:
             must_do_list_expanded = None
 
+        use_fp8 = value.dtype.itemsize == 1
         # softmax_scale: for INT8 use q_scale (1.44269504089 * scale or / sqrt(head_dim)); else use scale as-is
         head_dim = query.shape[-1]
         softmax_scale = (
@@ -874,7 +877,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
                 if scale is None
                 else (1.44269504089 * scale)
             )
-            if self.use_int8
+            if self.use_int8 or use_fp8
             else scale
         )
 
