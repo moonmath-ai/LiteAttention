@@ -89,9 +89,11 @@ namespace flash
         
         // For INT8, V uses bfloat16 (not int8) to maintain precision
         using ElementV = std::conditional_t<Is_INT8, cute::bfloat16_t, Element>;
+        using ElementQK = std::conditional_t<Is_FP8, int8_t, Element>;
+
         using ElementAccum = ElementAccum_;
         // For INT8, QK accumulation uses int32 for precision
-        using ElementAccumQK = std::conditional_t<Is_INT8, int32_t, ElementAccum>;
+        using ElementAccumQK = std::conditional_t<Is_8Bit, int32_t, ElementAccum>;
         using ArchTag = ArchTag_;
         static constexpr bool Is_causal = Is_causal_;
         static constexpr bool Is_local = Is_local_;
@@ -156,8 +158,8 @@ namespace flash
         using TiledMmaQK = decltype(cute::make_tiled_mma(
             std::conditional_t<
                 !MmaQK_is_RS,
-                decltype(cute::GMMA::ss_op_selector<Element, Element, ElementAccumQK, TileShape_MNK>()),
-                decltype(cute::GMMA::rs_op_selector<Element, Element, ElementAccumQK, TileShape_MNK>())>{},
+                decltype(cute::GMMA::ss_op_selector<ElementQK, ElementQK, ElementAccumQK, TileShape_MNK>()),
+                decltype(cute::GMMA::rs_op_selector<ElementQK, ElementQK, ElementAccumQK, TileShape_MNK>())>{},
             AtomLayoutQK{}));
         using AtomLayoutPV = std::conditional_t<
             !LargeHeadDimV,
@@ -321,7 +323,7 @@ namespace flash
 
         using TMA_Q = decltype(make_tma_copy_A_sm90(
             GmemTiledCopyQ{},
-            make_tensor(make_gmem_ptr(static_cast<Element const *>(nullptr)), ShapeQKV{}, StrideQK{}),
+            make_tensor(make_gmem_ptr(static_cast<ElementQK const *>(nullptr)), ShapeQKV{}, StrideQK{}),
             SmemLayoutQ{},
             TileShape_MNK{},
             ClusterShape{}));
@@ -329,7 +331,7 @@ namespace flash
         // using TMA_K = decltype(flash::make_tma_copy_B_sm90_int8_aware<Element>(
         using TMA_K = decltype(make_tma_copy_B_sm90(
             GmemTiledCopyKV{},
-            make_tensor(make_gmem_ptr(static_cast<Element const *>(nullptr)), ShapeQKV{}, StrideQK{}),
+            make_tensor(make_gmem_ptr(static_cast<ElementQK const *>(nullptr)), ShapeQKV{}, StrideQK{}),
             // SmemLayoutKTMA{},
             take<0, 2>(SmemLayoutK{}),
             TileShape_MNK{},
@@ -352,9 +354,9 @@ namespace flash
         using TMA_Qv = std::conditional_t<HasQv, TMA_Qv_, std::nullptr_t>;
 
         // Set the bytes transferred in this TMA transaction (may involve multiple issues)
-        static constexpr uint32_t TmaTransactionBytesQ = static_cast<uint32_t>(size(SmemLayoutQ{}) * cutlass::sizeof_bits_v<Element> / 8);
+        static constexpr uint32_t TmaTransactionBytesQ = static_cast<uint32_t>(size(SmemLayoutQ{}) * cutlass::sizeof_bits_v<ElementQK> / 8);
         // static constexpr uint32_t TmaTransactionBytesK = static_cast<uint32_t>(size(SmemLayoutKTMA{}) * cutlass::sizeof_bits_v<Element> / 8);
-        static constexpr uint32_t TmaTransactionBytesK = static_cast<uint32_t>(size(take<0, 2>(SmemLayoutK{})) * cutlass::sizeof_bits_v<Element> / 8);
+        static constexpr uint32_t TmaTransactionBytesK = static_cast<uint32_t>(size(take<0, 2>(SmemLayoutK{})) * cutlass::sizeof_bits_v<ElementQK> / 8);
         static constexpr uint32_t TmaTransactionBytesV = static_cast<uint32_t>(size(take<0, 2>(SmemLayoutVt{})) * cutlass::sizeof_bits_v<ElementV> / 8);
         static constexpr uint32_t TmaTransactionBytesQv = static_cast<uint32_t>(size(SmemLayoutQv{}) * cutlass::sizeof_bits_v<ElementV> / 8);
 
@@ -446,26 +448,26 @@ namespace flash
         // Host side kernel arguments
         struct Arguments
         {
-            Element const *const ptr_Q;
+            ElementQK const *const ptr_Q;
             ShapeQKV const shape_Q;
             StrideQK const stride_Q;
-            Element *const ptr_K; // not Element const* since we might append to KV cache in-place
+            ElementQK *const ptr_K; // not ElementQK const* since we might append to KV cache in-place
             ShapeQKV const shape_K;
             StrideQK const stride_K;
             ElementV *const ptr_V;
             int32_t const headdim_v;
             StrideV const stride_V;
-            Element const *const ptr_K_new;
+            ElementQK const *const ptr_K_new;
             ShapeQKV const shape_K_new;
             StrideQK const stride_K_new;
             ElementV const *const ptr_V_new;  // Use ElementV for V (bfloat16 for INT8)
             StrideV const stride_V_new;
-            Element const *const ptr_Qv;
+            ElementQK const *const ptr_Qv;
             StrideQK const stride_Qv;
-            Element const *const ptr_rotary_cos;
+            ElementQK const *const ptr_rotary_cos;
             ShapeRotary const shape_rotary;
             StrideRotary const stride_rotary_cos;
-            Element const *const ptr_rotary_sin;
+            ElementQK const *const ptr_rotary_sin;
             StrideRotary const stride_rotary_sin;
             bool const is_rotary_interleaved;
             int const *const ptr_pagetable;
@@ -492,30 +494,30 @@ namespace flash
         // Device side kernel params
         struct Params
         {
-            Element const *const ptr_Q;
+            ElementQK const *const ptr_Q;
             ShapeQKV const shape_Q;
             StrideQK const stride_Q;
             ShapeQPacked const shape_Q_packed;
             StrideQPacked const stride_Q_packed;
-            Element *const ptr_K;
+            ElementQK *const ptr_K;
             ShapeQKV const shape_K;
             StrideQK const stride_K;
             ElementV *const ptr_V;
             int32_t const headdim_v;
             StrideV const stride_V;
-            Element const *const ptr_K_new;
+            ElementQK const *const ptr_K_new;
             ShapeQKV const shape_K_new;
             StrideQK const stride_K_new;
             ElementV const *const ptr_V_new;
             StrideV const stride_V_new;
-            Element const *const ptr_Qv;
+            ElementQK const *const ptr_Qv;
             StrideV const stride_Qv;
             ShapeQPacked const shape_Qv_packed;
             StrideQPacked const stride_Qv_packed;
-            Element const *const ptr_rotary_cos;
+            ElementQK const *const ptr_rotary_cos;
             ShapeRotary const shape_rotary;
             StrideRotary const stride_rotary_cos;
-            Element const *const ptr_rotary_sin;
+            ElementQK const *const ptr_rotary_sin;
             StrideRotary const stride_rotary_sin;
             bool const is_rotary_interleaved;
             int const *const ptr_pagetable;
@@ -855,7 +857,7 @@ namespace flash
             // Define local constexpr to avoid device code access issues with class static member
             static constexpr int kBlockM_local = get<0>(TileShape_MNK{});
             Tensor mKDescale = [&]() {
-                if constexpr (Is_INT8) {
+                if constexpr (Is_8Bit) {
                     // Calculate softmax_scale_log2 from Q descale (depends on m_block)
                     int const num_m_blocks = cute::ceil_div(seqlen_info.seqlen_q, kBlockM_local);
                     auto shape_q_descale_3d = make_shape(get<3>(params.shape_Q), get<2>(params.shape_Q), num_m_blocks);
@@ -946,7 +948,7 @@ namespace flash
                     __threadfence_block();
                 }
                 // For INT8: calculate and store dequantization scalar (k_descale * softmax_scale_log2) in shared memory
-                if constexpr (Is_INT8) {
+                if constexpr (Is_8Bit) {
                     // Calculate k_descale from K descale (depends on n_block)
                     float const k_descale = mKDescale(bidb, bidh_kv, n_block);
                     

@@ -62,9 +62,11 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream)
     // Type traits using CuTe's type system for FP8/INT8 detection
     static constexpr bool Is_FP8 = cute::is_same_v<Element, cutlass::float_e4m3_t> || cute::is_same_v<Element, cutlass::float_e5m2_t>;
     static constexpr bool Is_INT8 = cute::is_same_v<Element, int8_t>;
+    // static constexpr bool Is_8Bit = Is_FP8 || Is_INT8;
 
     // For INT8, V uses bfloat16 (not int8) to maintain precision
     using ElementV = std::conditional_t<Is_INT8, cute::bfloat16_t, Element>;
+    using ElementQK = std::conditional_t<Is_FP8, int8_t, Element>;
 
     // For INT8, V is bf16, so no transpose needed (only FP8 has 8-bit V)
     static constexpr bool FP8_TransposeV = Is_FP8 && !V_colmajor;
@@ -75,7 +77,7 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream)
 
     // SM90+ tile configuration: returns (BlockM, BlockN, MmaPV_is_RS, IntraWGOverlap)
     static constexpr std::tuple<int, int, bool, bool> kBlockMN_RS_IntraWGOverlap =
-        tile_size_fwd_sm90(kHeadDim, kHeadDimV, Is_causal, Is_local, sizeof(Element) /*element_size*/, V_colmajor, PagedKVNonTMA, Has_softcap, Is_skipable, Is_INT8 && !Is_FP8);
+        tile_size_fwd_sm90(kHeadDim, kHeadDimV, Is_causal, Is_local, sizeof(Element) /*element_size*/, V_colmajor, PagedKVNonTMA, Has_softcap, Is_skipable, Is_INT8);
 
     // SM80-89 tile configuration: returns (BlockM, BlockN, NWarps, Stages, Q_in_regs)
     static constexpr std::tuple<int, int, int, int, bool> kBlockMN_kNWarps_Stages_RS =
@@ -211,13 +213,13 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream)
     // CuTe tensor arguments combine data pointers with shape and stride information
     typename CollectiveMainloop::Arguments mainloop_args{
         // ptr_Q
-        static_cast<Element const *>(params.q_ptr),
+        static_cast<ElementQK const *>(params.q_ptr),
         // shape_Q
         {seqlen_q, params.d, params.h, batch_q}, // shape_Q: CuTe shape for Q tensor (seqlen, head_dim, num_heads, batch)
         // stride_Q
         {params.q_row_stride, _1{}, params.q_head_stride, !is_varlen_q ? params.q_batch_stride : 0}, // stride_Q: CuTe stride pattern
         // ptr_K
-        static_cast<Element *>(params.k_ptr),
+        static_cast<ElementQK *>(params.k_ptr),
         // shape_K
         // shape_K: Handle paged KV cache vs. regular tensor layout
         {!params.page_table ? (!is_varlen_k ? params.seqlen_k : params.total_k) : params.page_size,
@@ -231,7 +233,7 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream)
         // stride_V
         v_strides, // stride_V: CuTe stride pattern constructed above
         // ptr_K_new
-        static_cast<Element const *>(params.knew_ptr),
+        static_cast<ElementQK const *>(params.knew_ptr),
         // shape_K_new
         {!is_varlen_k_new ? params.seqlen_knew : params.total_knew, params.d, params.h_k, !is_varlen_k_new ? params.b : 1}, // shape_K_new: CuTe shape for new K tensor (KV cache append)
         // stride_K_new
@@ -241,13 +243,13 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream)
         // stride_V_new
         {params.vnew_row_stride, _1{}, params.vnew_head_stride, !is_varlen_k_new ? params.vnew_batch_stride : 0}, // stride_V_new: CuTe stride pattern for new V tensor
         // ptr_Qv
-        static_cast<Element const *>(params.qv_ptr),
+        static_cast<ElementQK const *>(params.qv_ptr),
         // stride_Qv
         {params.qv_row_stride, _1{}, params.qv_head_stride, !is_varlen_q ? params.qv_batch_stride : 0}, // stride_Qv: CuTe stride for fused QV tensor
-        static_cast<Element const *>(params.rotary_cos_ptr),
+        static_cast<ElementQK const *>(params.rotary_cos_ptr),
         {params.seqlen_k, params.rotary_dim / 2}, // shape_rotary: CuTe shape for rotary embeddings, the seqlen shape doesn't matter
         {params.rotary_dim / 2, _1{}},            // stride_rotary_cos: CuTe stride pattern for cosine values
-        static_cast<Element const *>(params.rotary_sin_ptr),
+        static_cast<ElementQK const *>(params.rotary_sin_ptr),
         {params.rotary_dim / 2, _1{}}, // stride_rotary_sin: CuTe stride pattern for sine values
         params.is_rotary_interleaved,  // RoPE interleaving pattern flag
         params.page_table,             // Paged KV cache page table pointer
@@ -395,7 +397,7 @@ void run_mha_fwd_(Flash_fwd_params &params, cudaStream_t stream)
                     APPENDKV_SWITCH(params.knew_ptr, AppendKV, [&] {
                         BOOL_SWITCH(params.is_skipable, Is_skipable, [&] {
                             // Only needed here to decide if we should use cluster
-                            static constexpr int kBlockM = Arch >= 90 ? std::get<0>(tile_size_fwd_sm90(kHeadDim, kHeadDimV, Is_causal, Is_local, sizeof(T) /*element_size*/, V_colmajor, PagedKVNonTMA, Has_softcap, Is_skipable, Is_INT8 && !Is_FP8)) : 128;
+                            static constexpr int kBlockM = Arch >= 90 ? std::get<0>(tile_size_fwd_sm90(kHeadDim, kHeadDimV, Is_causal, Is_local, sizeof(T) /*element_size*/, V_colmajor, PagedKVNonTMA, Has_softcap, Is_skipable, Is_INT8)) : 128;
                             // DOR: in our case this is always true since kHeadDim == 128, Arch == 90 ...
                             static constexpr bool Enable_cluster = Arch == 90 && (sizeof(T) == 2 ? (kHeadDim >= 128) : (kHeadDim == 192)) && !Is_causal && !Is_local && !Split && !PagedKVNonTMA && !Varlen;
                             // Only use Cluster if number of tiles along seqlen_q is even and not varlen
