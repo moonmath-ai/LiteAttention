@@ -1199,7 +1199,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
 
         Always: capture pct_per_head for all heads/timesteps/batches.
         Optional: capture detailed attn maps + skip_lists for selected subset.
-        Optional: qk_block_map — pre-softmax QK scores maxpooled to tile granularity.
+        Optional: qk_block_map — row-max-normalized pre-softmax QK scores maxpooled to tile granularity (≤ 0, comparable to threshold).
         Optional: running stats (mean/std/max/min) at full resolution across all passes.
         """
         self._capture_enabled = True
@@ -1355,11 +1355,18 @@ class LiteAttention(nn.Module, ConfigurableModule):
                 q_h = query[bi, :, hi, :].unsqueeze(0).unsqueeze(0)
                 k_h = key[bi, :, hi, :].unsqueeze(0).unsqueeze(0)
                 qk = (q_h.float() @ k_h.float().transpose(-2, -1)) * scale
-                # Block-level max of pre-softmax QK scores
+                # Block-level max of row-max-normalized pre-softmax QK scores.
+                # Subtracting the row max first so values represent how far
+                # each tile's best score is below the row peak — directly
+                # comparable to the kernel's skip threshold.
                 if capture_qk_block_map:
-                    pad_q = (kBlockM - qk.shape[-2] % kBlockM) % kBlockM
-                    pad_k = (kBlockN - qk.shape[-1] % kBlockN) % kBlockN
-                    qk_padded = F.pad(qk, (0, pad_k, 0, pad_q), value=float("-inf"))
+                    row_max = qk.max(dim=-1, keepdim=True).values
+                    qk_normalized = qk - row_max
+                    pad_q = (kBlockM - qk_normalized.shape[-2] % kBlockM) % kBlockM
+                    pad_k = (kBlockN - qk_normalized.shape[-1] % kBlockN) % kBlockN
+                    qk_padded = F.pad(
+                        qk_normalized, (0, pad_k, 0, pad_q), value=float("-inf")
+                    )
                     qk_down = F.max_pool2d(
                         qk_padded,
                         kernel_size=(kBlockM, kBlockN),
@@ -1935,7 +1942,7 @@ class LiteAttentionRegistry(ModuleRegistry):
 
         All modules always capture pct_per_head for every timestep and head.
         Attn maps + skip_lists are captured only for the filtered subset.
-        qk_block_map captures pre-softmax QK scores maxpooled to tile granularity.
+        qk_block_map captures row-max-normalized pre-softmax QK scores maxpooled to tile granularity (≤ 0, directly comparable to threshold).
         Stats (mean/std/max/min) are accumulated at full resolution on the same
         subset of modules, across ALL forward passes.
 
@@ -1950,7 +1957,7 @@ class LiteAttentionRegistry(ModuleRegistry):
             heads: Head indices for map/stats capture, or None for all.
             batches: Batch indices for map/stats capture, or None for all.
             attn_map_res: Resolution for downsampled attention maps.
-            qk_block_map: Enable block-level max of pre-softmax QK scores.
+            qk_block_map: Enable row-max-normalized block-level QK scores (≤ 0, comparable to threshold).
             stats: Enable running stats accumulation at full resolution.
         """
         self._capture_path = Path(save_path)
