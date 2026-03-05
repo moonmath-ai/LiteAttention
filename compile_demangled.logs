@@ -1,0 +1,996 @@
+[1/2] /usr/local/cuda-12.8/bin/nvcc --generate-dependencies-with-compile --dependency-output /home/ingonyama/users/dor/Lite-Attention-LTX/build/temp.linux-x86_64-cpython-313/hopper/instantiations/flash_fwd_hdim128_int8_sm90.o.d -I/home/ingonyama/users/dor/Lite-Attention-LTX/hopper -I/home/ingonyama/users/dor/Lite-Attention-LTX/hopper/_internal/cpp -I/home/ingonyama/users/dor/Lite-Attention-LTX/csrc/cutlass/include -I/home/ingonyama/miniconda3/envs/dor-ltx/lib/python3.13/site-packages/torch/include -I/home/ingonyama/miniconda3/envs/dor-ltx/lib/python3.13/site-packages/torch/include/torch/csrc/api/include -I/usr/local/cuda-12.8/include -I/home/ingonyama/miniconda3/envs/dor-ltx/include/python3.13 -c -c /home/ingonyama/users/dor/Lite-Attention-LTX/hopper/instantiations/flash_fwd_hdim128_int8_sm90.cu -o /home/ingonyama/users/dor/Lite-Attention-LTX/build/temp.linux-x86_64-cpython-313/hopper/instantiations/flash_fwd_hdim128_int8_sm90.o -D__CUDA_NO_HALF_OPERATORS__ -D__CUDA_NO_HALF_CONVERSIONS__ -D__CUDA_NO_BFLOAT16_CONVERSIONS__ -D__CUDA_NO_HALF2_OPERATORS__ --expt-relaxed-constexpr --compiler-options ''"'"'-fPIC'"'"'' --threads 2 -O3 -std=c++20 --ftemplate-backtrace-limit=0 --use_fast_math --keep --resource-usage -lineinfo -DCUTE_SM90_EXTENDED_MMA_SHAPES_ENABLED -DCUTLASS_DEBUG_TRACE_LEVEL=0 -DNDEBUG -gencode arch=compute_90a,code=sm_90a -DFLASHATTENTION_DISABLE_BACKWARD -DFLASHATTENTION_DISABLE_PAGEDKV -DFLASHATTENTION_DISABLE_SPLIT -DFLASHATTENTION_DISABLE_APPENDKV -DFLASHATTENTION_DISABLE_LOCAL -DFLASHATTENTION_DISABLE_SOFTCAP -DFLASHATTENTION_DISABLE_PACKGQA -DFLASHATTENTION_DISABLE_FP16 -DFLASHATTENTION_DISABLE_FP8 -DFLASHATTENTION_DISABLE_VARLEN -DFLASHATTENTION_DISABLE_CLUSTER -DFLASHATTENTION_DISABLE_HDIM64 -DFLASHATTENTION_DISABLE_HDIM96 -DFLASHATTENTION_DISABLE_HDIM192 -DFLASHATTENTION_DISABLE_HDIM256 -DFLASHATTENTION_DISABLE_SM8x -DFLASHATTENTION_DISABLE_HDIMDIFF64 -DFLASHATTENTION_DISABLE_HDIMDIFF192 -DTORCH_API_INCLUDE_EXTENSION_H -DPy_LIMITED_API=0x03090000 -DTORCH_EXTENSION_NAME=_C -D_GLIBCXX_USE_CXX11_ABI=1
+ptxas info    : 10 bytes gmem
+
+================================================================================
+DEMANGLED FUNCTION:
+void cutlass::device_kernel<
+  flash::enable_sm90_or_later<
+    flash::FlashAttnFwdSm90<
+      flash::CollectiveMainloopFwdSm90<
+        (int)2,  # Pipeline stages
+        cute::tuple<
+          cute::C<
+            (int)1
+          >,
+          cute::C<
+            (int)1
+          >,
+          cute::C<
+            (int)1
+          >
+        >,  # Cluster shape
+        cute::tuple<
+          cute::C<
+            (int)192
+          >,
+          cute::C<
+            (int)128
+          >,
+          cute::C<
+            (int)128
+          >
+        >,  # Tile shape [Q, K, V]
+        (int)128,  # Head dimension for V
+        signed char,  # Data type (Element)
+        float,  # Accumulator type
+        cutlass::arch::Sm90,  # Architecture
+        (bool)0,  # Is_causal
+        (bool)0,  # Is_local
+        (bool)0,  # Has_softcap
+        (bool)0,  # Varlen
+        (bool)0,  # PagedKVNonTMA
+        (bool)0,  # AppendKV
+        (bool)0,  # HasQv
+        (bool)0,  # MmaPV_is_RS
+        (bool)1,  # IntraWGOverlap
+        (bool)0,  # PackGQA
+        (bool)0,  # Split
+        (bool)0,  # V_colmajor
+        (bool)0,  # Is_skipable
+        (bool)0,  # ReverseSkipList
+        (bool)1,  # Phase
+        (bool)0  # HasMustDoList
+      >,
+      flash::CollectiveEpilogueFwd<
+        cute::tuple<
+          cute::C<
+            (int)192
+          >,
+          cute::C<
+            (int)128
+          >,
+          cute::C<
+            (int)128
+          >
+        >,  # Output tile shape
+        cute::tuple<
+          cute::C<
+            (int)1
+          >,
+          cute::C<
+            (int)1
+          >,
+          cute::C<
+            (int)1
+          >
+        >,  # Thread block shape
+        cutlass::bfloat16_t,  # Output data type
+        cutlass::arch::Sm90,  # Architecture
+        (int)384,  # Epilogue threads
+        (bool)0,  # Flag 1
+        (bool)0,  # Flag 2
+        (bool)0,  # Flag 3
+        (bool)0  # Flag 4
+      >,
+      flash::StaticPersistentTileScheduler<
+        (bool)0
+      >
+    >
+  >
+>
+(T1::Params)
+================================================================================
+
+MANGLED: _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi192EEENS7_ILi128EEESB_EEELi128EafNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb0ELb0ELb0ELb0ELb0ELb1ELb0EEENS1_21CollectiveEpilogueFwdISC_S9_NS_10bfloat16_tESE_Li384ELb0ELb0ELb0ELb0EEENS1_29StaticPersistentTileSchedulerILb0EEEEEEEEEvNT_6ParamsE
+
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi192EEENS7_ILi128EEESB_EEELi128EafNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb0ELb0ELb0ELb0ELb0ELb1ELb0EEENS1_21CollectiveEpilogueFwdISC_S9_NS_10bfloat16_tESE_Li384ELb0ELb0ELb0ELb0EEENS1_29StaticPersistentTileSchedulerILb0EEEEEEEEEvNT_6ParamsE
+    8 bytes stack frame, 8 bytes spill stores, 8 bytes spill loads
+ptxas info    : Used 128 registers, used 16 barriers, 8 bytes cumulative stack size
+ptxas info    : Compile time = 206.832 ms
+
+================================================================================
+DEMANGLED FUNCTION:
+void cutlass::device_kernel<
+  flash::enable_sm90_or_later<
+    flash::FlashAttnFwdSm90<
+      flash::CollectiveMainloopFwdSm90<
+        (int)2,  # Pipeline stages
+        cute::tuple<
+          cute::C<
+            (int)1
+          >,
+          cute::C<
+            (int)1
+          >,
+          cute::C<
+            (int)1
+          >
+        >,  # Cluster shape
+        cute::tuple<
+          cute::C<
+            (int)128
+          >,
+          cute::C<
+            (int)176
+          >,
+          cute::C<
+            (int)128
+          >
+        >,  # Tile shape [Q, K, V]
+        (int)128,  # Head dimension for V
+        cutlass::bfloat16_t,  # Data type (Element)
+        float,  # Accumulator type
+        cutlass::arch::Sm90,  # Architecture
+        (bool)0,  # Is_causal
+        (bool)0,  # Is_local
+        (bool)0,  # Has_softcap
+        (bool)0,  # Varlen
+        (bool)0,  # PagedKVNonTMA
+        (bool)0,  # AppendKV
+        (bool)0,  # HasQv
+        (bool)1,  # MmaPV_is_RS
+        (bool)1,  # IntraWGOverlap
+        (bool)0,  # PackGQA
+        (bool)0,  # Split
+        (bool)0,  # V_colmajor
+        (bool)0,  # Is_skipable
+        (bool)0,  # ReverseSkipList
+        (bool)1,  # Phase
+        (bool)0  # HasMustDoList
+      >,
+      flash::CollectiveEpilogueFwd<
+        cute::tuple<
+          cute::C<
+            (int)128
+          >,
+          cute::C<
+            (int)128
+          >,
+          cute::C<
+            (int)176
+          >
+        >,  # Output tile shape
+        cute::tuple<
+          cute::C<
+            (int)1
+          >,
+          cute::C<
+            (int)1
+          >,
+          cute::C<
+            (int)1
+          >
+        >,  # Thread block shape
+        cutlass::bfloat16_t,  # Output data type
+        cutlass::arch::Sm90,  # Architecture
+        (int)256,  # Epilogue threads
+        (bool)0,  # Flag 1
+        (bool)0,  # Flag 2
+        (bool)0,  # Flag 3
+        (bool)0  # Flag 4
+      >,
+      flash::StaticPersistentTileScheduler<
+        (bool)0
+      >
+    >
+  >
+>
+(T1::Params)
+================================================================================
+
+MANGLED: _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEENS7_ILi176EEESA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb0ELb0ELb1ELb0EEENS1_21CollectiveEpilogueFwdINS6_IJSA_SA_SB_EEES9_SD_SF_Li256ELb0ELb0ELb0ELb0EEENS1_29StaticPersistentTileSchedulerILb0EEEEEEEEEvNT_6ParamsE
+
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEENS7_ILi176EEESA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb0ELb0ELb1ELb0EEENS1_21CollectiveEpilogueFwdINS6_IJSA_SA_SB_EEES9_SD_SF_Li256ELb0ELb0ELb0ELb0EEENS1_29StaticPersistentTileSchedulerILb0EEEEEEEEEvNT_6ParamsE
+    8 bytes stack frame, 8 bytes spill stores, 8 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers, 8 bytes cumulative stack size
+ptxas info    : Compile time = 383.225 ms
+
+================================================================================
+DEMANGLED FUNCTION:
+void cutlass::device_kernel<
+  flash::enable_sm90_or_later<
+    flash::FlashAttnFwdSm90<
+      flash::CollectiveMainloopFwdSm90<
+        (int)2,  # Pipeline stages
+        cute::tuple<
+          cute::C<
+            (int)1
+          >,
+          cute::C<
+            (int)1
+          >,
+          cute::C<
+            (int)1
+          >
+        >,  # Cluster shape
+        cute::tuple<
+          cute::C<
+            (int)128
+          >,
+          cute::C<
+            (int)176
+          >,
+          cute::C<
+            (int)128
+          >
+        >,  # Tile shape [Q, K, V]
+        (int)128,  # Head dimension for V
+        cutlass::bfloat16_t,  # Data type (Element)
+        float,  # Accumulator type
+        cutlass::arch::Sm90,  # Architecture
+        (bool)0,  # Is_causal
+        (bool)0,  # Is_local
+        (bool)0,  # Has_softcap
+        (bool)0,  # Varlen
+        (bool)0,  # PagedKVNonTMA
+        (bool)0,  # AppendKV
+        (bool)0,  # HasQv
+        (bool)1,  # MmaPV_is_RS
+        (bool)1,  # IntraWGOverlap
+        (bool)0,  # PackGQA
+        (bool)0,  # Split
+        (bool)0,  # V_colmajor
+        (bool)1,  # Is_skipable
+        (bool)0,  # ReverseSkipList
+        (bool)0,  # Phase
+        (bool)0  # HasMustDoList
+      >,
+      flash::CollectiveEpilogueFwd<
+        cute::tuple<
+          cute::C<
+            (int)128
+          >,
+          cute::C<
+            (int)128
+          >,
+          cute::C<
+            (int)176
+          >
+        >,  # Output tile shape
+        cute::tuple<
+          cute::C<
+            (int)1
+          >,
+          cute::C<
+            (int)1
+          >,
+          cute::C<
+            (int)1
+          >
+        >,  # Thread block shape
+        cutlass::bfloat16_t,  # Output data type
+        cutlass::arch::Sm90,  # Architecture
+        (int)256,  # Epilogue threads
+        (bool)0,  # Flag 1
+        (bool)0,  # Flag 2
+        (bool)0,  # Flag 3
+        (bool)0  # Flag 4
+      >,
+      flash::SingleTileScheduler<
+        (bool)0,
+        (bool)0,
+        (bool)0,
+        (int)128
+      >
+    >
+  >
+>
+(T1::Params)
+================================================================================
+
+MANGLED: _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEENS7_ILi176EEESA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb0ELb0ELb0EEENS1_21CollectiveEpilogueFwdINS6_IJSA_SA_SB_EEES9_SD_SF_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE
+
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEENS7_ILi176EEESA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb0ELb0ELb0EEENS1_21CollectiveEpilogueFwdINS6_IJSA_SA_SB_EEES9_SD_SF_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE
+    16 bytes stack frame, 16 bytes spill stores, 16 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers, 16 bytes cumulative stack size
+ptxas info    : Compile time = 403.421 ms
+
+================================================================================
+DEMANGLED FUNCTION:
+void cutlass::device_kernel<
+  flash::enable_sm90_or_later<
+    flash::FlashAttnFwdSm90<
+      flash::CollectiveMainloopFwdSm90<
+        (int)2,  # Pipeline stages
+        cute::tuple<
+          cute::C<
+            (int)1
+          >,
+          cute::C<
+            (int)1
+          >,
+          cute::C<
+            (int)1
+          >
+        >,  # Cluster shape
+        cute::tuple<
+          cute::C<
+            (int)128
+          >,
+          cute::C<
+            (int)176
+          >,
+          cute::C<
+            (int)128
+          >
+        >,  # Tile shape [Q, K, V]
+        (int)128,  # Head dimension for V
+        cutlass::bfloat16_t,  # Data type (Element)
+        float,  # Accumulator type
+        cutlass::arch::Sm90,  # Architecture
+        (bool)0,  # Is_causal
+        (bool)0,  # Is_local
+        (bool)0,  # Has_softcap
+        (bool)0,  # Varlen
+        (bool)0,  # PagedKVNonTMA
+        (bool)0,  # AppendKV
+        (bool)0,  # HasQv
+        (bool)1,  # MmaPV_is_RS
+        (bool)1,  # IntraWGOverlap
+        (bool)0,  # PackGQA
+        (bool)0,  # Split
+        (bool)0,  # V_colmajor
+        (bool)1,  # Is_skipable
+        (bool)0,  # ReverseSkipList
+        (bool)1,  # Phase
+        (bool)0  # HasMustDoList
+      >,
+      flash::CollectiveEpilogueFwd<
+        cute::tuple<
+          cute::C<
+            (int)128
+          >,
+          cute::C<
+            (int)128
+          >,
+          cute::C<
+            (int)176
+          >
+        >,  # Output tile shape
+        cute::tuple<
+          cute::C<
+            (int)1
+          >,
+          cute::C<
+            (int)1
+          >,
+          cute::C<
+            (int)1
+          >
+        >,  # Thread block shape
+        cutlass::bfloat16_t,  # Output data type
+        cutlass::arch::Sm90,  # Architecture
+        (int)256,  # Epilogue threads
+        (bool)0,  # Flag 1
+        (bool)0,  # Flag 2
+        (bool)0,  # Flag 3
+        (bool)0  # Flag 4
+      >,
+      flash::SingleTileScheduler<
+        (bool)0,
+        (bool)0,
+        (bool)0,
+        (int)128
+      >
+    >
+  >
+>
+(T1::Params)
+================================================================================
+
+MANGLED: _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEENS7_ILi176EEESA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb0ELb1ELb0EEENS1_21CollectiveEpilogueFwdINS6_IJSA_SA_SB_EEES9_SD_SF_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE
+
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEENS7_ILi176EEESA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb0ELb1ELb0EEENS1_21CollectiveEpilogueFwdINS6_IJSA_SA_SB_EEES9_SD_SF_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE
+    16 bytes stack frame, 16 bytes spill stores, 16 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers, 16 bytes cumulative stack size
+ptxas info    : Compile time = 372.947 ms
+
+================================================================================
+DEMANGLED FUNCTION:
+void cutlass::device_kernel<
+  flash::enable_sm90_or_later<
+    flash::FlashAttnFwdSm90<
+      flash::CollectiveMainloopFwdSm90<
+        (int)2,  # Pipeline stages
+        cute::tuple<
+          cute::C<
+            (int)1
+          >,
+          cute::C<
+            (int)1
+          >,
+          cute::C<
+            (int)1
+          >
+        >,  # Cluster shape
+        cute::tuple<
+          cute::C<
+            (int)128
+          >,
+          cute::C<
+            (int)176
+          >,
+          cute::C<
+            (int)128
+          >
+        >,  # Tile shape [Q, K, V]
+        (int)128,  # Head dimension for V
+        cutlass::bfloat16_t,  # Data type (Element)
+        float,  # Accumulator type
+        cutlass::arch::Sm90,  # Architecture
+        (bool)0,  # Is_causal
+        (bool)0,  # Is_local
+        (bool)0,  # Has_softcap
+        (bool)0,  # Varlen
+        (bool)0,  # PagedKVNonTMA
+        (bool)0,  # AppendKV
+        (bool)0,  # HasQv
+        (bool)1,  # MmaPV_is_RS
+        (bool)1,  # IntraWGOverlap
+        (bool)0,  # PackGQA
+        (bool)0,  # Split
+        (bool)0,  # V_colmajor
+        (bool)1,  # Is_skipable
+        (bool)1,  # ReverseSkipList
+        (bool)0,  # Phase
+        (bool)0  # HasMustDoList
+      >,
+      flash::CollectiveEpilogueFwd<
+        cute::tuple<
+          cute::C<
+            (int)128
+          >,
+          cute::C<
+            (int)128
+          >,
+          cute::C<
+            (int)176
+          >
+        >,  # Output tile shape
+        cute::tuple<
+          cute::C<
+            (int)1
+          >,
+          cute::C<
+            (int)1
+          >,
+          cute::C<
+            (int)1
+          >
+        >,  # Thread block shape
+        cutlass::bfloat16_t,  # Output data type
+        cutlass::arch::Sm90,  # Architecture
+        (int)256,  # Epilogue threads
+        (bool)0,  # Flag 1
+        (bool)0,  # Flag 2
+        (bool)0,  # Flag 3
+        (bool)0  # Flag 4
+      >,
+      flash::SingleTileScheduler<
+        (bool)0,
+        (bool)0,
+        (bool)0,
+        (int)128
+      >
+    >
+  >
+>
+(T1::Params)
+================================================================================
+
+MANGLED: _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEENS7_ILi176EEESA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb1ELb0ELb0EEENS1_21CollectiveEpilogueFwdINS6_IJSA_SA_SB_EEES9_SD_SF_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE
+
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEENS7_ILi176EEESA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb1ELb0ELb0EEENS1_21CollectiveEpilogueFwdINS6_IJSA_SA_SB_EEES9_SD_SF_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE
+    16 bytes stack frame, 16 bytes spill stores, 16 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers, 16 bytes cumulative stack size
+ptxas info    : Compile time = 369.713 ms
+
+================================================================================
+DEMANGLED FUNCTION:
+void cutlass::device_kernel<
+  flash::enable_sm90_or_later<
+    flash::FlashAttnFwdSm90<
+      flash::CollectiveMainloopFwdSm90<
+        (int)2,  # Pipeline stages
+        cute::tuple<
+          cute::C<
+            (int)1
+          >,
+          cute::C<
+            (int)1
+          >,
+          cute::C<
+            (int)1
+          >
+        >,  # Cluster shape
+        cute::tuple<
+          cute::C<
+            (int)128
+          >,
+          cute::C<
+            (int)176
+          >,
+          cute::C<
+            (int)128
+          >
+        >,  # Tile shape [Q, K, V]
+        (int)128,  # Head dimension for V
+        cutlass::bfloat16_t,  # Data type (Element)
+        float,  # Accumulator type
+        cutlass::arch::Sm90,  # Architecture
+        (bool)0,  # Is_causal
+        (bool)0,  # Is_local
+        (bool)0,  # Has_softcap
+        (bool)0,  # Varlen
+        (bool)0,  # PagedKVNonTMA
+        (bool)0,  # AppendKV
+        (bool)0,  # HasQv
+        (bool)1,  # MmaPV_is_RS
+        (bool)1,  # IntraWGOverlap
+        (bool)0,  # PackGQA
+        (bool)0,  # Split
+        (bool)0,  # V_colmajor
+        (bool)1,  # Is_skipable
+        (bool)1,  # ReverseSkipList
+        (bool)1,  # Phase
+        (bool)0  # HasMustDoList
+      >,
+      flash::CollectiveEpilogueFwd<
+        cute::tuple<
+          cute::C<
+            (int)128
+          >,
+          cute::C<
+            (int)128
+          >,
+          cute::C<
+            (int)176
+          >
+        >,  # Output tile shape
+        cute::tuple<
+          cute::C<
+            (int)1
+          >,
+          cute::C<
+            (int)1
+          >,
+          cute::C<
+            (int)1
+          >
+        >,  # Thread block shape
+        cutlass::bfloat16_t,  # Output data type
+        cutlass::arch::Sm90,  # Architecture
+        (int)256,  # Epilogue threads
+        (bool)0,  # Flag 1
+        (bool)0,  # Flag 2
+        (bool)0,  # Flag 3
+        (bool)0  # Flag 4
+      >,
+      flash::SingleTileScheduler<
+        (bool)0,
+        (bool)0,
+        (bool)0,
+        (int)128
+      >
+    >
+  >
+>
+(T1::Params)
+================================================================================
+
+MANGLED: _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEENS7_ILi176EEESA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb1ELb1ELb0EEENS1_21CollectiveEpilogueFwdINS6_IJSA_SA_SB_EEES9_SD_SF_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE
+
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEENS7_ILi176EEESA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb1ELb1ELb0EEENS1_21CollectiveEpilogueFwdINS6_IJSA_SA_SB_EEES9_SD_SF_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE
+    16 bytes stack frame, 16 bytes spill stores, 16 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers, 16 bytes cumulative stack size
+ptxas info    : Compile time = 368.208 ms
+
+================================================================================
+DEMANGLED FUNCTION:
+void cutlass::device_kernel<
+  flash::enable_sm90_or_later<
+    flash::FlashAttnFwdSm90<
+      flash::CollectiveMainloopFwdSm90<
+        (int)2,  # Pipeline stages
+        cute::tuple<
+          cute::C<
+            (int)1
+          >,
+          cute::C<
+            (int)1
+          >,
+          cute::C<
+            (int)1
+          >
+        >,  # Cluster shape
+        cute::tuple<
+          cute::C<
+            (int)128
+          >,
+          cute::C<
+            (int)128
+          >,
+          cute::C<
+            (int)128
+          >
+        >,  # Tile shape [Q, K, V]
+        (int)128,  # Head dimension for V
+        cutlass::bfloat16_t,  # Data type (Element)
+        float,  # Accumulator type
+        cutlass::arch::Sm90,  # Architecture
+        (bool)1,  # Is_causal
+        (bool)0,  # Is_local
+        (bool)0,  # Has_softcap
+        (bool)0,  # Varlen
+        (bool)0,  # PagedKVNonTMA
+        (bool)0,  # AppendKV
+        (bool)0,  # HasQv
+        (bool)1,  # MmaPV_is_RS
+        (bool)1,  # IntraWGOverlap
+        (bool)0,  # PackGQA
+        (bool)0,  # Split
+        (bool)0,  # V_colmajor
+        (bool)1,  # Is_skipable
+        (bool)0,  # ReverseSkipList
+        (bool)0,  # Phase
+        (bool)0  # HasMustDoList
+      >,
+      flash::CollectiveEpilogueFwd<
+        cute::tuple<
+          cute::C<
+            (int)128
+          >,
+          cute::C<
+            (int)128
+          >,
+          cute::C<
+            (int)128
+          >
+        >,  # Output tile shape
+        cute::tuple<
+          cute::C<
+            (int)1
+          >,
+          cute::C<
+            (int)1
+          >,
+          cute::C<
+            (int)1
+          >
+        >,  # Thread block shape
+        cutlass::bfloat16_t,  # Output data type
+        cutlass::arch::Sm90,  # Architecture
+        (int)256,  # Epilogue threads
+        (bool)0,  # Flag 1
+        (bool)0,  # Flag 2
+        (bool)0,  # Flag 3
+        (bool)0  # Flag 4
+      >,
+      flash::SingleTileScheduler<
+        (bool)0,
+        (bool)0,
+        (bool)0,
+        (int)128
+      >
+    >
+  >
+>
+(T1::Params)
+================================================================================
+
+MANGLED: _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEESA_SA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb1ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb0ELb0ELb0EEENS1_21CollectiveEpilogueFwdISB_S9_SC_SE_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE
+
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEESA_SA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb1ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb0ELb0ELb0EEENS1_21CollectiveEpilogueFwdISB_S9_SC_SE_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE
+    16 bytes stack frame, 16 bytes spill stores, 16 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers, 16 bytes cumulative stack size
+ptxas info    : Compile time = 250.361 ms
+
+================================================================================
+DEMANGLED FUNCTION:
+void cutlass::device_kernel<
+  flash::enable_sm90_or_later<
+    flash::FlashAttnFwdSm90<
+      flash::CollectiveMainloopFwdSm90<
+        (int)2,  # Pipeline stages
+        cute::tuple<
+          cute::C<
+            (int)1
+          >,
+          cute::C<
+            (int)1
+          >,
+          cute::C<
+            (int)1
+          >
+        >,  # Cluster shape
+        cute::tuple<
+          cute::C<
+            (int)128
+          >,
+          cute::C<
+            (int)128
+          >,
+          cute::C<
+            (int)128
+          >
+        >,  # Tile shape [Q, K, V]
+        (int)128,  # Head dimension for V
+        cutlass::bfloat16_t,  # Data type (Element)
+        float,  # Accumulator type
+        cutlass::arch::Sm90,  # Architecture
+        (bool)1,  # Is_causal
+        (bool)0,  # Is_local
+        (bool)0,  # Has_softcap
+        (bool)0,  # Varlen
+        (bool)0,  # PagedKVNonTMA
+        (bool)0,  # AppendKV
+        (bool)0,  # HasQv
+        (bool)1,  # MmaPV_is_RS
+        (bool)1,  # IntraWGOverlap
+        (bool)0,  # PackGQA
+        (bool)0,  # Split
+        (bool)0,  # V_colmajor
+        (bool)1,  # Is_skipable
+        (bool)0,  # ReverseSkipList
+        (bool)1,  # Phase
+        (bool)0  # HasMustDoList
+      >,
+      flash::CollectiveEpilogueFwd<
+        cute::tuple<
+          cute::C<
+            (int)128
+          >,
+          cute::C<
+            (int)128
+          >,
+          cute::C<
+            (int)128
+          >
+        >,  # Output tile shape
+        cute::tuple<
+          cute::C<
+            (int)1
+          >,
+          cute::C<
+            (int)1
+          >,
+          cute::C<
+            (int)1
+          >
+        >,  # Thread block shape
+        cutlass::bfloat16_t,  # Output data type
+        cutlass::arch::Sm90,  # Architecture
+        (int)256,  # Epilogue threads
+        (bool)0,  # Flag 1
+        (bool)0,  # Flag 2
+        (bool)0,  # Flag 3
+        (bool)0  # Flag 4
+      >,
+      flash::SingleTileScheduler<
+        (bool)0,
+        (bool)0,
+        (bool)0,
+        (int)128
+      >
+    >
+  >
+>
+(T1::Params)
+================================================================================
+
+MANGLED: _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEESA_SA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb1ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb0ELb1ELb0EEENS1_21CollectiveEpilogueFwdISB_S9_SC_SE_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE
+
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEESA_SA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb1ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb0ELb1ELb0EEENS1_21CollectiveEpilogueFwdISB_S9_SC_SE_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE
+    16 bytes stack frame, 16 bytes spill stores, 16 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers, 16 bytes cumulative stack size
+ptxas info    : Compile time = 253.049 ms
+
+================================================================================
+DEMANGLED FUNCTION:
+void cutlass::device_kernel<
+  flash::enable_sm90_or_later<
+    flash::FlashAttnFwdSm90<
+      flash::CollectiveMainloopFwdSm90<
+        (int)2,  # Pipeline stages
+        cute::tuple<
+          cute::C<
+            (int)1
+          >,
+          cute::C<
+            (int)1
+          >,
+          cute::C<
+            (int)1
+          >
+        >,  # Cluster shape
+        cute::tuple<
+          cute::C<
+            (int)128
+          >,
+          cute::C<
+            (int)128
+          >,
+          cute::C<
+            (int)128
+          >
+        >,  # Tile shape [Q, K, V]
+        (int)128,  # Head dimension for V
+        cutlass::bfloat16_t,  # Data type (Element)
+        float,  # Accumulator type
+        cutlass::arch::Sm90,  # Architecture
+        (bool)1,  # Is_causal
+        (bool)0,  # Is_local
+        (bool)0,  # Has_softcap
+        (bool)0,  # Varlen
+        (bool)0,  # PagedKVNonTMA
+        (bool)0,  # AppendKV
+        (bool)0,  # HasQv
+        (bool)1,  # MmaPV_is_RS
+        (bool)1,  # IntraWGOverlap
+        (bool)0,  # PackGQA
+        (bool)0,  # Split
+        (bool)0,  # V_colmajor
+        (bool)1,  # Is_skipable
+        (bool)1,  # ReverseSkipList
+        (bool)0,  # Phase
+        (bool)0  # HasMustDoList
+      >,
+      flash::CollectiveEpilogueFwd<
+        cute::tuple<
+          cute::C<
+            (int)128
+          >,
+          cute::C<
+            (int)128
+          >,
+          cute::C<
+            (int)128
+          >
+        >,  # Output tile shape
+        cute::tuple<
+          cute::C<
+            (int)1
+          >,
+          cute::C<
+            (int)1
+          >,
+          cute::C<
+            (int)1
+          >
+        >,  # Thread block shape
+        cutlass::bfloat16_t,  # Output data type
+        cutlass::arch::Sm90,  # Architecture
+        (int)256,  # Epilogue threads
+        (bool)0,  # Flag 1
+        (bool)0,  # Flag 2
+        (bool)0,  # Flag 3
+        (bool)0  # Flag 4
+      >,
+      flash::SingleTileScheduler<
+        (bool)0,
+        (bool)0,
+        (bool)0,
+        (int)128
+      >
+    >
+  >
+>
+(T1::Params)
+================================================================================
+
+MANGLED: _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEESA_SA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb1ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb1ELb0ELb0EEENS1_21CollectiveEpilogueFwdISB_S9_SC_SE_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE
+
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEESA_SA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb1ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb1ELb0ELb0EEENS1_21CollectiveEpilogueFwdISB_S9_SC_SE_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE
+    16 bytes stack frame, 16 bytes spill stores, 16 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers, 16 bytes cumulative stack size
+ptxas info    : Compile time = 253.611 ms
+
+================================================================================
+DEMANGLED FUNCTION:
+void cutlass::device_kernel<
+  flash::enable_sm90_or_later<
+    flash::FlashAttnFwdSm90<
+      flash::CollectiveMainloopFwdSm90<
+        (int)2,  # Pipeline stages
+        cute::tuple<
+          cute::C<
+            (int)1
+          >,
+          cute::C<
+            (int)1
+          >,
+          cute::C<
+            (int)1
+          >
+        >,  # Cluster shape
+        cute::tuple<
+          cute::C<
+            (int)128
+          >,
+          cute::C<
+            (int)128
+          >,
+          cute::C<
+            (int)128
+          >
+        >,  # Tile shape [Q, K, V]
+        (int)128,  # Head dimension for V
+        cutlass::bfloat16_t,  # Data type (Element)
+        float,  # Accumulator type
+        cutlass::arch::Sm90,  # Architecture
+        (bool)1,  # Is_causal
+        (bool)0,  # Is_local
+        (bool)0,  # Has_softcap
+        (bool)0,  # Varlen
+        (bool)0,  # PagedKVNonTMA
+        (bool)0,  # AppendKV
+        (bool)0,  # HasQv
+        (bool)1,  # MmaPV_is_RS
+        (bool)1,  # IntraWGOverlap
+        (bool)0,  # PackGQA
+        (bool)0,  # Split
+        (bool)0,  # V_colmajor
+        (bool)1,  # Is_skipable
+        (bool)1,  # ReverseSkipList
+        (bool)1,  # Phase
+        (bool)0  # HasMustDoList
+      >,
+      flash::CollectiveEpilogueFwd<
+        cute::tuple<
+          cute::C<
+            (int)128
+          >,
+          cute::C<
+            (int)128
+          >,
+          cute::C<
+            (int)128
+          >
+        >,  # Output tile shape
+        cute::tuple<
+          cute::C<
+            (int)1
+          >,
+          cute::C<
+            (int)1
+          >,
+          cute::C<
+            (int)1
+          >
+        >,  # Thread block shape
+        cutlass::bfloat16_t,  # Output data type
+        cutlass::arch::Sm90,  # Architecture
+        (int)256,  # Epilogue threads
+        (bool)0,  # Flag 1
+        (bool)0,  # Flag 2
+        (bool)0,  # Flag 3
+        (bool)0  # Flag 4
+      >,
+      flash::SingleTileScheduler<
+        (bool)0,
+        (bool)0,
+        (bool)0,
+        (int)128
+      >
+    >
+  >
+>
+(T1::Params)
+================================================================================
+
+MANGLED: _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEESA_SA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb1ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb1ELb1ELb0EEENS1_21CollectiveEpilogueFwdISB_S9_SC_SE_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE
+
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEESA_SA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb1ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb1ELb1ELb0EEENS1_21CollectiveEpilogueFwdISB_S9_SC_SE_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE
+    16 bytes stack frame, 16 bytes spill stores, 16 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers, 16 bytes cumulative stack size
+ptxas info    : Compile time = 257.321 ms

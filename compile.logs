@@ -1,0 +1,805 @@
+
+
+torch.__version__  = 2.7.1+cu128
+
+
+running install
+running build
+running build_py
+copying hopper/__init__.py -> build/lib.linux-x86_64-cpython-313/lite_attention
+copying hopper/lite_attention.py -> build/lib.linux-x86_64-cpython-313/lite_attention
+copying hopper/_internal/__init__.py -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal
+copying hopper/_internal/flash_attn_interface.py -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal
+copying hopper/utils/generate_kernels.py -> build/lib.linux-x86_64-cpython-313/lite_attention/utils
+copying hopper/utils/padding.py -> build/lib.linux-x86_64-cpython-313/lite_attention/utils
+copying hopper/calibrated_module/config.py -> build/lib.linux-x86_64-cpython-313/lite_attention/calibrated_module
+copying hopper/calibrated_module/module.py -> build/lib.linux-x86_64-cpython-313/lite_attention/calibrated_module
+copying hopper/calibrated_module/registry.py -> build/lib.linux-x86_64-cpython-313/lite_attention/calibrated_module
+copying hopper/calibrated_module/__init__.py -> build/lib.linux-x86_64-cpython-313/lite_attention/calibrated_module
+running egg_info
+writing lite_attention.egg-info/PKG-INFO
+writing dependency_links to lite_attention.egg-info/dependency_links.txt
+writing requirements to lite_attention.egg-info/requires.txt
+writing top-level names to lite_attention.egg-info/top_level.txt
+reading manifest file 'lite_attention.egg-info/SOURCES.txt'
+reading manifest template 'MANIFEST.in'
+adding license file 'LICENSE'
+adding license file 'LICENSE-BSD'
+adding license file 'LICENSE-MIT'
+writing manifest file 'lite_attention.egg-info/SOURCES.txt'
+copying hopper/README.md -> build/lib.linux-x86_64-cpython-313/lite_attention
+copying hopper/instantiations/flash_bwd_hdim128_bf16_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim128_bf16_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim128_bf16_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim128_bf16_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim128_bf16_softcapall_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim128_fp16_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim128_fp16_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim128_fp16_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim128_fp16_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim128_fp16_softcapall_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim192_bf16_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim192_bf16_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim192_bf16_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim192_bf16_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim192_bf16_softcapall_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim192_fp16_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim192_fp16_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim192_fp16_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim192_fp16_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim192_fp16_softcapall_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim256_bf16_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim256_bf16_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim256_bf16_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim256_bf16_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim256_bf16_softcapall_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim256_fp16_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim256_fp16_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim256_fp16_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim256_fp16_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim256_fp16_softcapall_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim64_bf16_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim64_bf16_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim64_bf16_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim64_bf16_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim64_bf16_softcapall_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim64_fp16_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim64_fp16_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim64_fp16_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim64_fp16_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim64_fp16_softcapall_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim96_bf16_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim96_bf16_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim96_bf16_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim96_bf16_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim96_bf16_softcapall_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim96_fp16_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim96_fp16_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim96_fp16_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim96_fp16_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_bwd_hdim96_fp16_softcapall_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_bf16_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_bf16_paged_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_bf16_paged_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_bf16_paged_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_bf16_paged_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_bf16_paged_softcapall_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_bf16_paged_split_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_bf16_paged_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_bf16_paged_split_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_bf16_paged_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_bf16_paged_split_softcapall_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_bf16_sm100.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_bf16_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_bf16_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_bf16_softcap_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_bf16_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_bf16_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_bf16_softcapall_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_bf16_split_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_bf16_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_bf16_split_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_bf16_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_bf16_split_softcapall_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_e4m3_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_e4m3_paged_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_e4m3_paged_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_e4m3_paged_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_e4m3_paged_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_e4m3_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_e4m3_softcap_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_e4m3_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_e4m3_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_e4m3_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_fp16_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_fp16_paged_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_fp16_paged_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_fp16_paged_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_fp16_paged_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_fp16_paged_softcapall_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_fp16_paged_split_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_fp16_paged_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_fp16_paged_split_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_fp16_paged_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_fp16_paged_split_softcapall_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_fp16_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_fp16_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_fp16_softcap_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_fp16_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_fp16_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_fp16_softcapall_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_fp16_split_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_fp16_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_fp16_split_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_fp16_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_fp16_split_softcapall_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_int8_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_int8_paged_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_int8_paged_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_int8_paged_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_int8_paged_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_int8_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_int8_softcap_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_int8_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_int8_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim128_int8_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_128_bf16_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_128_bf16_paged_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_128_bf16_paged_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_128_bf16_paged_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_128_bf16_paged_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_128_bf16_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_128_bf16_softcap_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_128_bf16_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_128_bf16_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_128_bf16_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_128_e4m3_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_128_e4m3_paged_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_128_e4m3_paged_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_128_e4m3_paged_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_128_e4m3_paged_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_128_e4m3_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_128_e4m3_softcap_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_128_e4m3_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_128_e4m3_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_128_e4m3_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_128_fp16_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_128_fp16_paged_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_128_fp16_paged_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_128_fp16_paged_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_128_fp16_paged_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_128_fp16_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_128_fp16_softcap_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_128_fp16_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_128_fp16_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_128_fp16_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_128_int8_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_128_int8_paged_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_128_int8_paged_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_128_int8_paged_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_128_int8_paged_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_128_int8_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_128_int8_softcap_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_128_int8_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_128_int8_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_128_int8_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_bf16_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_bf16_paged_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_bf16_paged_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_bf16_paged_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_bf16_paged_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_bf16_paged_softcapall_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_bf16_paged_split_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_bf16_paged_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_bf16_paged_split_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_bf16_paged_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_bf16_paged_split_softcapall_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_bf16_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_bf16_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_bf16_softcap_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_bf16_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_bf16_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_bf16_softcapall_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_bf16_split_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_bf16_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_bf16_split_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_bf16_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_bf16_split_softcapall_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_e4m3_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_e4m3_paged_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_e4m3_paged_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_e4m3_paged_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_e4m3_paged_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_e4m3_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_e4m3_softcap_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_e4m3_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_e4m3_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_e4m3_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_fp16_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_fp16_paged_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_fp16_paged_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_fp16_paged_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_fp16_paged_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_fp16_paged_softcapall_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_fp16_paged_split_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_fp16_paged_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_fp16_paged_split_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_fp16_paged_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_fp16_paged_split_softcapall_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_fp16_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_fp16_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_fp16_softcap_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_fp16_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_fp16_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_fp16_softcapall_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_fp16_split_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_fp16_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_fp16_split_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_fp16_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_fp16_split_softcapall_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_int8_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_int8_paged_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_int8_paged_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_int8_paged_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_int8_paged_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_int8_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_int8_softcap_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_int8_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_int8_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim192_int8_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_bf16_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_bf16_paged_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_bf16_paged_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_bf16_paged_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_bf16_paged_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_bf16_paged_softcapall_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_bf16_paged_split_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_bf16_paged_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_bf16_paged_split_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_bf16_paged_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_bf16_paged_split_softcapall_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_bf16_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_bf16_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_bf16_softcap_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_bf16_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_bf16_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_bf16_softcapall_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_bf16_split_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_bf16_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_bf16_split_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_bf16_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_bf16_split_softcapall_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_e4m3_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_e4m3_paged_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_e4m3_paged_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_e4m3_paged_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_e4m3_paged_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_e4m3_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_e4m3_softcap_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_e4m3_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_e4m3_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_e4m3_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_fp16_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_fp16_paged_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_fp16_paged_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_fp16_paged_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_fp16_paged_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_fp16_paged_softcapall_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_fp16_paged_split_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_fp16_paged_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_fp16_paged_split_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_fp16_paged_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_fp16_paged_split_softcapall_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_fp16_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_fp16_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_fp16_softcap_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_fp16_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_fp16_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_fp16_softcapall_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_fp16_split_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_fp16_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_fp16_split_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_fp16_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_fp16_split_softcapall_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_int8_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_int8_paged_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_int8_paged_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_int8_paged_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_int8_paged_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_int8_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_int8_softcap_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_int8_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_int8_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim256_int8_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_256_bf16_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_256_bf16_paged_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_256_bf16_paged_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_256_bf16_paged_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_256_bf16_paged_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_256_bf16_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_256_bf16_softcap_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_256_bf16_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_256_bf16_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_256_bf16_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_256_fp16_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_256_fp16_paged_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_256_fp16_paged_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_256_fp16_paged_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_256_fp16_paged_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_256_fp16_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_256_fp16_softcap_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_256_fp16_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_256_fp16_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_256_fp16_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_512_bf16_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_512_bf16_paged_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_512_bf16_paged_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_512_bf16_paged_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_512_bf16_paged_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_512_bf16_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_512_bf16_softcap_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_512_bf16_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_512_bf16_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_512_bf16_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_512_fp16_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_512_fp16_paged_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_512_fp16_paged_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_512_fp16_paged_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_512_fp16_paged_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_512_fp16_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_512_fp16_softcap_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_512_fp16_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_512_fp16_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_512_fp16_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_bf16_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_bf16_paged_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_bf16_paged_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_bf16_paged_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_bf16_paged_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_bf16_paged_softcapall_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_bf16_paged_split_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_bf16_paged_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_bf16_paged_split_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_bf16_paged_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_bf16_paged_split_softcapall_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_bf16_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_bf16_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_bf16_softcap_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_bf16_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_bf16_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_bf16_softcapall_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_bf16_split_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_bf16_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_bf16_split_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_bf16_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_bf16_split_softcapall_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_e4m3_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_e4m3_paged_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_e4m3_paged_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_e4m3_paged_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_e4m3_paged_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_e4m3_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_e4m3_softcap_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_e4m3_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_e4m3_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_e4m3_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_fp16_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_fp16_paged_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_fp16_paged_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_fp16_paged_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_fp16_paged_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_fp16_paged_softcapall_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_fp16_paged_split_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_fp16_paged_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_fp16_paged_split_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_fp16_paged_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_fp16_paged_split_softcapall_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_fp16_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_fp16_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_fp16_softcap_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_fp16_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_fp16_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_fp16_softcapall_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_fp16_split_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_fp16_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_fp16_split_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_fp16_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_fp16_split_softcapall_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_int8_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_int8_paged_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_int8_paged_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_int8_paged_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_int8_paged_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_int8_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_int8_softcap_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_int8_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_int8_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim64_int8_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_bf16_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_bf16_paged_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_bf16_paged_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_bf16_paged_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_bf16_paged_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_bf16_paged_softcapall_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_bf16_paged_split_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_bf16_paged_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_bf16_paged_split_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_bf16_paged_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_bf16_paged_split_softcapall_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_bf16_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_bf16_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_bf16_softcap_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_bf16_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_bf16_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_bf16_softcapall_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_bf16_split_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_bf16_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_bf16_split_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_bf16_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_bf16_split_softcapall_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_e4m3_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_e4m3_paged_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_e4m3_paged_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_e4m3_paged_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_e4m3_paged_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_e4m3_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_e4m3_softcap_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_e4m3_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_e4m3_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_e4m3_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_fp16_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_fp16_paged_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_fp16_paged_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_fp16_paged_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_fp16_paged_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_fp16_paged_softcapall_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_fp16_paged_split_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_fp16_paged_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_fp16_paged_split_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_fp16_paged_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_fp16_paged_split_softcapall_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_fp16_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_fp16_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_fp16_softcap_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_fp16_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_fp16_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_fp16_softcapall_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_fp16_split_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_fp16_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_fp16_split_softcap_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_fp16_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_fp16_split_softcapall_sm80.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_int8_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_int8_paged_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_int8_paged_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_int8_paged_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_int8_paged_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_int8_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_int8_softcap_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_int8_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_int8_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdim96_int8_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimall_bf16_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimall_bf16_paged_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimall_bf16_paged_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimall_bf16_paged_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimall_bf16_paged_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimall_bf16_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimall_bf16_softcap_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimall_bf16_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimall_bf16_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimall_bf16_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimall_e4m3_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimall_e4m3_paged_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimall_e4m3_paged_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimall_e4m3_paged_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimall_e4m3_paged_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimall_e4m3_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimall_e4m3_softcap_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimall_e4m3_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimall_e4m3_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimall_e4m3_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimall_fp16_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimall_fp16_paged_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimall_fp16_paged_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimall_fp16_paged_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimall_fp16_paged_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimall_fp16_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimall_fp16_softcap_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimall_fp16_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimall_fp16_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimall_fp16_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimall_int8_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimall_int8_paged_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimall_int8_paged_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimall_int8_paged_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimall_int8_paged_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimall_int8_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimall_int8_softcap_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimall_int8_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimall_int8_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimall_int8_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimdiff_bf16_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimdiff_bf16_paged_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimdiff_bf16_paged_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimdiff_bf16_paged_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimdiff_bf16_paged_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimdiff_bf16_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimdiff_bf16_softcap_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimdiff_bf16_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimdiff_bf16_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimdiff_bf16_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimdiff_e4m3_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimdiff_e4m3_paged_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimdiff_e4m3_paged_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimdiff_e4m3_paged_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimdiff_e4m3_paged_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimdiff_e4m3_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimdiff_e4m3_softcap_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimdiff_e4m3_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimdiff_e4m3_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimdiff_e4m3_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimdiff_fp16_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimdiff_fp16_paged_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimdiff_fp16_paged_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimdiff_fp16_paged_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimdiff_fp16_paged_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimdiff_fp16_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimdiff_fp16_softcap_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimdiff_fp16_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimdiff_fp16_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimdiff_fp16_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimdiff_int8_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimdiff_int8_paged_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimdiff_int8_paged_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimdiff_int8_paged_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimdiff_int8_paged_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimdiff_int8_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimdiff_int8_softcap_packgqa_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimdiff_int8_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimdiff_int8_split_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/instantiations/flash_fwd_hdimdiff_int8_split_softcap_sm90.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/instantiations
+copying hopper/tests/__init__.py -> build/lib.linux-x86_64-cpython-313/lite_attention/tests
+copying hopper/tests/conftest.py -> build/lib.linux-x86_64-cpython-313/lite_attention/tests
+copying hopper/tests/test_calibrated_module.py -> build/lib.linux-x86_64-cpython-313/lite_attention/tests
+copying hopper/tests/test_calibration_gpu.py -> build/lib.linux-x86_64-cpython-313/lite_attention/tests
+copying hopper/tests/test_flash_attn.py -> build/lib.linux-x86_64-cpython-313/lite_attention/tests
+copying hopper/tests/test_lite_attention.py -> build/lib.linux-x86_64-cpython-313/lite_attention/tests
+copying hopper/tests/test_util.py -> build/lib.linux-x86_64-cpython-313/lite_attention/tests
+copying hopper/_internal/benchmarks/benchmark_attn.py -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal/benchmarks
+copying hopper/_internal/benchmarks/benchmark_flash_attention_fp8.py -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal/benchmarks
+copying hopper/_internal/benchmarks/benchmark_mla_decode.py -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal/benchmarks
+copying hopper/_internal/benchmarks/benchmark_split_kv.py -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal/benchmarks
+copying hopper/_internal/cpp/block.h -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal/cpp
+copying hopper/_internal/cpp/copy_sm90_bulk_reduce.hpp -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal/cpp
+copying hopper/_internal/cpp/cuda_check.h -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal/cpp
+copying hopper/_internal/cpp/epilogue_bwd.hpp -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal/cpp
+copying hopper/_internal/cpp/epilogue_fwd.hpp -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal/cpp
+copying hopper/_internal/cpp/flash.h -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal/cpp
+copying hopper/_internal/cpp/flash_api.cpp -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal/cpp
+copying hopper/_internal/cpp/flash_bwd_kernel_sm80.h -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal/cpp
+copying hopper/_internal/cpp/flash_bwd_kernel_sm90.h -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal/cpp
+copying hopper/_internal/cpp/flash_bwd_launch_template.h -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal/cpp
+copying hopper/_internal/cpp/flash_bwd_postprocess_kernel.h -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal/cpp
+copying hopper/_internal/cpp/flash_bwd_preprocess_kernel.h -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal/cpp
+copying hopper/_internal/cpp/flash_fwd_combine.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal/cpp
+copying hopper/_internal/cpp/flash_fwd_combine_kernel.h -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal/cpp
+copying hopper/_internal/cpp/flash_fwd_combine_launch_template.h -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal/cpp
+copying hopper/_internal/cpp/flash_fwd_kernel_sm80.h -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal/cpp
+copying hopper/_internal/cpp/flash_fwd_kernel_sm90.h -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal/cpp
+copying hopper/_internal/cpp/flash_fwd_launch_template.h -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal/cpp
+copying hopper/_internal/cpp/flash_prepare_scheduler.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal/cpp
+copying hopper/_internal/cpp/heuristics.h -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal/cpp
+copying hopper/_internal/cpp/mainloop_bwd_sm80.hpp -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal/cpp
+copying hopper/_internal/cpp/mainloop_bwd_sm90_tma_gmma_ws.hpp -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal/cpp
+copying hopper/_internal/cpp/mainloop_fwd_sm80.hpp -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal/cpp
+copying hopper/_internal/cpp/mainloop_fwd_sm90_tma_gmma_ws.hpp -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal/cpp
+copying hopper/_internal/cpp/mask.h -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal/cpp
+copying hopper/_internal/cpp/named_barrier.hpp -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal/cpp
+copying hopper/_internal/cpp/pack_gqa.h -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal/cpp
+copying hopper/_internal/cpp/paged_kv.h -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal/cpp
+copying hopper/_internal/cpp/quant.cu -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal/cpp
+copying hopper/_internal/cpp/quant.h -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal/cpp
+copying hopper/_internal/cpp/rotary.h -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal/cpp
+copying hopper/_internal/cpp/seqlen.h -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal/cpp
+copying hopper/_internal/cpp/skip_list.h -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal/cpp
+copying hopper/_internal/cpp/sm90_pipeline_no_cluster.hpp -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal/cpp
+copying hopper/_internal/cpp/softmax.h -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal/cpp
+copying hopper/_internal/cpp/static_switch.h -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal/cpp
+copying hopper/_internal/cpp/tile_scheduler.hpp -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal/cpp
+copying hopper/_internal/cpp/tile_size.h -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal/cpp
+copying hopper/_internal/cpp/utils.h -> build/lib.linux-x86_64-cpython-313/lite_attention/_internal/cpp
+running build_ext
+building 'lite_attention._C' extension
+[1/2] /usr/local/cuda-12.8/bin/nvcc --generate-dependencies-with-compile --dependency-output /home/ingonyama/users/dor/Lite-Attention-LTX/build/temp.linux-x86_64-cpython-313/hopper/instantiations/flash_fwd_hdim128_int8_sm90.o.d -I/home/ingonyama/users/dor/Lite-Attention-LTX/hopper -I/home/ingonyama/users/dor/Lite-Attention-LTX/hopper/_internal/cpp -I/home/ingonyama/users/dor/Lite-Attention-LTX/csrc/cutlass/include -I/home/ingonyama/miniconda3/envs/dor-ltx/lib/python3.13/site-packages/torch/include -I/home/ingonyama/miniconda3/envs/dor-ltx/lib/python3.13/site-packages/torch/include/torch/csrc/api/include -I/usr/local/cuda-12.8/include -I/home/ingonyama/miniconda3/envs/dor-ltx/include/python3.13 -c -c /home/ingonyama/users/dor/Lite-Attention-LTX/hopper/instantiations/flash_fwd_hdim128_int8_sm90.cu -o /home/ingonyama/users/dor/Lite-Attention-LTX/build/temp.linux-x86_64-cpython-313/hopper/instantiations/flash_fwd_hdim128_int8_sm90.o -D__CUDA_NO_HALF_OPERATORS__ -D__CUDA_NO_HALF_CONVERSIONS__ -D__CUDA_NO_BFLOAT16_CONVERSIONS__ -D__CUDA_NO_HALF2_OPERATORS__ --expt-relaxed-constexpr --compiler-options ''"'"'-fPIC'"'"'' --threads 2 -O3 -std=c++20 --ftemplate-backtrace-limit=0 --use_fast_math --keep --resource-usage -lineinfo -DCUTE_SM90_EXTENDED_MMA_SHAPES_ENABLED -DCUTLASS_DEBUG_TRACE_LEVEL=0 -DNDEBUG -gencode arch=compute_90a,code=sm_90a -DFLASHATTENTION_DISABLE_BACKWARD -DFLASHATTENTION_DISABLE_PAGEDKV -DFLASHATTENTION_DISABLE_SPLIT -DFLASHATTENTION_DISABLE_APPENDKV -DFLASHATTENTION_DISABLE_LOCAL -DFLASHATTENTION_DISABLE_SOFTCAP -DFLASHATTENTION_DISABLE_PACKGQA -DFLASHATTENTION_DISABLE_FP16 -DFLASHATTENTION_DISABLE_FP8 -DFLASHATTENTION_DISABLE_VARLEN -DFLASHATTENTION_DISABLE_CLUSTER -DFLASHATTENTION_DISABLE_HDIM64 -DFLASHATTENTION_DISABLE_HDIM96 -DFLASHATTENTION_DISABLE_HDIM192 -DFLASHATTENTION_DISABLE_HDIM256 -DFLASHATTENTION_DISABLE_SM8x -DFLASHATTENTION_DISABLE_HDIMDIFF64 -DFLASHATTENTION_DISABLE_HDIMDIFF192 -DTORCH_API_INCLUDE_EXTENSION_H -DPy_LIMITED_API=0x03090000 -DTORCH_EXTENSION_NAME=_C -D_GLIBCXX_USE_CXX11_ABI=1
+ptxas info    : 10 bytes gmem
+ptxas info    : Compiling entry function '_ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi192EEENS7_ILi128EEESB_EEELi128EafNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb0ELb0ELb0ELb0ELb0ELb1ELb0EEENS1_21CollectiveEpilogueFwdISC_S9_NS_10bfloat16_tESE_Li384ELb0ELb0ELb0ELb0EEENS1_29StaticPersistentTileSchedulerILb0EEEEEEEEEvNT_6ParamsE' for 'sm_90a'
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi192EEENS7_ILi128EEESB_EEELi128EafNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb0ELb0ELb0ELb0ELb0ELb1ELb0EEENS1_21CollectiveEpilogueFwdISC_S9_NS_10bfloat16_tESE_Li384ELb0ELb0ELb0ELb0EEENS1_29StaticPersistentTileSchedulerILb0EEEEEEEEEvNT_6ParamsE
+    8 bytes stack frame, 8 bytes spill stores, 8 bytes spill loads
+ptxas info    : Used 128 registers, used 16 barriers, 8 bytes cumulative stack size
+ptxas info    : Compile time = 206.832 ms
+ptxas info    : Compiling entry function '_ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi192EEENS7_ILi128EEESB_EEELi128EafNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb0ELb0ELb0ELb1ELb0ELb0ELb0EEENS1_21CollectiveEpilogueFwdISC_S9_NS_10bfloat16_tESE_Li384ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi192EEEEEEEEEvNT_6ParamsE' for 'sm_90a'
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi192EEENS7_ILi128EEESB_EEELi128EafNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb0ELb0ELb0ELb1ELb0ELb0ELb0EEENS1_21CollectiveEpilogueFwdISC_S9_NS_10bfloat16_tESE_Li384ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi192EEEEEEEEEvNT_6ParamsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 128 registers, used 16 barriers
+ptxas info    : Compile time = 202.560 ms
+ptxas info    : Compiling entry function '_ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi192EEENS7_ILi128EEESB_EEELi128EafNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb0ELb0ELb0ELb1ELb0ELb1ELb0EEENS1_21CollectiveEpilogueFwdISC_S9_NS_10bfloat16_tESE_Li384ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi192EEEEEEEEEvNT_6ParamsE' for 'sm_90a'
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi192EEENS7_ILi128EEESB_EEELi128EafNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb0ELb0ELb0ELb1ELb0ELb1ELb0EEENS1_21CollectiveEpilogueFwdISC_S9_NS_10bfloat16_tESE_Li384ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi192EEEEEEEEEvNT_6ParamsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 128 registers, used 16 barriers
+ptxas info    : Compile time = 204.801 ms
+ptxas info    : Compiling entry function '_ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi192EEENS7_ILi128EEESB_EEELi128EafNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb0ELb0ELb0ELb1ELb1ELb0ELb0EEENS1_21CollectiveEpilogueFwdISC_S9_NS_10bfloat16_tESE_Li384ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi192EEEEEEEEEvNT_6ParamsE' for 'sm_90a'
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi192EEENS7_ILi128EEESB_EEELi128EafNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb0ELb0ELb0ELb1ELb1ELb0ELb0EEENS1_21CollectiveEpilogueFwdISC_S9_NS_10bfloat16_tESE_Li384ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi192EEEEEEEEEvNT_6ParamsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 128 registers, used 16 barriers
+ptxas info    : Compile time = 202.281 ms
+ptxas info    : Compiling entry function '_ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi192EEENS7_ILi128EEESB_EEELi128EafNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb0ELb0ELb0ELb1ELb1ELb1ELb0EEENS1_21CollectiveEpilogueFwdISC_S9_NS_10bfloat16_tESE_Li384ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi192EEEEEEEEEvNT_6ParamsE' for 'sm_90a'
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi192EEENS7_ILi128EEESB_EEELi128EafNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb0ELb0ELb0ELb1ELb1ELb1ELb0EEENS1_21CollectiveEpilogueFwdISC_S9_NS_10bfloat16_tESE_Li384ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi192EEEEEEEEEvNT_6ParamsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 128 registers, used 16 barriers
+ptxas info    : Compile time = 204.578 ms
+ptxas info    : Compiling entry function '_ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi192EEENS7_ILi128EEESB_EEELi128EafNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb0ELb0ELb0ELb1ELb0ELb0ELb1EEENS1_21CollectiveEpilogueFwdISC_S9_NS_10bfloat16_tESE_Li384ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi192EEEEEEEEEvNT_6ParamsE' for 'sm_90a'
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi192EEENS7_ILi128EEESB_EEELi128EafNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb0ELb0ELb0ELb1ELb0ELb0ELb1EEENS1_21CollectiveEpilogueFwdISC_S9_NS_10bfloat16_tESE_Li384ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi192EEEEEEEEEvNT_6ParamsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 128 registers, used 16 barriers
+ptxas info    : Compile time = 216.465 ms
+ptxas info    : Compiling entry function '_ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi192EEENS7_ILi128EEESB_EEELi128EafNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb0ELb0ELb0ELb1ELb0ELb1ELb1EEENS1_21CollectiveEpilogueFwdISC_S9_NS_10bfloat16_tESE_Li384ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi192EEEEEEEEEvNT_6ParamsE' for 'sm_90a'
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi192EEENS7_ILi128EEESB_EEELi128EafNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb0ELb0ELb0ELb1ELb0ELb1ELb1EEENS1_21CollectiveEpilogueFwdISC_S9_NS_10bfloat16_tESE_Li384ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi192EEEEEEEEEvNT_6ParamsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 128 registers, used 16 barriers
+ptxas info    : Compile time = 212.426 ms
+ptxas info    : Compiling entry function '_ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi192EEENS7_ILi128EEESB_EEELi128EafNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb0ELb0ELb0ELb1ELb1ELb0ELb1EEENS1_21CollectiveEpilogueFwdISC_S9_NS_10bfloat16_tESE_Li384ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi192EEEEEEEEEvNT_6ParamsE' for 'sm_90a'
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi192EEENS7_ILi128EEESB_EEELi128EafNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb0ELb0ELb0ELb1ELb1ELb0ELb1EEENS1_21CollectiveEpilogueFwdISC_S9_NS_10bfloat16_tESE_Li384ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi192EEEEEEEEEvNT_6ParamsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 128 registers, used 16 barriers
+ptxas info    : Compile time = 212.776 ms
+ptxas info    : Compiling entry function '_ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi192EEENS7_ILi128EEESB_EEELi128EafNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb0ELb0ELb0ELb1ELb1ELb1ELb1EEENS1_21CollectiveEpilogueFwdISC_S9_NS_10bfloat16_tESE_Li384ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi192EEEEEEEEEvNT_6ParamsE' for 'sm_90a'
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi192EEENS7_ILi128EEESB_EEELi128EafNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb0ELb0ELb0ELb1ELb1ELb1ELb1EEENS1_21CollectiveEpilogueFwdISC_S9_NS_10bfloat16_tESE_Li384ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi192EEEEEEEEEvNT_6ParamsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 128 registers, used 16 barriers
+ptxas info    : Compile time = 219.310 ms
+ptxas info    : Compiling entry function '_ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi192EEENS7_ILi128EEESB_EEELi128EafNS_4arch4Sm90ELb1ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb0ELb0ELb0ELb0ELb0ELb1ELb0EEENS1_21CollectiveEpilogueFwdISC_S9_NS_10bfloat16_tESE_Li384ELb0ELb0ELb0ELb0EEENS1_30DynamicPersistentTileSchedulerILi384ELi32ELb0ELb0ELb1EEEEEEEEEvNT_6ParamsE' for 'sm_90a'
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi192EEENS7_ILi128EEESB_EEELi128EafNS_4arch4Sm90ELb1ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb0ELb0ELb0ELb0ELb0ELb1ELb0EEENS1_21CollectiveEpilogueFwdISC_S9_NS_10bfloat16_tESE_Li384ELb0ELb0ELb0ELb0EEENS1_30DynamicPersistentTileSchedulerILi384ELi32ELb0ELb0ELb1EEEEEEEEEvNT_6ParamsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 128 registers, used 16 barriers
+ptxas info    : Compile time = 305.506 ms
+ptxas info    : Compiling entry function '_ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi192EEENS7_ILi128EEESB_EEELi128EafNS_4arch4Sm90ELb1ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb0ELb0ELb0ELb1ELb0ELb0ELb0EEENS1_21CollectiveEpilogueFwdISC_S9_NS_10bfloat16_tESE_Li384ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi192EEEEEEEEEvNT_6ParamsE' for 'sm_90a'
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi192EEENS7_ILi128EEESB_EEELi128EafNS_4arch4Sm90ELb1ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb0ELb0ELb0ELb1ELb0ELb0ELb0EEENS1_21CollectiveEpilogueFwdISC_S9_NS_10bfloat16_tESE_Li384ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi192EEEEEEEEEvNT_6ParamsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 128 registers, used 16 barriers
+ptxas info    : Compile time = 211.962 ms
+ptxas info    : Compiling entry function '_ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi192EEENS7_ILi128EEESB_EEELi128EafNS_4arch4Sm90ELb1ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb0ELb0ELb0ELb1ELb0ELb1ELb0EEENS1_21CollectiveEpilogueFwdISC_S9_NS_10bfloat16_tESE_Li384ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi192EEEEEEEEEvNT_6ParamsE' for 'sm_90a'
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi192EEENS7_ILi128EEESB_EEELi128EafNS_4arch4Sm90ELb1ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb0ELb0ELb0ELb1ELb0ELb1ELb0EEENS1_21CollectiveEpilogueFwdISC_S9_NS_10bfloat16_tESE_Li384ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi192EEEEEEEEEvNT_6ParamsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 128 registers, used 16 barriers
+ptxas info    : Compile time = 228.551 ms
+ptxas info    : Compiling entry function '_ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi192EEENS7_ILi128EEESB_EEELi128EafNS_4arch4Sm90ELb1ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb0ELb0ELb0ELb1ELb1ELb0ELb0EEENS1_21CollectiveEpilogueFwdISC_S9_NS_10bfloat16_tESE_Li384ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi192EEEEEEEEEvNT_6ParamsE' for 'sm_90a'
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi192EEENS7_ILi128EEESB_EEELi128EafNS_4arch4Sm90ELb1ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb0ELb0ELb0ELb1ELb1ELb0ELb0EEENS1_21CollectiveEpilogueFwdISC_S9_NS_10bfloat16_tESE_Li384ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi192EEEEEEEEEvNT_6ParamsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 128 registers, used 16 barriers
+ptxas info    : Compile time = 211.087 ms
+ptxas info    : Compiling entry function '_ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi192EEENS7_ILi128EEESB_EEELi128EafNS_4arch4Sm90ELb1ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb0ELb0ELb0ELb1ELb1ELb1ELb0EEENS1_21CollectiveEpilogueFwdISC_S9_NS_10bfloat16_tESE_Li384ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi192EEEEEEEEEvNT_6ParamsE' for 'sm_90a'
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi192EEENS7_ILi128EEESB_EEELi128EafNS_4arch4Sm90ELb1ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb0ELb0ELb0ELb1ELb1ELb1ELb0EEENS1_21CollectiveEpilogueFwdISC_S9_NS_10bfloat16_tESE_Li384ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi192EEEEEEEEEvNT_6ParamsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 128 registers, used 16 barriers
+ptxas info    : Compile time = 208.966 ms
+ptxas info    : Compiling entry function '_ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi192EEENS7_ILi128EEESB_EEELi128EafNS_4arch4Sm90ELb1ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb0ELb0ELb0ELb1ELb0ELb0ELb1EEENS1_21CollectiveEpilogueFwdISC_S9_NS_10bfloat16_tESE_Li384ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi192EEEEEEEEEvNT_6ParamsE' for 'sm_90a'
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi192EEENS7_ILi128EEESB_EEELi128EafNS_4arch4Sm90ELb1ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb0ELb0ELb0ELb1ELb0ELb0ELb1EEENS1_21CollectiveEpilogueFwdISC_S9_NS_10bfloat16_tESE_Li384ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi192EEEEEEEEEvNT_6ParamsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 128 registers, used 16 barriers
+ptxas info    : Compile time = 220.838 ms
+ptxas info    : Compiling entry function '_ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi192EEENS7_ILi128EEESB_EEELi128EafNS_4arch4Sm90ELb1ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb0ELb0ELb0ELb1ELb0ELb1ELb1EEENS1_21CollectiveEpilogueFwdISC_S9_NS_10bfloat16_tESE_Li384ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi192EEEEEEEEEvNT_6ParamsE' for 'sm_90a'
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi192EEENS7_ILi128EEESB_EEELi128EafNS_4arch4Sm90ELb1ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb0ELb0ELb0ELb1ELb0ELb1ELb1EEENS1_21CollectiveEpilogueFwdISC_S9_NS_10bfloat16_tESE_Li384ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi192EEEEEEEEEvNT_6ParamsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 128 registers, used 16 barriers
+ptxas info    : Compile time = 220.585 ms
+ptxas info    : Compiling entry function '_ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi192EEENS7_ILi128EEESB_EEELi128EafNS_4arch4Sm90ELb1ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb0ELb0ELb0ELb1ELb1ELb0ELb1EEENS1_21CollectiveEpilogueFwdISC_S9_NS_10bfloat16_tESE_Li384ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi192EEEEEEEEEvNT_6ParamsE' for 'sm_90a'
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi192EEENS7_ILi128EEESB_EEELi128EafNS_4arch4Sm90ELb1ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb0ELb0ELb0ELb1ELb1ELb0ELb1EEENS1_21CollectiveEpilogueFwdISC_S9_NS_10bfloat16_tESE_Li384ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi192EEEEEEEEEvNT_6ParamsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 128 registers, used 16 barriers
+ptxas info    : Compile time = 222.160 ms
+ptxas info    : Compiling entry function '_ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi192EEENS7_ILi128EEESB_EEELi128EafNS_4arch4Sm90ELb1ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb0ELb0ELb0ELb1ELb1ELb1ELb1EEENS1_21CollectiveEpilogueFwdISC_S9_NS_10bfloat16_tESE_Li384ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi192EEEEEEEEEvNT_6ParamsE' for 'sm_90a'
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi192EEENS7_ILi128EEESB_EEELi128EafNS_4arch4Sm90ELb1ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb0ELb0ELb0ELb1ELb1ELb1ELb1EEENS1_21CollectiveEpilogueFwdISC_S9_NS_10bfloat16_tESE_Li384ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi192EEEEEEEEEvNT_6ParamsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 128 registers, used 16 barriers
+ptxas info    : Compile time = 221.741 ms
+[2/2] /usr/local/cuda-12.8/bin/nvcc --generate-dependencies-with-compile --dependency-output /home/ingonyama/users/dor/Lite-Attention-LTX/build/temp.linux-x86_64-cpython-313/hopper/instantiations/flash_fwd_hdim128_bf16_sm90.o.d -I/home/ingonyama/users/dor/Lite-Attention-LTX/hopper -I/home/ingonyama/users/dor/Lite-Attention-LTX/hopper/_internal/cpp -I/home/ingonyama/users/dor/Lite-Attention-LTX/csrc/cutlass/include -I/home/ingonyama/miniconda3/envs/dor-ltx/lib/python3.13/site-packages/torch/include -I/home/ingonyama/miniconda3/envs/dor-ltx/lib/python3.13/site-packages/torch/include/torch/csrc/api/include -I/usr/local/cuda-12.8/include -I/home/ingonyama/miniconda3/envs/dor-ltx/include/python3.13 -c -c /home/ingonyama/users/dor/Lite-Attention-LTX/hopper/instantiations/flash_fwd_hdim128_bf16_sm90.cu -o /home/ingonyama/users/dor/Lite-Attention-LTX/build/temp.linux-x86_64-cpython-313/hopper/instantiations/flash_fwd_hdim128_bf16_sm90.o -D__CUDA_NO_HALF_OPERATORS__ -D__CUDA_NO_HALF_CONVERSIONS__ -D__CUDA_NO_BFLOAT16_CONVERSIONS__ -D__CUDA_NO_HALF2_OPERATORS__ --expt-relaxed-constexpr --compiler-options ''"'"'-fPIC'"'"'' --threads 2 -O3 -std=c++20 --ftemplate-backtrace-limit=0 --use_fast_math --keep --resource-usage -lineinfo -DCUTE_SM90_EXTENDED_MMA_SHAPES_ENABLED -DCUTLASS_DEBUG_TRACE_LEVEL=0 -DNDEBUG -gencode arch=compute_90a,code=sm_90a -DFLASHATTENTION_DISABLE_BACKWARD -DFLASHATTENTION_DISABLE_PAGEDKV -DFLASHATTENTION_DISABLE_SPLIT -DFLASHATTENTION_DISABLE_APPENDKV -DFLASHATTENTION_DISABLE_LOCAL -DFLASHATTENTION_DISABLE_SOFTCAP -DFLASHATTENTION_DISABLE_PACKGQA -DFLASHATTENTION_DISABLE_FP16 -DFLASHATTENTION_DISABLE_FP8 -DFLASHATTENTION_DISABLE_VARLEN -DFLASHATTENTION_DISABLE_CLUSTER -DFLASHATTENTION_DISABLE_HDIM64 -DFLASHATTENTION_DISABLE_HDIM96 -DFLASHATTENTION_DISABLE_HDIM192 -DFLASHATTENTION_DISABLE_HDIM256 -DFLASHATTENTION_DISABLE_SM8x -DFLASHATTENTION_DISABLE_HDIMDIFF64 -DFLASHATTENTION_DISABLE_HDIMDIFF192 -DTORCH_API_INCLUDE_EXTENSION_H -DPy_LIMITED_API=0x03090000 -DTORCH_EXTENSION_NAME=_C -D_GLIBCXX_USE_CXX11_ABI=1
+ptxas info    : 10 bytes gmem
+ptxas info    : Compiling entry function '_ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEENS7_ILi176EEESA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb0ELb0ELb1ELb0EEENS1_21CollectiveEpilogueFwdINS6_IJSA_SA_SB_EEES9_SD_SF_Li256ELb0ELb0ELb0ELb0EEENS1_29StaticPersistentTileSchedulerILb0EEEEEEEEEvNT_6ParamsE' for 'sm_90a'
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEENS7_ILi176EEESA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb0ELb0ELb1ELb0EEENS1_21CollectiveEpilogueFwdINS6_IJSA_SA_SB_EEES9_SD_SF_Li256ELb0ELb0ELb0ELb0EEENS1_29StaticPersistentTileSchedulerILb0EEEEEEEEEvNT_6ParamsE
+    8 bytes stack frame, 8 bytes spill stores, 8 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers, 8 bytes cumulative stack size
+ptxas info    : Compile time = 383.225 ms
+ptxas info    : Compiling entry function '_ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEENS7_ILi176EEESA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb0ELb0ELb0EEENS1_21CollectiveEpilogueFwdINS6_IJSA_SA_SB_EEES9_SD_SF_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE' for 'sm_90a'
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEENS7_ILi176EEESA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb0ELb0ELb0EEENS1_21CollectiveEpilogueFwdINS6_IJSA_SA_SB_EEES9_SD_SF_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE
+    16 bytes stack frame, 16 bytes spill stores, 16 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers, 16 bytes cumulative stack size
+ptxas info    : Compile time = 403.421 ms
+ptxas info    : Compiling entry function '_ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEENS7_ILi176EEESA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb0ELb1ELb0EEENS1_21CollectiveEpilogueFwdINS6_IJSA_SA_SB_EEES9_SD_SF_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE' for 'sm_90a'
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEENS7_ILi176EEESA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb0ELb1ELb0EEENS1_21CollectiveEpilogueFwdINS6_IJSA_SA_SB_EEES9_SD_SF_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE
+    16 bytes stack frame, 16 bytes spill stores, 16 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers, 16 bytes cumulative stack size
+ptxas info    : Compile time = 372.947 ms
+ptxas info    : Compiling entry function '_ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEENS7_ILi176EEESA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb1ELb0ELb0EEENS1_21CollectiveEpilogueFwdINS6_IJSA_SA_SB_EEES9_SD_SF_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE' for 'sm_90a'
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEENS7_ILi176EEESA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb1ELb0ELb0EEENS1_21CollectiveEpilogueFwdINS6_IJSA_SA_SB_EEES9_SD_SF_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE
+    16 bytes stack frame, 16 bytes spill stores, 16 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers, 16 bytes cumulative stack size
+ptxas info    : Compile time = 369.713 ms
+ptxas info    : Compiling entry function '_ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEENS7_ILi176EEESA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb1ELb1ELb0EEENS1_21CollectiveEpilogueFwdINS6_IJSA_SA_SB_EEES9_SD_SF_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE' for 'sm_90a'
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEENS7_ILi176EEESA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb1ELb1ELb0EEENS1_21CollectiveEpilogueFwdINS6_IJSA_SA_SB_EEES9_SD_SF_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE
+    16 bytes stack frame, 16 bytes spill stores, 16 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers, 16 bytes cumulative stack size
+ptxas info    : Compile time = 368.208 ms
+ptxas info    : Compiling entry function '_ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEENS7_ILi176EEESA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb0ELb0ELb1EEENS1_21CollectiveEpilogueFwdINS6_IJSA_SA_SB_EEES9_SD_SF_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE' for 'sm_90a'
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEENS7_ILi176EEESA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb0ELb0ELb1EEENS1_21CollectiveEpilogueFwdINS6_IJSA_SA_SB_EEES9_SD_SF_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 386.517 ms
+ptxas info    : Compiling entry function '_ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEENS7_ILi176EEESA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb0ELb1ELb1EEENS1_21CollectiveEpilogueFwdINS6_IJSA_SA_SB_EEES9_SD_SF_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE' for 'sm_90a'
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEENS7_ILi176EEESA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb0ELb1ELb1EEENS1_21CollectiveEpilogueFwdINS6_IJSA_SA_SB_EEES9_SD_SF_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 378.732 ms
+ptxas info    : Compiling entry function '_ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEENS7_ILi176EEESA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb1ELb0ELb1EEENS1_21CollectiveEpilogueFwdINS6_IJSA_SA_SB_EEES9_SD_SF_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE' for 'sm_90a'
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEENS7_ILi176EEESA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb1ELb0ELb1EEENS1_21CollectiveEpilogueFwdINS6_IJSA_SA_SB_EEES9_SD_SF_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 376.866 ms
+ptxas info    : Compiling entry function '_ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEENS7_ILi176EEESA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb1ELb1ELb1EEENS1_21CollectiveEpilogueFwdINS6_IJSA_SA_SB_EEES9_SD_SF_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE' for 'sm_90a'
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEENS7_ILi176EEESA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb0ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb1ELb1ELb1EEENS1_21CollectiveEpilogueFwdINS6_IJSA_SA_SB_EEES9_SD_SF_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 370.199 ms
+ptxas info    : Compiling entry function '_ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEESA_SA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb1ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb0ELb0ELb1ELb0EEENS1_21CollectiveEpilogueFwdISB_S9_SC_SE_Li256ELb0ELb0ELb0ELb0EEENS1_30DynamicPersistentTileSchedulerILi256ELi32ELb0ELb0ELb1EEEEEEEEEvNT_6ParamsE' for 'sm_90a'
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEESA_SA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb1ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb0ELb0ELb1ELb0EEENS1_21CollectiveEpilogueFwdISB_S9_SC_SE_Li256ELb0ELb0ELb0ELb0EEENS1_30DynamicPersistentTileSchedulerILi256ELi32ELb0ELb0ELb1EEEEEEEEEvNT_6ParamsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 366.504 ms
+ptxas info    : Compiling entry function '_ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEESA_SA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb1ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb0ELb0ELb0EEENS1_21CollectiveEpilogueFwdISB_S9_SC_SE_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE' for 'sm_90a'
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEESA_SA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb1ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb0ELb0ELb0EEENS1_21CollectiveEpilogueFwdISB_S9_SC_SE_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE
+    16 bytes stack frame, 16 bytes spill stores, 16 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers, 16 bytes cumulative stack size
+ptxas info    : Compile time = 250.361 ms
+ptxas info    : Compiling entry function '_ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEESA_SA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb1ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb0ELb1ELb0EEENS1_21CollectiveEpilogueFwdISB_S9_SC_SE_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE' for 'sm_90a'
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEESA_SA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb1ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb0ELb1ELb0EEENS1_21CollectiveEpilogueFwdISB_S9_SC_SE_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE
+    16 bytes stack frame, 16 bytes spill stores, 16 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers, 16 bytes cumulative stack size
+ptxas info    : Compile time = 253.049 ms
+ptxas info    : Compiling entry function '_ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEESA_SA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb1ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb1ELb0ELb0EEENS1_21CollectiveEpilogueFwdISB_S9_SC_SE_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE' for 'sm_90a'
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEESA_SA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb1ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb1ELb0ELb0EEENS1_21CollectiveEpilogueFwdISB_S9_SC_SE_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE
+    16 bytes stack frame, 16 bytes spill stores, 16 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers, 16 bytes cumulative stack size
+ptxas info    : Compile time = 253.611 ms
+ptxas info    : Compiling entry function '_ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEESA_SA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb1ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb1ELb1ELb0EEENS1_21CollectiveEpilogueFwdISB_S9_SC_SE_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE' for 'sm_90a'
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEESA_SA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb1ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb1ELb1ELb0EEENS1_21CollectiveEpilogueFwdISB_S9_SC_SE_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE
+    16 bytes stack frame, 16 bytes spill stores, 16 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers, 16 bytes cumulative stack size
+ptxas info    : Compile time = 257.321 ms
+ptxas info    : Compiling entry function '_ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEESA_SA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb1ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb0ELb0ELb1EEENS1_21CollectiveEpilogueFwdISB_S9_SC_SE_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE' for 'sm_90a'
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEESA_SA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb1ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb0ELb0ELb1EEENS1_21CollectiveEpilogueFwdISB_S9_SC_SE_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 272.611 ms
+ptxas info    : Compiling entry function '_ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEESA_SA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb1ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb0ELb1ELb1EEENS1_21CollectiveEpilogueFwdISB_S9_SC_SE_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE' for 'sm_90a'
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEESA_SA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb1ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb0ELb1ELb1EEENS1_21CollectiveEpilogueFwdISB_S9_SC_SE_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 265.366 ms
+ptxas info    : Compiling entry function '_ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEESA_SA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb1ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb1ELb0ELb1EEENS1_21CollectiveEpilogueFwdISB_S9_SC_SE_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE' for 'sm_90a'
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEESA_SA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb1ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb1ELb0ELb1EEENS1_21CollectiveEpilogueFwdISB_S9_SC_SE_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 295.754 ms
+ptxas info    : Compiling entry function '_ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEESA_SA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb1ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb1ELb1ELb1EEENS1_21CollectiveEpilogueFwdISB_S9_SC_SE_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE' for 'sm_90a'
+ptxas info    : Function properties for _ZN7cutlass13device_kernelIN5flash20enable_sm90_or_laterINS1_16FlashAttnFwdSm90INS1_25CollectiveMainloopFwdSm90ILi2EN4cute5tupleIJNS5_1CILi1EEES8_S8_EEENS6_IJNS7_ILi128EEESA_SA_EEELi128ENS_10bfloat16_tEfNS_4arch4Sm90ELb1ELb0ELb0ELb0ELb0ELb0ELb0ELb1ELb1ELb0ELb0ELb0ELb1ELb1ELb1ELb1EEENS1_21CollectiveEpilogueFwdISB_S9_SC_SE_Li256ELb0ELb0ELb0ELb0EEENS1_19SingleTileSchedulerILb0ELb0ELb0ELi128EEEEEEEEEvNT_6ParamsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 285.186 ms
+g++ -pthread -B /home/ingonyama/miniconda3/envs/dor-ltx/compiler_compat -fno-strict-overflow -Wsign-compare -DNDEBUG -O2 -Wall -fPIC -O2 -isystem /home/ingonyama/miniconda3/envs/dor-ltx/include -fPIC -O2 -isystem /home/ingonyama/miniconda3/envs/dor-ltx/include -shared -Wl,-rpath,/home/ingonyama/miniconda3/envs/dor-ltx/lib -Wl,-rpath-link,/home/ingonyama/miniconda3/envs/dor-ltx/lib -L/home/ingonyama/miniconda3/envs/dor-ltx/lib -Wl,-rpath,/home/ingonyama/miniconda3/envs/dor-ltx/lib -Wl,-rpath-link,/home/ingonyama/miniconda3/envs/dor-ltx/lib -L/home/ingonyama/miniconda3/envs/dor-ltx/lib /home/ingonyama/users/dor/Lite-Attention-LTX/build/temp.linux-x86_64-cpython-313/hopper/_internal/cpp/flash_api.o /home/ingonyama/users/dor/Lite-Attention-LTX/build/temp.linux-x86_64-cpython-313/hopper/_internal/cpp/flash_prepare_scheduler.o /home/ingonyama/users/dor/Lite-Attention-LTX/build/temp.linux-x86_64-cpython-313/hopper/_internal/cpp/quant.o /home/ingonyama/users/dor/Lite-Attention-LTX/build/temp.linux-x86_64-cpython-313/hopper/instantiations/flash_fwd_hdim128_bf16_sm90.o /home/ingonyama/users/dor/Lite-Attention-LTX/build/temp.linux-x86_64-cpython-313/hopper/instantiations/flash_fwd_hdim128_int8_sm90.o -L/home/ingonyama/miniconda3/envs/dor-ltx/lib/python3.13/site-packages/torch/lib -L/usr/local/cuda-12.8/lib64 -lc10 -ltorch -ltorch_cpu -lcudart -lc10_cuda -ltorch_cuda -o build/lib.linux-x86_64-cpython-313/lite_attention/_C.abi3.so
+running install_lib
+copying build/lib.linux-x86_64-cpython-313/lite_attention/_internal/cpp/softmax.h -> /home/ingonyama/miniconda3/envs/dor-ltx/lib/python3.13/site-packages/lite_attention/_internal/cpp
+copying build/lib.linux-x86_64-cpython-313/lite_attention/_C.abi3.so -> /home/ingonyama/miniconda3/envs/dor-ltx/lib/python3.13/site-packages/lite_attention
+running install_egg_info
+removing '/home/ingonyama/miniconda3/envs/dor-ltx/lib/python3.13/site-packages/lite_attention-0.4.0-py3.13.egg-info' (and everything under it)
+Copying lite_attention.egg-info to /home/ingonyama/miniconda3/envs/dor-ltx/lib/python3.13/site-packages/lite_attention-0.4.0-py3.13.egg-info
+running install_scripts
