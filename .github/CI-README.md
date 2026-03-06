@@ -6,8 +6,9 @@ This document describes the requirements for self-hosted runners used by the Git
 
 | Workflow        | Purpose                                      | Runner labels used      |
 |----------------|----------------------------------------------|--------------------------|
-| **Release**    | Tag-based release: videos, draft release, wheels, PyPI | `self-hosted`, `Linux`, `gpu` |
+| **Release**    | Tag-based release: videos, draft release, wheels, wheel tests, PyPI | `self-hosted`, `Linux`, `gpu` |
 | **_build**     | Build CUDA wheels in Docker (called by Release / Manual Build) | `self-hosted`            |
+| **_test_wheel** | Test built CUDA wheels in Docker (called by Release) | `self-hosted`, `Linux` |
 | **Manual Build** | Manually trigger a single wheel build       | Uses _build              |
 
 ## Runner requirements
@@ -23,7 +24,8 @@ This document describes the requirements for self-hosted runners used by the Git
 
 - **Docker** must be installed and the runner user must be able to run `docker` (e.g. in the `docker` group).
 - Required for:
-  - **Wheel builds** (`_build.yml`): jobs run inside `nvidia/cuda:*` containers.
+- **Wheel builds** (`_build.yml`): jobs run inside `nvidia/cuda:*` containers.
+- **Wheel tests** (`_test_wheel.yml`): jobs run inside `nvidia/cuda:*` containers.
   - **Release**: building and running the video-generation image with `docker build` and `docker run --gpus all`.
 
 ### 3. NVIDIA Container Toolkit (Docker + GPU)

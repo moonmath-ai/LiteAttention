@@ -78,7 +78,25 @@ jobs:
           echo "WHEEL_CUDA_VERSION=$(echo ${{ inputs.cuda-version }} | awk -F \. {'print $1 "." $2'})" >> $GITHUB_ENV
           echo "MATRIX_PYTHON_VERSION=$(echo ${{ inputs.python-version }} | awk -F \. {'print $1 $2'})" >> $GITHUB_ENV
 
+      - name: Check project Python minimum
+        id: py_compat
+        run: |
+          python3 - <<'PY'
+          import os
+
+          py = os.environ["PYTHON_VERSION"]
+          major, minor = (int(x) for x in py.split(".")[:2])
+          if (major, minor) < (3, 9):
+              print(f"Python {py} is below project minimum 3.9")
+              with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+                  fh.write("skip_build=true\n")
+          PY
+        env:
+          PYTHON_VERSION: ${{ inputs.python-version }}
+
       - name: Install PyTorch ${{ inputs.torch-version }}+cu${{ inputs.cuda-version }}
+        id: torch_install
+        if: steps.py_compat.outputs.skip_build != 'true'
         run: |
           python3 -m pip install --upgrade pip
           # With python 3.13 and torch 2.5.1, unless we update typing-extensions, we get error
@@ -104,7 +122,18 @@ jobs:
             python3 -m pip install --no-cache-dir --pre "${TRITON_URL}"
             python3 -m pip install --no-cache-dir --pre "${TORCH_URL}"
           else
-            python3 -m pip install --no-cache-dir torch==${{ inputs.torch-version }} --index-url https://download.pytorch.org/whl/cu${TORCH_CUDA_VERSION}
+            set +e
+            python3 -m pip install --no-cache-dir torch==${{ inputs.torch-version }} --index-url https://download.pytorch.org/whl/cu${TORCH_CUDA_VERSION} 2>&1 | tee /tmp/torch_install.log
+            status=${PIPESTATUS[0]}
+            set -e
+            if [ $status -ne 0 ]; then
+              if grep -E "No matching distribution found|Could not find a version that satisfies the requirement" /tmp/torch_install.log >/dev/null; then
+                echo "Skipping build: torch wheel not available for this Python/CUDA combo."
+                echo "skip_build=true" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              exit $status
+            fi
           fi
           nvcc --version
           python3 --version
@@ -114,6 +143,7 @@ jobs:
 
       - name: Build wheel
         id: build_wheel
+        if: steps.py_compat.outputs.skip_build != 'true' && steps.torch_install.outputs.skip_build != 'true'
         working-directory: build-wheel
         run: |
           # We want setuptools >= 49.6.0 otherwise we can't compile the extension if system CUDA version is 11.7 and pytorch cuda version is 11.6
@@ -156,6 +186,7 @@ jobs:
           tar -cvf build.tar . --atime-preserve=replace
 
       - name: Log Built Wheels
+        if: steps.py_compat.outputs.skip_build != 'true' && steps.torch_install.outputs.skip_build != 'true'
         working-directory: build-wheel
         run: |
           ls dist
@@ -176,3 +207,8 @@ jobs:
           RELEASE_TAG: ${{ inputs.release-version }}
         run: |
           gh release upload ${{ env.RELEASE_TAG }} dist/${{env.wheel_name}} --clobber
+
+      - name: Skip note (incompatible combo)
+        if: steps.py_compat.outputs.skip_build == 'true' || steps.torch_install.outputs.skip_build == 'true'
+        run: |
+          echo "Skipping build because Python/CUDA/PyTorch combination is incompatible."
