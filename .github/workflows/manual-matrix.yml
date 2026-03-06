@@ -4,6 +4,15 @@ name: Manual Matrix Build
 on:
   workflow_dispatch:
     inputs:
+      preset:
+        description: "Matrix preset"
+        required: true
+        default: "custom"
+        type: choice
+        options:
+          - custom
+          - full
+          - bleeding-edge
       python-versions:
         description: "Comma-separated Python versions (e.g. 3.9,3.10,3.11)"
         required: false
@@ -71,13 +80,35 @@ jobs:
             def parse_csv(value: str) -> list[str]:
                 return [part.strip() for part in value.split(",") if part.strip()]
 
-            matrix = {
-                "os-version": parse_csv(os.environ["OS_VERSION"]),
-                "python-version": parse_csv(os.environ["PYTHON_VERSIONS"]),
-                "cuda-version": parse_csv(os.environ["CUDA_VERSIONS"]),
-                "torch-version": parse_csv(os.environ["TORCH_VERSIONS"]),
-                "cxx11_abi": parse_csv(os.environ["CXX11_ABI"]),
-            }
+            preset = os.environ["PRESET"]
+            if preset == "bleeding-edge":
+                matrix = {
+                    "include": [
+                        {
+                            "os-version": "devel-ubuntu22.04",
+                            "python-version": "3.12",
+                            "cuda-version": "12.9.1",
+                            "torch-version": "2.10.0",
+                            "cxx11_abi": "FALSE",
+                        }
+                    ]
+                }
+            elif preset == "full":
+                matrix = {
+                    "os-version": ["devel-ubuntu22.04"],
+                    "python-version": ["3.9", "3.10", "3.11", "3.12"],
+                    "cuda-version": ["12.4.1", "12.8.1", "12.9.1"],
+                    "torch-version": ["2.4.0", "2.7.1", "2.8.0", "2.9.1", "2.10.0"],
+                    "cxx11_abi": ["FALSE", "TRUE"],
+                }
+            else:
+                matrix = {
+                    "os-version": parse_csv(os.environ["OS_VERSION"]),
+                    "python-version": parse_csv(os.environ["PYTHON_VERSIONS"]),
+                    "cuda-version": parse_csv(os.environ["CUDA_VERSIONS"]),
+                    "torch-version": parse_csv(os.environ["TORCH_VERSIONS"]),
+                    "cxx11_abi": parse_csv(os.environ["CXX11_ABI"]),
+                }
             matrix_json = json.dumps(matrix)
             print(matrix_json)
             with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
@@ -95,6 +126,7 @@ jobs:
           TORCH_VERSIONS: ${{ inputs.torch-versions }}
           CXX11_ABI: ${{ inputs.cxx11-abi }}
           OS_VERSION: ${{ inputs.os-version }}
+          PRESET: ${{ inputs.preset }}
 
   build-wheel:
     name: Build wheel (manual matrix)
