@@ -10,6 +10,7 @@ This document describes the requirements for self-hosted runners used by the Git
 | **_build**     | Build CUDA wheels in Docker (called by Release / Manual Build) | `self-hosted`            |
 | **_test_wheel** | Test built CUDA wheels in Docker (called by Release) | `self-hosted`, `Linux` |
 | **Manual Build** | Manually trigger a single wheel build       | Uses _build              |
+| **Manual Matrix Build** | Manually trigger a matrix of wheel builds with customizable axes | Uses _build |
 
 ## Runner requirements
 

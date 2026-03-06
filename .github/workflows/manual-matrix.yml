@@ -1,0 +1,115 @@
+# Manually trigger a matrix of wheel builds with customizable axes.
+name: Manual Matrix Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      python-versions:
+        description: "Comma-separated Python versions (e.g. 3.9,3.10,3.11)"
+        required: false
+        default: "3.9,3.10,3.11,3.12"
+        type: string
+      cuda-versions:
+        description: "Comma-separated CUDA versions (e.g. 12.4.1,12.8.1)"
+        required: false
+        default: "12.4.1,12.8.1,12.9.1"
+        type: string
+      torch-versions:
+        description: "Comma-separated PyTorch versions (e.g. 2.4.0,2.7.1)"
+        required: false
+        default: "2.4.0,2.7.1,2.8.0,2.9.1,2.10.0"
+        type: string
+      cxx11-abi:
+        description: "Comma-separated C++11 ABI flags (TRUE,FALSE)"
+        required: false
+        default: "FALSE,TRUE"
+        type: string
+      os-version:
+        description: "Comma-separated CUDA image OS suffixes (e.g. devel-ubuntu22.04)"
+        required: false
+        default: "devel-ubuntu22.04"
+        type: string
+      matrix-json:
+        description: "Optional JSON matrix object (overrides axis inputs)"
+        required: false
+        default: ""
+        type: string
+        # Example (single bleeding-edge wheel):
+        # {"include":[{"os-version":"devel-ubuntu22.04","python-version":"3.12","cuda-version":"12.9.1","torch-version":"2.10.0","cxx11_abi":"FALSE"}]}
+      upload-to-release:
+        description: "Upload wheels to a release"
+        required: false
+        default: false
+        type: boolean
+      release-tag:
+        description: "Release tag to upload to (required if upload-to-release is true)"
+        required: false
+        type: string
+
+jobs:
+  prepare:
+    name: Prepare matrix
+    runs-on: [self-hosted, Linux]
+    outputs:
+      matrix: ${{ steps.set.outputs.matrix }}
+      release_version: ${{ steps.set.outputs.release_version }}
+    steps:
+      - name: Set matrix and release version
+        id: set
+        run: |
+          if [[ "${{ inputs.upload-to-release }}" == "true" && -z "${{ inputs.release-tag }}" ]]; then
+            echo "::error::release-tag is required when upload-to-release is true"
+            exit 1
+          fi
+          if [[ -n "${{ inputs.matrix-json }}" ]]; then
+            echo "matrix=${{ inputs.matrix-json }}" >> $GITHUB_OUTPUT
+          else
+            python3 - <<'PY'
+            import json
+            import os
+
+            def parse_csv(value: str) -> list[str]:
+                return [part.strip() for part in value.split(",") if part.strip()]
+
+            matrix = {
+                "os-version": parse_csv(os.environ["OS_VERSION"]),
+                "python-version": parse_csv(os.environ["PYTHON_VERSIONS"]),
+                "cuda-version": parse_csv(os.environ["CUDA_VERSIONS"]),
+                "torch-version": parse_csv(os.environ["TORCH_VERSIONS"]),
+                "cxx11_abi": parse_csv(os.environ["CXX11_ABI"]),
+            }
+            matrix_json = json.dumps(matrix)
+            print(matrix_json)
+            with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+                fh.write(f"matrix={matrix_json}\n")
+            PY
+          fi
+          if [[ "${{ inputs.upload-to-release }}" == "true" ]]; then
+            echo "release_version=${{ inputs.release-tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "release_version=${{ github.ref }}" >> $GITHUB_OUTPUT
+          fi
+        env:
+          PYTHON_VERSIONS: ${{ inputs.python-versions }}
+          CUDA_VERSIONS: ${{ inputs.cuda-versions }}
+          TORCH_VERSIONS: ${{ inputs.torch-versions }}
+          CXX11_ABI: ${{ inputs.cxx11-abi }}
+          OS_VERSION: ${{ inputs.os-version }}
+
+  build-wheel:
+    name: Build wheel (manual matrix)
+    needs: prepare
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+    uses: ./.github/workflows/_build.yml
+    with:
+      docker-image: nvidia/cuda:${{ matrix.cuda-version }}-${{ matrix.os-version }}
+      python-version: ${{ matrix.python-version }}
+      cuda-version: ${{ matrix.cuda-version }}
+      torch-version: ${{ matrix.torch-version }}
+      cxx11_abi: ${{ matrix.cxx11_abi }}
+      release-version: ${{ needs.prepare.outputs.release_version }}
+      upload-to-release: ${{ inputs.upload-to-release }}
