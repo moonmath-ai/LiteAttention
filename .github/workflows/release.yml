@@ -18,11 +18,46 @@ on:
         required: true
         default: true
         type: boolean
+      build_runner_labels_json:
+        description: "Runner labels JSON for wheel builds"
+        required: false
+        default: "[\"self-hosted\",\"Linux\"]"
+        type: string
+      gpu_runner_labels_json:
+        description: "Runner labels JSON for video generation"
+        required: false
+        default: "[\"self-hosted\",\"gpu\"]"
+        type: string
+      release_runner_labels_json:
+        description: "Runner labels JSON for release orchestration jobs"
+        required: false
+        default: "[\"self-hosted\",\"Linux\"]"
+        type: string
+      enable_ccache:
+        description: "Enable ccache restore/save and bundling in wheel builds"
+        required: false
+        default: true
+        type: boolean
+      ccache_namespace:
+        description: "Namespace segment for ccache keys"
+        required: false
+        default: "release"
+        type: string
+      run_wheel_tests:
+        description: "Install built wheels and run lite_attention tests in build jobs"
+        required: false
+        default: true
+        type: boolean
+      wheel_test_target:
+        description: "Pytest target for wheel validation"
+        required: false
+        default: "hopper/tests/test_lite_attention.py"
+        type: string
 
 jobs:
   get_release_tag:
     name: Get Release Tag
-    runs-on: [self-hosted, Linux]
+    runs-on: ${{ fromJSON(inputs.release_runner_labels_json) }}
     outputs:
       release_tag: ${{ steps.get_tag.outputs.tag }}
     steps:
@@ -41,7 +76,7 @@ jobs:
     name: Generate videos for ${{ matrix.target }}
     needs: [get_release_tag]
     if: ${{ inputs.generate_videos }}
-    runs-on: [self-hosted, gpu]
+    runs-on: ${{ fromJSON(inputs.gpu_runner_labels_json) }}
     strategy:
       matrix:
         target: [ltx]
@@ -139,7 +174,7 @@ jobs:
     name: Create Draft Release
     needs: [get_release_tag]
     if: ${{ inputs.build_wheel || inputs.generate_videos }}
-    runs-on: self-hosted
+    runs-on: ${{ fromJSON(inputs.release_runner_labels_json) }}
     permissions:
       contents: write
     steps:
@@ -161,7 +196,7 @@ jobs:
     name: Upload videos to Release
     needs: [get_release_tag, create_draft_release, generate_videos]
     if: ${{ inputs.generate_videos }}
-    runs-on: self-hosted
+    runs-on: ${{ fromJSON(inputs.release_runner_labels_json) }}
     permissions:
       contents: write
     steps:
@@ -198,17 +233,16 @@ jobs:
 
   build_wheels:
     name: Build Wheel
-    needs: [get_release_tag, create_draft_release]
+    needs: [get_release_tag]
     if: ${{ inputs.build_wheel }}
-    permissions:
-      contents: write
     strategy:
       fail-fast: false
+      max-parallel: 256
       matrix:
         # Using ubuntu-22.04 instead of 24.04 for more compatibility (glibc). Ideally we'd use the
         # manylinux docker image, but I haven't figured out how to install CUDA on manylinux.
         os-version: [devel-ubuntu22.04]
-        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"]
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
         # Include the oldest supported torch for legacy python + CUDA combos
         torch-version: ["2.4.0", "2.7.1", "2.8.0", "2.9.1", "2.10.0"]
         # Oldest supported CUDA (>=12.3) and current CUDA targets
@@ -244,32 +278,47 @@ jobs:
       cuda-version: ${{ matrix.cuda-version }}
       torch-version: ${{ matrix.torch-version }}
       cxx11_abi: ${{ matrix.cxx11_abi }}
+      runner-labels-json: ${{ inputs.build_runner_labels_json }}
+      run-wheel-tests: ${{ inputs.run_wheel_tests }}
+      wheel-test-target: ${{ inputs.wheel_test_target }}
+      enable-ccache: ${{ inputs.enable_ccache }}
+      ccache-namespace: ${{ inputs.ccache_namespace }}
       release-version: ${{ needs.get_release_tag.outputs.release_tag }}
-      upload-to-release: true
+      upload-to-release: false
 
-  test_wheels:
-    name: Test Wheels
-    needs: [build_wheels]
+  upload_wheels_to_release:
+    name: Upload wheels to Release
+    needs: [get_release_tag, create_draft_release, build_wheels]
     if: ${{ inputs.build_wheel }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os-version: [devel-ubuntu22.04]
-        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"]
-        torch-version: ["2.4.0", "2.7.1", "2.8.0", "2.9.1", "2.10.0"]
-        cuda-version: ["12.4.1", "12.8.1", "12.9.1"]
-        cxx11_abi: ["FALSE", "TRUE"]
-    uses: ./.github/workflows/_test_wheel.yml
-    with:
-      docker-image: nvidia/cuda:${{ matrix.cuda-version }}-${{ matrix.os-version }}
-      python-version: ${{ matrix.python-version }}
-      cuda-version: ${{ matrix.cuda-version }}
-      torch-version: ${{ matrix.torch-version }}
-      cxx11_abi: ${{ matrix.cxx11_abi }}
+    runs-on: ${{ fromJSON(inputs.release_runner_labels_json) }}
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+          path: LiteAttention
+
+      - name: Download wheel artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          path: LiteAttention/release-wheels
+          pattern: "wheel-py*"
+          merge-multiple: true
+
+      - name: Upload wheel artifacts to Release
+        working-directory: LiteAttention
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.get_release_tag.outputs.release_tag }}
+        run: |
+          ls -1 release-wheels/*.whl
+          gh release upload "${RELEASE_TAG}" release-wheels/*.whl --clobber
 
   publish_package:
     name: Publish package
-    needs: [build_wheels, test_wheels]
+    needs: [build_wheels, upload_wheels_to_release]
     if: ${{ inputs.publish_package }}
     runs-on: ubuntu-latest
     steps:

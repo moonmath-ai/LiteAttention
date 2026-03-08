@@ -33,6 +33,31 @@ on:
         options:
           - "TRUE"
           - "FALSE"
+      runner-labels-json:
+        description: "Runner labels JSON (e.g. [\"self-hosted\",\"Linux\"])"
+        required: false
+        default: "[\"self-hosted\",\"Linux\"]"
+        type: string
+      run-wheel-tests:
+        description: "Install built wheel and run lite_attention tests"
+        required: false
+        default: true
+        type: boolean
+      wheel-test-target:
+        description: "Pytest target for wheel validation"
+        required: false
+        default: "hopper/tests/test_lite_attention.py"
+        type: string
+      enable-ccache:
+        description: "Enable ccache restore/save and bundle artifact"
+        required: false
+        default: true
+        type: boolean
+      ccache-namespace:
+        description: "Namespace segment for ccache keys"
+        required: false
+        default: "manual-build"
+        type: string
       upload-to-release:
         description: "Upload wheel to a release"
         required: false
@@ -46,7 +71,7 @@ on:
 jobs:
   prepare:
     name: Prepare build args
-    runs-on: [self-hosted, Linux]
+    runs-on: ${{ fromJSON(inputs.runner-labels-json) }}
     outputs:
       release_version: ${{ steps.set.outputs.release_version }}
     steps:
@@ -76,5 +101,10 @@ jobs:
       cuda-version: ${{ inputs.cuda-version }}
       torch-version: ${{ inputs.torch-version }}
       cxx11_abi: ${{ inputs.cxx11_abi }}
+      runner-labels-json: ${{ inputs.runner-labels-json }}
+      run-wheel-tests: ${{ inputs.run-wheel-tests }}
+      wheel-test-target: ${{ inputs.wheel-test-target }}
+      enable-ccache: ${{ inputs.enable-ccache }}
+      ccache-namespace: ${{ inputs.ccache-namespace }}
       release-version: ${{ needs.prepare.outputs.release_version }}
       upload-to-release: ${{ inputs.upload-to-release }}

@@ -23,6 +23,31 @@ on:
         description: "The C++11 ABI to use for the build"
         required: true
         type: string
+      runner-labels-json:
+        description: "JSON array of runner labels (e.g. [\"self-hosted\",\"Linux\"])"
+        required: false
+        type: string
+        default: "[\"self-hosted\",\"Linux\"]"
+      enable-ccache:
+        description: "Enable ccache restore/save and artifact bundling"
+        required: false
+        type: boolean
+        default: true
+      ccache-namespace:
+        description: "Namespace segment for ccache keying"
+        required: false
+        type: string
+        default: "default"
+      run-wheel-tests:
+        description: "Install built wheel and run lite_attention tests"
+        required: false
+        type: boolean
+        default: true
+      wheel-test-target:
+        description: "Pytest target to run against installed wheel"
+        required: false
+        type: string
+        default: "hopper/tests/test_lite_attention.py"
       upload-to-release:
         description: "Upload wheel to this release"
         required: false
@@ -39,17 +64,30 @@ defaults:
 
 jobs:
   build-wheel:
-    runs-on: [self-hosted, Linux]
+    runs-on: ${{ fromJSON(inputs.runner-labels-json) }}
     container:
       image: ${{ inputs.docker-image }}
       options: --gpus all
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      TZ: Etc/UTC
+      CCACHE_DIR: /tmp/liteattention-ccache
+      CCACHE_BASEDIR: /__w
+      CCACHE_MAXSIZE: 8G
+      CCACHE_COMPILERCHECK: content
+      CCACHE_HASHDIR: "false"
     name: Build wheel (${{ inputs.release-version }}-${{ inputs.python-version }}-${{ inputs.cuda-version }}-${{ inputs.torch-version }}-${{ inputs.cxx11_abi }})
     steps:
       - name: Set up environment
         run: |
+          ln -snf "/usr/share/zoneinfo/${TZ}" /etc/localtime
+          echo "${TZ}" > /etc/timezone
           apt-get update && apt-get install -y \
             git \
-            python3-pip
+            python3-pip \
+            rsync \
+            ccache \
+            zstd
           (type -p wget >/dev/null || (apt update && apt install wget -y)) \
           && mkdir -p -m 755 /etc/apt/keyrings \
           && out=$(mktemp) && wget -nv -O$out https://cli.github.com/packages/githubcli-archive-keyring.gpg \
@@ -59,17 +97,42 @@ jobs:
           && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
           && apt update \
           && apt install gh -y
-      - name: Checkout
+      - name: Checkout (GitHub)
+        if: ${{ !env.ACT }}
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
           ref: ${{ inputs.release-version }}
           submodules: recursive
           path: build-wheel
 
-      - name: Set up Python ${{ inputs.python-version }}
+      - name: Checkout (act)
+        if: ${{ env.ACT }}
+        run: |
+          mkdir -p build-wheel
+          rsync -a --delete --exclude build-wheel ./ build-wheel/
+
+      - name: Set up Python ${{ inputs.python-version }} (GitHub)
+        if: ${{ !env.ACT }}
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
         with:
           python-version: ${{ inputs.python-version }}
+
+      - name: Set up Python ${{ inputs.python-version }} (act)
+        if: ${{ env.ACT }}
+        run: |
+          py_ver="${{ inputs.python-version }}"
+          if [[ "$py_ver" == "3.10" ]]; then
+            python3 --version
+            exit 0
+          fi
+          apt-get update
+          apt-get install -y software-properties-common
+          add-apt-repository ppa:deadsnakes/ppa -y
+          apt-get update
+          apt-get install -y "python${py_ver}" "python${py_ver}-dev" "python${py_ver}-venv"
+          update-alternatives --install /usr/bin/python3 python3 "/usr/bin/python${py_ver}" 2
+          python3 -m ensurepip --upgrade || true
+          python3 --version
 
       - name: Set CUDA and PyTorch versions
         run: |
@@ -77,6 +140,38 @@ jobs:
           echo "MATRIX_TORCH_VERSION=$(echo ${{ inputs.torch-version }} | awk -F \. {'print $1 "." $2'})" >> $GITHUB_ENV
           echo "WHEEL_CUDA_VERSION=$(echo ${{ inputs.cuda-version }} | awk -F \. {'print $1 "." $2'})" >> $GITHUB_ENV
           echo "MATRIX_PYTHON_VERSION=$(echo ${{ inputs.python-version }} | awk -F \. {'print $1 $2'})" >> $GITHUB_ENV
+
+      - name: Compute ccache key
+        id: ccache_key
+        if: ${{ inputs.enable-ccache }}
+        run: |
+          image_id=$(echo "${{ inputs.docker-image }}" | tr '/:.' '-' | tr -cd 'A-Za-z0-9_-')
+          prefix="ccache-${{ inputs.ccache-namespace }}-${{ runner.os }}-${{ runner.arch }}-${image_id}-py${{ inputs.python-version }}-cu${{ inputs.cuda-version }}-torch${{ inputs.torch-version }}-abi${{ inputs.cxx11_abi }}"
+          echo "prefix=${prefix}-" >> "$GITHUB_OUTPUT"
+          echo "key=${prefix}-${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore compatible ccache
+        id: restore_ccache
+        if: ${{ !env.ACT && inputs.enable-ccache }}
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ steps.ccache_key.outputs.key }}
+          restore-keys: |
+            ${{ steps.ccache_key.outputs.prefix }}
+
+      - name: Initialize ccache
+        if: ${{ inputs.enable-ccache }}
+        run: |
+          mkdir -p "${CCACHE_DIR}"
+          ccache -o max_size="${CCACHE_MAXSIZE}"
+          ccache -o compression=true
+          ccache -o compression_level=5
+          ccache -o base_dir="${CCACHE_BASEDIR}"
+          ccache -o compiler_check="${CCACHE_COMPILERCHECK}"
+          ccache -o hash_dir="${CCACHE_HASHDIR}"
+          ccache -s || true
+          ccache -z || true
 
       - name: Check project Python minimum
         id: py_compat
@@ -135,6 +230,7 @@ jobs:
               exit $status
             fi
           fi
+          python3 -m pip install setuptools==75.8.0
           nvcc --version
           python3 --version
           python3 -c "import torch; print('PyTorch:', torch.__version__)"
@@ -153,6 +249,17 @@ jobs:
           python3 -m pip install ninja packaging wheel
           export PATH=/usr/local/nvidia/bin:/usr/local/nvidia/lib64:$PATH
           export LD_LIBRARY_PATH=/usr/local/nvidia/lib64:/usr/local/cuda/lib64:$LD_LIBRARY_PATH
+
+          if [[ "${{ inputs.enable-ccache }}" == "true" ]]; then
+            REAL_NVCC=$(command -v nvcc)
+            mkdir -p .ci-bin
+            printf '%s\n' '#!/usr/bin/env bash' "exec ccache \"${REAL_NVCC}\" \"\$@\"" > .ci-bin/nvcc
+            chmod +x .ci-bin/nvcc
+            export PATH="/usr/lib/ccache:$(pwd)/.ci-bin:$PATH"
+            export CUDA_NVCC_EXECUTABLE="$(pwd)/.ci-bin/nvcc"
+            export CC="ccache gcc"
+            export CXX="ccache g++"
+          fi
           # Limit MAX_JOBS otherwise the github runner goes OOM
           # nvcc 11.8 can compile with 2 jobs, but nvcc 12.3 goes OOM
 
@@ -175,8 +282,35 @@ jobs:
           # Store exit code in GitHub env for later steps
           echo "build_exit_code=$EXIT_CODE" | tee -a "$GITHUB_OUTPUT"
 
+          if [[ "${{ inputs.enable-ccache }}" == "true" ]]; then
+            ccache -s || true
+          fi
+
           # Do not fail the job if timeout killed the build
           exit $EXIT_CODE
+
+      - name: Bundle ccache
+        if: ${{ always() && !env.ACT && inputs.enable-ccache && steps.py_compat.outputs.skip_build != 'true' && steps.torch_install.outputs.skip_build != 'true' }}
+        run: |
+          if [ -d "${CCACHE_DIR}" ]; then
+            tar --use-compress-program="zstd -T0 -6" -cf /tmp/ccache-bundle.tar.zst -C "${CCACHE_DIR}" .
+          fi
+
+      - name: Upload ccache bundle artifact
+        if: ${{ always() && !env.ACT && inputs.enable-ccache && steps.py_compat.outputs.skip_build != 'true' && steps.torch_install.outputs.skip_build != 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ccache-${{ inputs.python-version }}-cu${{ inputs.cuda-version }}-torch${{ inputs.torch-version }}-cxx11abi${{ inputs.cxx11_abi }}
+          path: /tmp/ccache-bundle.tar.zst
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Save compatible ccache
+        if: ${{ !env.ACT && inputs.enable-ccache && steps.build_wheel.outputs.build_exit_code == '0' && steps.restore_ccache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ steps.ccache_key.outputs.key }}
 
       - name: Log build logs after timeout
         if: always() && steps.build_wheel.outputs.build_exit_code == 124
@@ -185,6 +319,15 @@ jobs:
           ls -al ./
           tar -cvf build.tar . --atime-preserve=replace
 
+      - name: Test built wheel
+        if: ${{ steps.py_compat.outputs.skip_build != 'true' && steps.torch_install.outputs.skip_build != 'true' && steps.build_wheel.outputs.build_exit_code == '0' && inputs.run-wheel-tests }}
+        working-directory: build-wheel
+        run: |
+          python3 -m pip uninstall -y lite_attention 2>/dev/null || true
+          python3 -m pip install pytest numpy
+          python3 -m pip install --force-reinstall dist/*.whl
+          pytest ${{ inputs.wheel-test-target }}
+
       - name: Log Built Wheels
         if: steps.py_compat.outputs.skip_build != 'true' && steps.torch_install.outputs.skip_build != 'true'
         working-directory: build-wheel
@@ -192,7 +335,7 @@ jobs:
           ls dist
 
       - name: Upload wheel as artifact
-        if: steps.build_wheel.outputs.build_exit_code == '0'
+        if: ${{ !env.ACT && steps.build_wheel.outputs.build_exit_code == '0' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: wheel-py${{ inputs.python-version }}-cu${{ inputs.cuda-version }}-torch${{ inputs.torch-version }}-cxx11abi${{ inputs.cxx11_abi }}
@@ -200,7 +343,7 @@ jobs:
           retention-days: 30
 
       - name: Upload wheel to Release
-        if: inputs.upload-to-release && steps.build_wheel.outputs.build_exit_code == '0'
+        if: ${{ !env.ACT && inputs.upload-to-release && steps.build_wheel.outputs.build_exit_code == '0' }}
         working-directory: build-wheel
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

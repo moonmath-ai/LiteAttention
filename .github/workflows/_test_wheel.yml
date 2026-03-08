@@ -23,6 +23,16 @@ on:
         description: "The C++11 ABI expected by the wheel"
         required: true
         type: string
+      runner-labels-json:
+        description: "JSON array of runner labels (e.g. [\"self-hosted\",\"Linux\"])"
+        required: false
+        type: string
+        default: "[\"self-hosted\",\"Linux\"]"
+      wheel-test-target:
+        description: "Pytest target to run against installed wheel"
+        required: false
+        type: string
+        default: "hopper/tests/test_lite_attention.py"
 
 defaults:
   run:
@@ -30,7 +40,7 @@ defaults:
 
 jobs:
   test-wheel:
-    runs-on: [self-hosted, Linux]
+    runs-on: ${{ fromJSON(inputs.runner-labels-json) }}
     container:
       image: ${{ inputs.docker-image }}
       options: --gpus all
@@ -146,7 +156,7 @@ jobs:
       - name: Run pytest tests
         if: steps.py_compat.outputs.skip_tests != 'true' && steps.torch_install.outputs.skip_tests != 'true' && steps.abi.outputs.skip_tests != 'true'
         run: |
-          pytest hopper/tests
+          pytest ${{ inputs.wheel-test-target }}
 
       - name: Skip note (ABI mismatch)
         if: steps.py_compat.outputs.skip_tests != 'true' && steps.torch_install.outputs.skip_tests != 'true' && steps.abi.outputs.skip_tests == 'true'

@@ -38,6 +38,31 @@ on:
         required: false
         default: "devel-ubuntu22.04"
         type: string
+      runner-labels-json:
+        description: "Runner labels JSON (e.g. [\"self-hosted\",\"Linux\"])"
+        required: false
+        default: "[\"self-hosted\",\"Linux\"]"
+        type: string
+      run-wheel-tests:
+        description: "Install built wheel and run lite_attention tests"
+        required: false
+        default: true
+        type: boolean
+      wheel-test-target:
+        description: "Pytest target for wheel validation"
+        required: false
+        default: "hopper/tests/test_lite_attention.py"
+        type: string
+      enable-ccache:
+        description: "Enable ccache restore/save and bundle artifact"
+        required: false
+        default: true
+        type: boolean
+      ccache-namespace:
+        description: "Namespace segment for ccache keys"
+        required: false
+        default: "manual-matrix"
+        type: string
       matrix-json:
         description: "Optional JSON matrix object (overrides axis inputs)"
         required: false
@@ -58,7 +83,7 @@ on:
 jobs:
   prepare:
     name: Prepare matrix
-    runs-on: [self-hosted, Linux]
+    runs-on: ${{ fromJSON(inputs.runner-labels-json) }}
     outputs:
       matrix: ${{ steps.set.outputs.matrix }}
       release_version: ${{ steps.set.outputs.release_version }}
@@ -109,6 +134,7 @@ jobs:
                     "torch-version": parse_csv(os.environ["TORCH_VERSIONS"]),
                     "cxx11_abi": parse_csv(os.environ["CXX11_ABI"]),
                 }
+
             matrix_json = json.dumps(matrix)
             print(matrix_json)
             with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
@@ -135,6 +161,7 @@ jobs:
       contents: write
     strategy:
       fail-fast: false
+      max-parallel: 256
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
     uses: ./.github/workflows/_build.yml
     with:
@@ -143,5 +170,10 @@ jobs:
       cuda-version: ${{ matrix.cuda-version }}
       torch-version: ${{ matrix.torch-version }}
       cxx11_abi: ${{ matrix.cxx11_abi }}
+      runner-labels-json: ${{ inputs.runner-labels-json }}
+      run-wheel-tests: ${{ inputs.run-wheel-tests }}
+      wheel-test-target: ${{ inputs.wheel-test-target }}
+      enable-ccache: ${{ inputs.enable-ccache }}
+      ccache-namespace: ${{ inputs.ccache-namespace }}
       release-version: ${{ needs.prepare.outputs.release_version }}
       upload-to-release: ${{ inputs.upload-to-release }}
