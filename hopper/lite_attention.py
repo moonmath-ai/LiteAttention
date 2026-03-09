@@ -276,6 +276,9 @@ class LiteAttention(nn.Module, ConfigurableModule):
         self._capture_map_batches = None  # list[int] | None — None means all
         self._captured_maps = []  # [{timestep, skip_list, attn_map}]
 
+        # Skip list capture (write_list snapshots, no QK recomputation):
+        self._capture_skip_lists = False
+
         # qk max map capture:
         self._capture_qk_block_map = False
 
@@ -1265,6 +1268,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
 
     def _enable_capture(
         self,
+        skip_lists: bool = False,
         qk_block_map: bool = False,
         attn_map: bool = False,
         stats: bool = False,
@@ -1276,6 +1280,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
         """Enable debug capture on this module.
 
         Always: capture pct_per_head for all heads/timesteps/batches.
+        Optional: skip_lists — write_list snapshots (cheap, no QK recomputation).
         Optional: capture detailed attn maps + skip_lists for selected subset.
         Optional: qk_block_map — row-max-normalized pre-softmax QK scores maxpooled to tile granularity (≤ 0, comparable to threshold).
         Optional: running stats (mean/std/max/min) at full resolution across all passes.
@@ -1287,6 +1292,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
         self._capture_map_batches = batches
         self._captured_maps = []
 
+        self._capture_skip_lists = skip_lists
         self._capture_qk_block_map = qk_block_map
 
         self._capture_attn_map = attn_map
@@ -1305,6 +1311,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
         self._capture_enabled = False
         self._captured_pct = []
 
+        self._capture_skip_lists = False
         self._capture_qk_block_map = False
 
         self._capture_attn_map = False
@@ -1391,7 +1398,9 @@ class LiteAttention(nn.Module, ConfigurableModule):
             or current_timestep in self._capture_attn_map_timesteps
         )
 
-        if not (capture_attn_map or capture_stats or capture_qk_block_map):
+        capture_skip_lists = capture_qk_block_map or capture_attn_map or self._capture_skip_lists
+
+        if not (capture_attn_map or capture_stats or capture_qk_block_map or capture_skip_lists):
             return
 
         # --- Block size for qk_block_map ---
@@ -1404,7 +1413,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
         ktiles = self.ceil_div(key.shape[1], kBlockN)
 
         # --- Skip list for detailed capture ---
-        if capture_attn_map or capture_qk_block_map:
+        if capture_skip_lists:
             if lite_attention_disabled:
                 captured_skip = torch.zeros(
                     len(capture_batch_idxs),
@@ -1530,9 +1539,10 @@ class LiteAttention(nn.Module, ConfigurableModule):
             captured_map_entry["attn_map"] = torch.stack(attn_maps)
         if qk_block_maps:
             captured_map_entry["qk_block_map"] = torch.stack(qk_block_maps)
-        if captured_map_entry:
+        if capture_skip_lists:
             captured_map_entry["timestep"] = current_timestep
             captured_map_entry["skip_list"] = captured_skip
+        if captured_map_entry:
             self._captured_maps.append(captured_map_entry)
 
     def visualize_skips(
@@ -2081,7 +2091,7 @@ class LiteAttentionRegistry(ModuleRegistry):
             if "skip_lists" not in mod_data:
                 raise ValueError(
                     f"Module '{name}': capture file has no skip_lists. "
-                    "Re-capture with qk_block_map=True or attn_map=True."
+                    "Re-capture with skip_lists=True, qk_block_map=True, or attn_map=True."
                 )
 
             skip_lists = mod_data["skip_lists"]  # [T, B_sel, H_sel, qtiles, ktiles+1]
@@ -2150,6 +2160,7 @@ class LiteAttentionRegistry(ModuleRegistry):
     def enable_capture(
         self,
         save_path: str | Path,
+        skip_lists: bool = False,
         qk_block_map: bool = False,
         attn_map: bool = False,
         stats: bool = False,
@@ -2162,13 +2173,15 @@ class LiteAttentionRegistry(ModuleRegistry):
         """Enable debug capture on all modules.
 
         All modules always capture pct_per_head for every timestep and head.
-        Attn maps + skip_lists are captured only for the filtered subset.
+        skip_lists captures write_list snapshots cheaply (no QK recomputation).
+        Attn maps + skip_lists are also captured for the filtered subset when attn_map or qk_block_map is enabled.
         qk_block_map captures row-max-normalized pre-softmax QK scores maxpooled to tile granularity (≤ 0, directly comparable to threshold).
         Stats (mean/std/max/min) are accumulated at full resolution on the same
         subset of modules, across ALL forward passes.
 
         Args:
             save_path: Path for the .pt capture file (written by save()).
+            skip_lists: Enable cheap skip list capture (write_list snapshots, no QK recomputation).
             attn_map: Enable detailed attention map capture.
             attn_map_modules: Which modules capture attn maps and/or stats. Can be:
                 - list[str]: exact module names
@@ -2197,6 +2210,7 @@ class LiteAttentionRegistry(ModuleRegistry):
                 selected = name in attn_map_modules
 
             module._enable_capture(
+                skip_lists=skip_lists,
                 qk_block_map=qk_block_map and selected,
                 attn_map=attn_map and selected,
                 stats=stats and selected,
@@ -2281,10 +2295,7 @@ class LiteAttentionRegistry(ModuleRegistry):
                 mod_data["map_heads"] = map_heads
                 mod_data["map_batches"] = map_batches
 
-                if (
-                    "attn_map" in module._captured_maps[0]
-                    or "qk_block_map" in module._captured_maps[0]
-                ):
+                if "skip_list" in module._captured_maps[0]:
                     mod_data["skip_lists"] = torch.stack(
                         [d["skip_list"] for d in module._captured_maps]
                     )
