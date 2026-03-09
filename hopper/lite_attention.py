@@ -1442,12 +1442,12 @@ class LiteAttention(nn.Module, ConfigurableModule):
         qtiles = self.ceil_div(query.shape[1], kBlockM)
         ktiles = self.ceil_div(key.shape[1], kBlockN)
 
-        # --- Skip list for detailed capture ---
+        # --- Skip list capture (always all heads/batches for replay compatibility) ---
         if capture_skip_lists:
             if lite_attention_disabled:
                 captured_skip = torch.zeros(
-                    len(capture_batch_idxs),
-                    len(capture_head_idxs),
+                    batch_size,
+                    num_heads,
                     qtiles,
                     ktiles + 1,
                     dtype=torch.int16,
@@ -1456,11 +1456,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
                 captured_skip[:, :, :, 1] = ktiles - 1
                 captured_skip[:, :, :, 2] = -1
             else:
-                captured_skip = (
-                    write_list[capture_batch_idxs][:, capture_head_idxs]
-                    .clone()
-                    .to(dtype=torch.int16, device="cpu")
-                )
+                captured_skip = write_list.clone().to(dtype=torch.int16, device="cpu")
 
         # --- Compute attention maps per head ---
         attn_maps = []
@@ -2406,20 +2402,23 @@ class LiteAttentionRegistry(ModuleRegistry):
             # --- Detailed attn maps + skip_lists + qk_block_map for filtered subset ---
             if module._captured_maps:
                 map_timesteps = [d["timestep"] for d in module._captured_maps]
-
-                if module._capture_map_heads is not None:
-                    map_heads = module._capture_map_heads
-                else:
-                    map_heads = list(range(pct_per_head.shape[-1]))
-
-                if module._capture_map_batches is not None:
-                    map_batches = module._capture_map_batches
-                else:
-                    map_batches = list(range(pct_per_head.shape[1]))
-
                 mod_data["map_timesteps"] = map_timesteps
-                mod_data["map_heads"] = map_heads
-                mod_data["map_batches"] = map_batches
+
+                has_maps = (
+                    "attn_map" in module._captured_maps[0]
+                    or "qk_block_map" in module._captured_maps[0]
+                )
+                if has_maps:
+                    # map_heads/map_batches only apply to attn_map/qk_block_map (filtered)
+                    if module._capture_map_heads is not None:
+                        mod_data["map_heads"] = module._capture_map_heads
+                    else:
+                        mod_data["map_heads"] = list(range(pct_per_head.shape[-1]))
+
+                    if module._capture_map_batches is not None:
+                        mod_data["map_batches"] = module._capture_map_batches
+                    else:
+                        mod_data["map_batches"] = list(range(pct_per_head.shape[1]))
 
                 if "skip_list" in module._captured_maps[0]:
                     mod_data["skip_lists"] = torch.stack(
