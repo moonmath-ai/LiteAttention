@@ -23,6 +23,11 @@ on:
         required: false
         default: "[\"self-hosted\",\"Linux\"]"
         type: string
+      wheel_max_parallel:
+        description: "Max concurrent wheel jobs (empty = repo/org variable or fallback)"
+        required: false
+        default: ""
+        type: string
       gpu_runner_labels_json:
         description: "Runner labels JSON for video generation"
         required: false
@@ -238,6 +243,7 @@ jobs:
     runs-on: ${{ fromJSON(inputs.release_runner_labels_json) }}
     outputs:
       matrix: ${{ steps.set.outputs.matrix }}
+      max_parallel: ${{ steps.set.outputs.max_parallel }}
     steps:
       - name: Checkout Repository
         if: ${{ !env.ACT }}
@@ -247,6 +253,18 @@ jobs:
         id: set
         run: |
           python3 .github/scripts/generate_wheel_matrix.py
+          max_parallel="${{ inputs.wheel_max_parallel }}"
+          if [[ -z "$max_parallel" ]]; then
+            max_parallel="${{ vars.LITE_ATTENTION_WHEEL_MATRIX_MAX_PARALLEL }}"
+          fi
+          if [[ -z "$max_parallel" ]]; then
+            max_parallel="256"
+          fi
+          if ! [[ "$max_parallel" =~ ^[0-9]+$ ]] || (( max_parallel < 1 )); then
+            echo "::error::wheel_max_parallel must be a positive integer (got '$max_parallel')"
+            exit 1
+          fi
+          echo "max_parallel=$max_parallel" >> "$GITHUB_OUTPUT"
         env:
           PRESET: full
 
@@ -256,7 +274,7 @@ jobs:
     if: ${{ inputs.build_wheel }}
     strategy:
       fail-fast: false
-      max-parallel: 256
+      max-parallel: ${{ fromJson(needs.prepare_wheel_matrix.outputs.max_parallel) }}
       matrix: ${{ fromJson(needs.prepare_wheel_matrix.outputs.matrix) }}
     uses: ./.github/workflows/_build.yml
     with:

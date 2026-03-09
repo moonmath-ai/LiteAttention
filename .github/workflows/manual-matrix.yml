@@ -44,6 +44,11 @@ on:
         required: false
         default: "[\"self-hosted\",\"Linux\"]"
         type: string
+      max-parallel:
+        description: "Max concurrent wheel jobs (empty = repo/org variable or fallback)"
+        required: false
+        default: ""
+        type: string
       run-wheel-tests:
         description: "Install built wheel and run lite_attention tests"
         required: false
@@ -88,6 +93,7 @@ jobs:
     outputs:
       matrix: ${{ steps.set.outputs.matrix }}
       release_version: ${{ steps.set.outputs.release_version }}
+      max_parallel: ${{ steps.set.outputs.max_parallel }}
     steps:
       - name: Checkout Repository
         if: ${{ !env.ACT }}
@@ -110,6 +116,18 @@ jobs:
           else
             echo "release_version=${{ github.ref }}" >> $GITHUB_OUTPUT
           fi
+          max_parallel="${{ inputs.max-parallel }}"
+          if [[ -z "$max_parallel" ]]; then
+            max_parallel="${{ vars.LITE_ATTENTION_WHEEL_MATRIX_MAX_PARALLEL }}"
+          fi
+          if [[ -z "$max_parallel" ]]; then
+            max_parallel="6"
+          fi
+          if ! [[ "$max_parallel" =~ ^[0-9]+$ ]] || (( max_parallel < 1 )); then
+            echo "::error::max-parallel must be a positive integer (got '$max_parallel')"
+            exit 1
+          fi
+          echo "max_parallel=$max_parallel" >> "$GITHUB_OUTPUT"
         env:
           PYTHON_VERSIONS: ${{ inputs.python-versions }}
           CUDA_VERSIONS: ${{ inputs.cuda-versions }}
@@ -162,9 +180,9 @@ jobs:
       contents: write
     strategy:
       fail-fast: false
-      # act on nebius61 does not honor dynamic expressions here, so keep a
-      # conservative static cap that avoids oversaturating the host.
-      max-parallel: 6
+      # GitHub uses the resolved workflow input / repo variable here.
+      # act may still ignore dynamic expressions in this field.
+      max-parallel: ${{ fromJson(needs.prepare.outputs.max_parallel) }}
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
     uses: ./.github/workflows/_build.yml
     with:
