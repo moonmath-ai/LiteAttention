@@ -124,7 +124,7 @@ def unpad_input(hidden_states, attention_mask, unused_mask=None):
         indices,
         cu_seqlens,
         max_seqlen_in_batch,
-        used_seqlens_in_batch, 
+        used_seqlens_in_batch,
     )
 
 
@@ -132,7 +132,7 @@ def unpad_input_for_concatenated_sequences(hidden_states, attention_mask_in_leng
     """
     Supports concatenating short samples in one sequence. The attention_mask_in_length is utilized to mask other short samples. It helps efficient training of variant lengths-based samples (e.g., the supervised fine-tuning task in large language model).
     The motivation for this function is explained [here](https://github.com/Dao-AILab/flash-attention/issues/432#issuecomment-1668822286).
-    
+
     For example, if batch = 3 and seqlen = 6, the attention_mask_in_length is:
         ```
         [
@@ -182,7 +182,9 @@ def unpad_input_for_concatenated_sequences(hidden_states, attention_mask_in_leng
     """
     length = attention_mask_in_length.sum(dim=-1)
     seqlen = attention_mask_in_length.size(-1)
-    attention_mask_2d = torch.arange(seqlen, device=length.device, dtype=length.dtype).expand(len(length), seqlen) < length.unsqueeze(1)
+    attention_mask_2d = torch.arange(seqlen, device=length.device, dtype=length.dtype).expand(
+        len(length), seqlen
+    ) < length.unsqueeze(1)
     real_indices_idx = torch.nonzero(attention_mask_in_length.flatten(), as_tuple=False).flatten()
     seqlens_in_batch = attention_mask_in_length.flatten()[real_indices_idx]
     indices = torch.nonzero(attention_mask_2d.flatten(), as_tuple=False).flatten()

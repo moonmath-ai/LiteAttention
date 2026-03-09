@@ -10,6 +10,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from apex.transformer import parallel_state, tensor_parallel
 from einops import rearrange
+
 from flash_attn.modules.block import Block
 from flash_attn.modules.mha import MHA, ParallelMHA
 from flash_attn.modules.mlp import FusedMLP, ParallelFusedMLP
@@ -18,7 +19,9 @@ from flash_attn.utils.distributed import allreduce_sequence_parallel_grad
 is_sm8x = torch.cuda.get_device_capability("cuda")[0] >= 8
 
 
-@pytest.mark.parametrize("dtype", [torch.float16] + ([torch.bfloat16] if is_sm8x else []))
+@pytest.mark.parametrize(
+    "dtype", [torch.float16] + ([torch.bfloat16] if is_sm8x else [])
+)
 # @pytest.mark.parametrize('dtype', [torch.float16])
 @pytest.mark.parametrize("world_size", [1, 2, 4, 8])
 # @pytest.mark.parametrize('world_size', [2])
@@ -42,8 +45,12 @@ def test_block_parallel(dim, sequence_parallel, world_size, dtype):
     batch_size = 2
     seqlen = 1024
     assert (batch_size * seqlen) % world_size == 0
-    x_pt = torch.randn(batch_size * seqlen, dim, device=device, dtype=dtype, requires_grad=True)
-    residual_pt = torch.randn(batch_size * seqlen, dim, device=device, requires_grad=True)
+    x_pt = torch.randn(
+        batch_size * seqlen, dim, device=device, dtype=dtype, requires_grad=True
+    )
+    residual_pt = torch.randn(
+        batch_size * seqlen, dim, device=device, requires_grad=True
+    )
     # We need to generate g here so that all processes get the same gradient,
     # as rank 0 will have an extra bias that changes the RNG.
     # If we don't divide by batch_size, the gradient gets a bit too large.
@@ -115,9 +122,9 @@ def test_block_parallel(dim, sequence_parallel, world_size, dtype):
     with torch.no_grad():
         model.mixer.Wqkv.weight.copy_(
             rearrange(
-                rearrange(model_pt.mixer.Wqkv.weight, "(three o) i -> three o i", three=3)[
-                    :, rank * partition_dim : (rank + 1) * partition_dim
-                ],
+                rearrange(
+                    model_pt.mixer.Wqkv.weight, "(three o) i -> three o i", three=3
+                )[:, rank * partition_dim : (rank + 1) * partition_dim],
                 "three o i -> (three o) i",
             )
         )
@@ -130,15 +137,21 @@ def test_block_parallel(dim, sequence_parallel, world_size, dtype):
             )
         )
         model.mixer.out_proj.weight.copy_(
-            model_pt.mixer.out_proj.weight[:, rank * partition_dim : (rank + 1) * partition_dim]
+            model_pt.mixer.out_proj.weight[
+                :, rank * partition_dim : (rank + 1) * partition_dim
+            ]
         )
         if rank == 0:
             model.mixer.out_proj.bias.copy_(model_pt.mixer.out_proj.bias)
         model.mlp.fc1.weight.copy_(
-            model_pt.mlp.fc1.weight[rank * partition_hidden_dim : (rank + 1) * partition_hidden_dim]
+            model_pt.mlp.fc1.weight[
+                rank * partition_hidden_dim : (rank + 1) * partition_hidden_dim
+            ]
         )
         model.mlp.fc1.bias.copy_(
-            model_pt.mlp.fc1.bias[rank * partition_hidden_dim : (rank + 1) * partition_hidden_dim]
+            model_pt.mlp.fc1.bias[
+                rank * partition_hidden_dim : (rank + 1) * partition_hidden_dim
+            ]
         )
         model.mlp.fc2.weight.copy_(
             model_pt.mlp.fc2.weight[
@@ -158,7 +171,9 @@ def test_block_parallel(dim, sequence_parallel, world_size, dtype):
         rearrange(x_pt, "(b s) d -> b s d", s=seqlen),
         rearrange(residual_pt, "(b s) d -> b s d", s=seqlen),
     )
-    out_pt, out_residual_pt = [rearrange(x, "b s d -> (b s) d") for x in [out_pt, out_residual_pt]]
+    out_pt, out_residual_pt = [
+        rearrange(x, "b s d -> (b s) d") for x in [out_pt, out_residual_pt]
+    ]
     partition_batch_dim = batch_size * seqlen // world_size
     assert torch.allclose(
         out,
@@ -179,9 +194,13 @@ def test_block_parallel(dim, sequence_parallel, world_size, dtype):
 
     (out_pt + 2 * out_residual_pt).backward(g)
     (out + 2 * out_residual).backward(
-        g[rank * partition_batch_dim : (rank + 1) * partition_batch_dim] if sequence_parallel else g
+        g[rank * partition_batch_dim : (rank + 1) * partition_batch_dim]
+        if sequence_parallel
+        else g
     )
-    allreduce_sequence_parallel_grad(model, parallel_state.get_tensor_model_parallel_group())
+    allreduce_sequence_parallel_grad(
+        model, parallel_state.get_tensor_model_parallel_group()
+    )
     parallel_state.destroy_model_parallel()
 
     assert torch.allclose(
@@ -204,9 +223,9 @@ def test_block_parallel(dim, sequence_parallel, world_size, dtype):
     assert torch.allclose(
         model.mixer.Wqkv.weight.grad,
         rearrange(
-            rearrange(model_pt.mixer.Wqkv.weight.grad, "(three o) i -> three o i", three=3)[
-                :, rank * partition_dim : (rank + 1) * partition_dim
-            ],
+            rearrange(
+                model_pt.mixer.Wqkv.weight.grad, "(three o) i -> three o i", three=3
+            )[:, rank * partition_dim : (rank + 1) * partition_dim],
             "three o i -> (three o) i",
         ),
         rtol=rtol,
@@ -225,7 +244,9 @@ def test_block_parallel(dim, sequence_parallel, world_size, dtype):
     )
     assert torch.allclose(
         model.mixer.out_proj.weight.grad,
-        model_pt.mixer.out_proj.weight.grad[:, rank * partition_dim : (rank + 1) * partition_dim],
+        model_pt.mixer.out_proj.weight.grad[
+            :, rank * partition_dim : (rank + 1) * partition_dim
+        ],
         rtol=rtol,
         atol=atol * 10,
     )
@@ -246,7 +267,9 @@ def test_block_parallel(dim, sequence_parallel, world_size, dtype):
     )
     assert torch.allclose(
         model.mlp.fc1.bias.grad,
-        model_pt.mlp.fc1.bias.grad[rank * partition_hidden_dim : (rank + 1) * partition_hidden_dim],
+        model_pt.mlp.fc1.bias.grad[
+            rank * partition_hidden_dim : (rank + 1) * partition_hidden_dim
+        ],
         rtol=rtol,
         atol=atol * 5,
     )
@@ -260,14 +283,21 @@ def test_block_parallel(dim, sequence_parallel, world_size, dtype):
     )
     if rank == 0:
         assert torch.allclose(
-            model.mlp.fc2.bias.grad, model_pt.mlp.fc2.bias.grad, rtol=rtol, atol=atol * 5
+            model.mlp.fc2.bias.grad,
+            model_pt.mlp.fc2.bias.grad,
+            rtol=rtol,
+            atol=atol * 5,
         )
 
     assert torch.allclose(
         model.norm1.weight.grad, model_pt.norm1.weight.grad, rtol=rtol, atol=atol * 5
     )
-    assert torch.allclose(model.norm1.bias.grad, model_pt.norm1.bias.grad, rtol=rtol, atol=atol * 5)
+    assert torch.allclose(
+        model.norm1.bias.grad, model_pt.norm1.bias.grad, rtol=rtol, atol=atol * 5
+    )
     assert torch.allclose(
         model.norm2.weight.grad, model_pt.norm2.weight.grad, rtol=rtol, atol=atol * 5
     )
-    assert torch.allclose(model.norm2.bias.grad, model_pt.norm2.bias.grad, rtol=rtol, atol=atol * 5)
+    assert torch.allclose(
+        model.norm2.bias.grad, model_pt.norm2.bias.grad, rtol=rtol, atol=atol * 5
+    )

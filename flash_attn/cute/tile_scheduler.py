@@ -1,7 +1,7 @@
 # Copyright (c) 2025, Tri Dao.
 
-from typing import Optional, Tuple
 from dataclasses import dataclass, fields
+from typing import Optional, Tuple
 
 import cutlass
 import cutlass.cute as cute
@@ -192,7 +192,10 @@ class StaticPersistentTileScheduler:
 
     def __new_from_mlir_values__(self, values):
         obj_list = []
-        for obj, n_items in zip([self.params, self._tile_idx], self._values_pos,):
+        for obj, n_items in zip(
+            [self.params, self._tile_idx],
+            self._values_pos,
+        ):
             obj_list.append(cutlass.new_from_mlir_values(obj, values[:n_items]))
             values = values[n_items:]
         return StaticPersistentTileScheduler(*(tuple(obj_list)), loc=self._loc)
@@ -334,7 +337,9 @@ class SingleTileVarlenScheduler:
             args: TileSchedulerArguments, *, loc=None, ip=None
         ) -> "SingleTileVarlenScheduler.Params":
             size_l2 = 50 * 1024 * 1024  # 50 MB for K & V
-            max_kvblock_in_l2 = size_l2 // ((args.headdim + args.headdim_v) * args.element_size * args.tile_shape_mn[1])
+            max_kvblock_in_l2 = size_l2 // (
+                (args.headdim + args.headdim_v) * args.element_size * args.tile_shape_mn[1]
+            )
             assert args.mCuSeqlensQ is not None or args.mSeqUsedQ is not None, (
                 "At least one of mCuSeqlensQ or mSeqUsedQ must be provided"
             )
@@ -453,16 +458,37 @@ class SingleTileVarlenScheduler:
                 # the seqlen can vary per batch.
                 # TODO: is there any case where num_m_blocks is 0?
                 # TODO: by right we should read the seqlen_kv but we're assuming seqlen_q == seqlen_k here
-                num_n_blocks = num_m_blocks * params.tile_shape_mn[0] // params.qhead_per_kvhead_packgqa // params.tile_shape_mn[1]
+                num_n_blocks = (
+                    num_m_blocks
+                    * params.tile_shape_mn[0]
+                    // params.qhead_per_kvhead_packgqa
+                    // params.tile_shape_mn[1]
+                )
                 # nheads_in_l2 = min(max(self.max_kvblock_in_l2 // num_n_blocks, 1), self.num_head)
                 # Seems faster to have this be a power of 2
-                nheads_in_l2 = 16 if num_n_blocks * 16 <= params.max_kvblock_in_l2 else (8 if num_n_blocks * 8 <= params.max_kvblock_in_l2 else (4 if num_n_blocks * 4 <= params.max_kvblock_in_l2 else (2 if num_n_blocks * 2 <= params.max_kvblock_in_l2 else 1)))
+                nheads_in_l2 = (
+                    16
+                    if num_n_blocks * 16 <= params.max_kvblock_in_l2
+                    else (
+                        8
+                        if num_n_blocks * 8 <= params.max_kvblock_in_l2
+                        else (
+                            4
+                            if num_n_blocks * 4 <= params.max_kvblock_in_l2
+                            else (2 if num_n_blocks * 2 <= params.max_kvblock_in_l2 else 1)
+                        )
+                    )
+                )
                 nheads_in_l2 = min(nheads_in_l2, params.num_head)
                 mh_in_l2 = nheads_in_l2 * num_m_blocks
                 section_idx = mh_block // mh_in_l2
                 l2_mod = mh_block - section_idx * mh_in_l2
                 # Deal with tail section
-                nheads_in_this_section = nheads_in_l2 if nheads_in_l2 * (section_idx + 1) <= params.num_head else params.num_head - section_idx * nheads_in_l2
+                nheads_in_this_section = (
+                    nheads_in_l2
+                    if nheads_in_l2 * (section_idx + 1) <= params.num_head
+                    else params.num_head - section_idx * nheads_in_l2
+                )
                 block = l2_mod // nheads_in_this_section
                 head_idx_residual = l2_mod - block * nheads_in_this_section
                 head_idx = section_idx * nheads_in_l2 + head_idx_residual
@@ -496,7 +522,9 @@ class SingleTileVarlenScheduler:
 
     def __new_from_mlir_values__(self, values):
         obj_list = []
-        for obj, n_items in zip([self.params, self._tile_idx], self._values_pos,
+        for obj, n_items in zip(
+            [self.params, self._tile_idx],
+            self._values_pos,
         ):
             obj_list.append(cutlass.new_from_mlir_values(obj, values[:n_items]))
             values = values[n_items:]

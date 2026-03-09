@@ -1,10 +1,9 @@
 # Copyright (c) 2023, Tri Dao.
 
-from typing import Tuple, Optional, Union
+from typing import Optional, Tuple, Union
 
 import torch
 import torch.nn.functional as F
-
 import triton
 import triton.language as tl
 
@@ -51,9 +50,10 @@ def cross_entropy_fwd_kernel(
         l_i = 0.0
         for col_offset in range(0, n_cols, BLOCK_SIZE):
             cols = col_offset + tl.arange(0, BLOCK_SIZE)
-            logits = tl.load(logits_ptr + cols, mask=cols < n_cols, other=-float("inf")).to(
-                tl.float32
-            ) * logit_scale
+            logits = (
+                tl.load(logits_ptr + cols, mask=cols < n_cols, other=-float("inf")).to(tl.float32)
+                * logit_scale
+            )
             if HAS_SMOOTHING:
                 sum_logits += tl.sum(tl.where(cols < n_cols, logits, 0.0))
             m_i_new = tl.maximum(m_i, tl.max(logits))
@@ -130,9 +130,12 @@ def cross_entropy_bwd_kernel(
         dloss = tl.load(dloss_ptr + row_idx * dloss_row_stride)
     else:
         dloss = 0.0
-    logits = tl.load(logits_ptr + col_offsets, mask=col_offsets < n_cols, other=-float("inf")).to(
-        tl.float32
-    ) * logit_scale
+    logits = (
+        tl.load(logits_ptr + col_offsets, mask=col_offsets < n_cols, other=-float("inf")).to(
+            tl.float32
+        )
+        * logit_scale
+    )
     lse = tl.load(lse_ptr + row_idx)
     probs = tl.exp(logits - lse)
     probs += 2.0 * lse_square_scale * lse * probs
@@ -147,7 +150,6 @@ def cross_entropy_bwd_kernel(
 
 
 class CrossEntropyLoss(torch.autograd.Function):
-
     @staticmethod
     def forward(
         ctx,
@@ -173,7 +175,9 @@ class CrossEntropyLoss(torch.autograd.Function):
         total_classes = world_size * n_cols
         rank = 0 if process_group is None else torch.distributed.get_rank(process_group)
         class_start_idx = rank * n_cols
-        use_precomputed_lse = precomputed_lse is not None and logit_scale == 1.0 and smoothing == 0.0
+        use_precomputed_lse = (
+            precomputed_lse is not None and logit_scale == 1.0 and smoothing == 0.0
+        )
 
         if logits.stride(-1) != 1:
             logits = logits.contiguous()

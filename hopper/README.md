@@ -123,7 +123,7 @@ pip install torch ninja packaging
 pip install einops structlog tomli-w
 
 git clone https://github.com/moonmath-ai/LiteAttention.git
-cd LiteAttention/hopper
+cd LiteAttention
 pip install --no-build-isolation .
 ```
 

@@ -6,12 +6,15 @@ import torch
 import torch.nn.functional as F
 from apex.transformer import parallel_state, tensor_parallel
 from einops import rearrange
+
 from flash_attn.modules.mlp import GatedMlp, ParallelGatedMlp
 
 is_sm8x = torch.cuda.get_device_capability("cuda")[0] >= 8
 
 
-@pytest.mark.parametrize("dtype", [torch.float16] + ([torch.bfloat16] if is_sm8x else []))
+@pytest.mark.parametrize(
+    "dtype", [torch.float16] + ([torch.bfloat16] if is_sm8x else [])
+)
 # @pytest.mark.parametrize('dtype', [torch.float16])
 @pytest.mark.parametrize("world_size", [1, 2, 4, 8])
 # @pytest.mark.parametrize('world_size', [2])
@@ -35,7 +38,9 @@ def test_mlp_parallel(dim, activation, sequence_parallel, world_size, dtype):
     batch_size = 2
     seqlen = 1024
     assert (batch_size * seqlen) % world_size == 0
-    x_pt = torch.randn(batch_size * seqlen, dim, device=device, dtype=dtype, requires_grad=True)
+    x_pt = torch.randn(
+        batch_size * seqlen, dim, device=device, dtype=dtype, requires_grad=True
+    )
     # We need to generate g here so that all processes get the same gradient,
     # as rank 0 will have an extra bias that changes the RNG.
     # If we don't divide by batch_size, the gradient gets a bit too large.
@@ -98,7 +103,9 @@ def test_mlp_parallel(dim, activation, sequence_parallel, world_size, dtype):
 
     out_pt.backward(g)
     out.backward(
-        g[rank * partition_batch_dim : (rank + 1) * partition_batch_dim] if sequence_parallel else g
+        g[rank * partition_batch_dim : (rank + 1) * partition_batch_dim]
+        if sequence_parallel
+        else g
     )
     parallel_state.destroy_model_parallel()
 
@@ -140,4 +147,6 @@ def test_mlp_parallel(dim, activation, sequence_parallel, world_size, dtype):
         atol=atol,
     )
     if rank == 0:
-        assert torch.allclose(model.fc2.bias.grad, model_pt.fc2.bias.grad, rtol=rtol, atol=atol)
+        assert torch.allclose(
+            model.fc2.bias.grad, model_pt.fc2.bias.grad, rtol=rtol, atol=atol
+        )

@@ -1,19 +1,21 @@
 # Meant to work with Apex's DistributeFusedAdam
 
-from typing import Any, Callable, Dict, List, Optional, Union
-from pathlib import Path
 import types
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Union
 
 import torch
-from torch.optim.optimizer import Optimizer
-from torch.optim import LBFGS
-
 from apex.contrib.optimizers.distributed_fused_adam import DistributedFusedAdam
-
-from pytorch_lightning.strategies.ddp import DDPStrategy
-from pytorch_lightning.plugins.precision import PrecisionPlugin, NativeMixedPrecisionPlugin
 from pytorch_lightning.core.optimizer import LightningOptimizer
+from pytorch_lightning.plugins.precision import (
+    NativeMixedPrecisionPlugin,
+    PrecisionPlugin,
+)
+from pytorch_lightning.strategies.ddp import DDPStrategy
 from pytorch_lightning.utilities.exceptions import MisconfigurationException
+from torch.optim import LBFGS
+from torch.optim.optimizer import Optimizer
+
 try:  # pytorch_lightning <= 1.7
     from pytorch_lightning.utilities.types import _PATH
 except ImportError:  # pytorch_lightning >= 1.8
@@ -24,7 +26,6 @@ except ImportError:  # pytorch_lightning >= 1.8
 
 
 class DistAdamNativeMixedPrecisionPlugin(NativeMixedPrecisionPlugin):
-
     def optimizer_step(  # type: ignore[override]
         self,
         model: "pl.LightningModule",
@@ -36,7 +37,12 @@ class DistAdamNativeMixedPrecisionPlugin(NativeMixedPrecisionPlugin):
         if self.scaler is None:
             # skip scaler logic, as bfloat16 does not require scaler
             return NativeMixedPrecisionPlugin.optimizer_step(
-                self, optimizer, model=model, optimizer_idx=optimizer_idx, closure=closure, **kwargs
+                self,
+                optimizer,
+                model=model,
+                optimizer_idx=optimizer_idx,
+                closure=closure,
+                **kwargs,
             )
         if isinstance(optimizer, LBFGS):
             raise MisconfigurationException(
@@ -61,7 +67,9 @@ class DistAdamNativeMixedPrecisionPlugin(NativeMixedPrecisionPlugin):
             return step_output
         return closure_result
 
-    def clip_grad_by_norm(self, optimizer: DistributedFusedAdam, clip_val: Union[int, float]) -> None:
+    def clip_grad_by_norm(
+        self, optimizer: DistributedFusedAdam, clip_val: Union[int, float]
+    ) -> None:
         """Clip gradients by norm."""
         # DistributedFusedAdam wants list, not generator
         # Gradients have not be scaled, so we need to scale up the clip_val
@@ -80,17 +88,21 @@ class DDPStrategyZero2(DDPStrategy):
     def __init__(
         self,
         *args,
-        precision_plugin: Optional[PrecisionPlugin] = DistAdamNativeMixedPrecisionPlugin,
+        precision_plugin: Optional[
+            PrecisionPlugin
+        ] = DistAdamNativeMixedPrecisionPlugin,
         # precision_plugin: Optional[PrecisionPlugin] = None,
         **kwargs: Union[Any, Dict[str, Any]],
     ) -> None:
-        super().__init__(
-            *args, precision_plugin=precision_plugin, **kwargs
-        )
+        super().__init__(*args, precision_plugin=precision_plugin, **kwargs)
 
     @property
     def precision_plugin(self) -> PrecisionPlugin:
-        return self._precision_plugin if self._precision_plugin is not None else PrecisionPlugin()
+        return (
+            self._precision_plugin
+            if self._precision_plugin is not None
+            else PrecisionPlugin()
+        )
 
     @precision_plugin.setter
     def precision_plugin(self, precision_plugin: Optional[PrecisionPlugin]) -> None:
@@ -112,7 +124,10 @@ class DDPStrategyZero2(DDPStrategy):
             return optimizer.state_dict()
 
     def save_checkpoint(
-        self, checkpoint: Dict[str, Any], filepath: _PATH, storage_options: Optional[Any] = None
+        self,
+        checkpoint: Dict[str, Any],
+        filepath: _PATH,
+        storage_options: Optional[Any] = None,
     ) -> None:
         """Save model/training states as a checkpoint file through state-dump and file-write.
         Args:
@@ -122,13 +137,18 @@ class DDPStrategyZero2(DDPStrategy):
         """
         filepath = Path(filepath)
         filepath.mkdir(parents=True, exist_ok=True)
-        local_optimizer_states = checkpoint.pop('optimizer_states')
+        local_optimizer_states = checkpoint.pop("optimizer_states")
         if self.is_global_zero:
-            self.checkpoint_io.save_checkpoint(checkpoint, filepath / 'model_states.pt',
-                                               storage_options=storage_options)
-        self.checkpoint_io.save_checkpoint(local_optimizer_states,
-                                           filepath / f'{self.global_rank:03d}_optim_states.pt',
-                                           storage_options=storage_options)
+            self.checkpoint_io.save_checkpoint(
+                checkpoint,
+                filepath / "model_states.pt",
+                storage_options=storage_options,
+            )
+        self.checkpoint_io.save_checkpoint(
+            local_optimizer_states,
+            filepath / f"{self.global_rank:03d}_optim_states.pt",
+            storage_options=storage_options,
+        )
 
     def load_checkpoint(self, checkpoint_path: _PATH) -> Dict[str, Any]:
         torch.cuda.empty_cache()
@@ -137,10 +157,12 @@ class DDPStrategyZero2(DDPStrategy):
             return super().load_checkpoint(self, str(checkpoint_path))
         else:
             assert checkpoint_path.is_dir()
-            global_states = self.checkpoint_io.load_checkpoint(checkpoint_path / 'model_states.pt')
-            local_optimizer_states = self.checkpoint_io.load_checkpoint(
-                checkpoint_path / f'{self.global_rank:03d}_optim_states.pt',
-                map_location='cuda'
+            global_states = self.checkpoint_io.load_checkpoint(
+                checkpoint_path / "model_states.pt"
             )
-            global_states['optimizer_states'] = local_optimizer_states
+            local_optimizer_states = self.checkpoint_io.load_checkpoint(
+                checkpoint_path / f"{self.global_rank:03d}_optim_states.pt",
+                map_location="cuda",
+            )
+            global_states["optimizer_states"] = local_optimizer_states
             return global_states

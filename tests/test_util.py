@@ -2,19 +2,29 @@ import math
 
 import torch
 from einops import rearrange, repeat
+
 from flash_attn.bert_padding import pad_input, unpad_input
 
 
-def generate_random_padding_mask(max_seqlen, batch_size, device, mode="random", zero_lengths=False):
+def generate_random_padding_mask(
+    max_seqlen, batch_size, device, mode="random", zero_lengths=False
+):
     assert mode in ["full", "random", "third"]
     if mode == "full":
-        lengths = torch.full((batch_size, 1), max_seqlen, device=device, dtype=torch.int32)
+        lengths = torch.full(
+            (batch_size, 1), max_seqlen, device=device, dtype=torch.int32
+        )
     elif mode == "random":
         lengths = torch.randint(
-            max(0 if zero_lengths else 1, max_seqlen - 20), max_seqlen + 1, (batch_size, 1), device=device
+            max(0 if zero_lengths else 1, max_seqlen - 20),
+            max_seqlen + 1,
+            (batch_size, 1),
+            device=device,
         )
     elif mode == "third":
-        lengths = torch.randint(max_seqlen // 3, max_seqlen + 1, (batch_size, 1), device=device)
+        lengths = torch.randint(
+            max_seqlen // 3, max_seqlen + 1, (batch_size, 1), device=device
+        )
 
     if zero_lengths:
         # Generate zero-lengths every 5 batches and the last batch.
@@ -23,15 +33,23 @@ def generate_random_padding_mask(max_seqlen, batch_size, device, mode="random", 
                 lengths[i] = 0
         lengths[-1] = 0
     padding_mask = (
-        repeat(torch.arange(max_seqlen, device=device), "s -> b s", b=batch_size) < lengths
+        repeat(torch.arange(max_seqlen, device=device), "s -> b s", b=batch_size)
+        < lengths
     )
     return padding_mask
 
 
 def generate_qkv(
-    q, k, v, query_padding_mask=None, key_padding_mask=None, 
-    kvpacked=False, qkvpacked=False, add_unused_qkv=False,
-    query_unused_mask=None, key_unused_mask=None,
+    q,
+    k,
+    v,
+    query_padding_mask=None,
+    key_padding_mask=None,
+    kvpacked=False,
+    qkvpacked=False,
+    add_unused_qkv=False,
+    query_unused_mask=None,
+    key_unused_mask=None,
 ):
     """
     Arguments:
@@ -52,7 +70,9 @@ def generate_qkv(
 
     if query_padding_mask is not None:
         q_unpad, indices_q, cu_seqlens_q, max_seqlen_q, seqused_q = unpad_input(
-            q, query_padding_mask, query_unused_mask,
+            q,
+            query_padding_mask,
+            query_unused_mask,
         )
         output_pad_fn = lambda output_unpad: pad_input(
             output_unpad, indices_q, batch_size, seqlen_q
@@ -60,7 +80,11 @@ def generate_qkv(
     else:
         q_unpad = rearrange(q, "b s h d -> (b s) h d")
         cu_seqlens_q = torch.arange(
-            0, (batch_size + 1) * seqlen_q, step=seqlen_q, dtype=torch.int32, device=q_unpad.device
+            0,
+            (batch_size + 1) * seqlen_q,
+            step=seqlen_q,
+            dtype=torch.int32,
+            device=q_unpad.device,
         )
         seqused_q = None
         max_seqlen_q = seqlen_q
@@ -69,13 +93,19 @@ def generate_qkv(
         )
 
     if key_padding_mask is not None:
-        k_unpad, indices_k, cu_seqlens_k, max_seqlen_k, seqused_k = unpad_input(k, key_padding_mask, key_unused_mask)
+        k_unpad, indices_k, cu_seqlens_k, max_seqlen_k, seqused_k = unpad_input(
+            k, key_padding_mask, key_unused_mask
+        )
         v_unpad, _, _, _, _ = unpad_input(v, key_padding_mask, key_unused_mask)
     else:
         k_unpad = rearrange(k, "b s h d -> (b s) h d")
         v_unpad = rearrange(v, "b s h d -> (b s) h d")
         cu_seqlens_k = torch.arange(
-            0, (batch_size + 1) * seqlen_k, step=seqlen_k, dtype=torch.int32, device=k_unpad.device
+            0,
+            (batch_size + 1) * seqlen_k,
+            step=seqlen_k,
+            dtype=torch.int32,
+            device=k_unpad.device,
         )
         seqused_k = None
         max_seqlen_k = seqlen_k
@@ -86,7 +116,9 @@ def generate_qkv(
         qkv_unpad = torch.stack([q_unpad, k_unpad, v_unpad], dim=1)
         qkv = torch.stack([q, k, v], dim=2)
         if query_padding_mask is not None:
-            dqkv_pad_fn = lambda dqkv_unpad: pad_input(dqkv_unpad, indices_q, batch_size, seqlen_q)
+            dqkv_pad_fn = lambda dqkv_unpad: pad_input(
+                dqkv_unpad, indices_q, batch_size, seqlen_q
+            )
         else:
             dqkv_pad_fn = lambda dqkv_unpad: rearrange(
                 dqkv_unpad, "(b s) t h d -> b s t h d", b=batch_size
@@ -104,7 +136,9 @@ def generate_qkv(
         kv = torch.stack([k, v], dim=2)
         dq_pad_fn = output_pad_fn
         if key_padding_mask is not None:
-            dkv_pad_fn = lambda dkv_unpad: pad_input(dkv_unpad, indices_k, batch_size, seqlen_k)
+            dkv_pad_fn = lambda dkv_unpad: pad_input(
+                dkv_unpad, indices_k, batch_size, seqlen_k
+            )
         else:
             dkv_pad_fn = lambda dkv_unpad: rearrange(
                 dkv_unpad, "(b s) t h d -> b s t h d", b=batch_size
@@ -125,9 +159,13 @@ def generate_qkv(
     else:
         dq_pad_fn = output_pad_fn
         if key_padding_mask is not None:
-            dk_pad_fn = lambda dk_unpad: pad_input(dk_unpad, indices_k, batch_size, seqlen_k)
+            dk_pad_fn = lambda dk_unpad: pad_input(
+                dk_unpad, indices_k, batch_size, seqlen_k
+            )
         else:
-            dk_pad_fn = lambda dk_unpad: rearrange(dk_unpad, "(b s) h d -> b s h d", b=batch_size)
+            dk_pad_fn = lambda dk_unpad: rearrange(
+                dk_unpad, "(b s) h d -> b s h d", b=batch_size
+            )
         return (
             q_unpad.detach().requires_grad_(),
             k_unpad.detach().requires_grad_(),
@@ -156,7 +194,9 @@ def construct_local_mask(
     device=None,
     key_leftpad=None,
 ):
-    row_idx = rearrange(torch.arange(seqlen_q, device=device, dtype=torch.long), "s -> s 1")
+    row_idx = rearrange(
+        torch.arange(seqlen_q, device=device, dtype=torch.long), "s -> s 1"
+    )
     col_idx = torch.arange(seqlen_k, device=device, dtype=torch.long)
     if key_leftpad is not None:
         key_leftpad = rearrange(key_leftpad, "b -> b 1 1 1")
@@ -237,7 +277,9 @@ def attention_ref(
         scores = scores.tanh()
         scores *= softcap
     if key_padding_mask is not None:
-        scores.masked_fill_(rearrange(~key_padding_mask, "b s -> b 1 1 s"), float("-inf"))
+        scores.masked_fill_(
+            rearrange(~key_padding_mask, "b s -> b 1 1 s"), float("-inf")
+        )
     if window_size[0] >= 0 or window_size[1] >= 0:
         local_mask = construct_local_mask(
             seqlen_q,
@@ -254,11 +296,15 @@ def attention_ref(
     attention = torch.softmax(scores, dim=-1).to(v.dtype)
     # Some rows might be completely masked out so we fill them with zero instead of NaN
     if window_size[0] >= 0 or window_size[1] >= 0:
-        attention = attention.masked_fill(torch.all(local_mask, dim=-1, keepdim=True), 0.0)
+        attention = attention.masked_fill(
+            torch.all(local_mask, dim=-1, keepdim=True), 0.0
+        )
     # We want to mask here so that the attention matrix doesn't have any NaNs
     # Otherwise we'll get NaN in dV
     if query_padding_mask is not None:
-        attention = attention.masked_fill(rearrange(~query_padding_mask, "b s -> b 1 s 1"), 0.0)
+        attention = attention.masked_fill(
+            rearrange(~query_padding_mask, "b s -> b 1 s 1"), 0.0
+        )
     dropout_scaling = 1.0 / (1 - dropout_p)
     # attention_drop = attention.masked_fill(~dropout_mask, 0.0) * dropout_scaling
     # output = torch.einsum('bhts,bshd->bthd', attention_drop , v)
@@ -270,5 +316,10 @@ def attention_ref(
     if query_padding_mask is not None:
         output.masked_fill_(rearrange(~query_padding_mask, "b s -> b s 1 1"), 0.0)
     if key_padding_mask is not None:
-        output.masked_fill_(rearrange(torch.logical_not(torch.any(key_padding_mask, 1)), "b -> b 1 1 1"), 0.0)
+        output.masked_fill_(
+            rearrange(
+                torch.logical_not(torch.any(key_padding_mask, 1)), "b -> b 1 1 1"
+            ),
+            0.0,
+        )
     return output.to(dtype=dtype_og), attention.to(dtype=dtype_og)

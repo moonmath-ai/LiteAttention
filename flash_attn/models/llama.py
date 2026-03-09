@@ -10,10 +10,9 @@ from typing import Dict, List, Union
 
 import torch
 import torch.nn.functional as F
+from einops import rearrange
 from sentencepiece import SentencePieceProcessor
 from transformers import GPT2Config, LlamaConfig
-
-from einops import rearrange
 
 
 def remap_state_dict_meta_llama(

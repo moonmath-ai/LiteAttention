@@ -16,7 +16,9 @@ from torch.profiler import ProfilerActivity, profile, record_function
 try:
     from transformers.generation import GreedySearchDecoderOnlyOutput, SampleDecoderOnlyOutput
 except ImportError:
-    GreedySearchDecoderOnlyOutput = namedtuple("GreedySearchDecoderOnlyOutput", ["sequences", "scores"])
+    GreedySearchDecoderOnlyOutput = namedtuple(
+        "GreedySearchDecoderOnlyOutput", ["sequences", "scores"]
+    )
     SampleDecoderOnlyOutput = namedtuple("SampleDecoderOnlyOutput", ["sequences", "scores"])
 
 

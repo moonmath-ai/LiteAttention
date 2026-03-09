@@ -10,3 +10,9 @@ recursive-include flash_attn *.h
 recursive-include flash_attn *.cuh
 recursive-include flash_attn *.cpp
 recursive-include flash_attn *.hpp
+
+recursive-include hopper *.cu
+recursive-include hopper *.h
+recursive-include hopper *.cuh
+recursive-include hopper *.cpp
+recursive-include hopper *.hpp
