@@ -118,14 +118,53 @@ jobs:
           OS_VERSION: ${{ inputs.os-version }}
           PRESET: ${{ inputs.preset }}
 
+  prefetch-images:
+    name: Prefetch docker images
+    needs: prepare
+    runs-on: ${{ fromJSON(inputs.runner-labels-json) }}
+    steps:
+      - name: Pull unique matrix images
+        env:
+          MATRIX_JSON: ${{ needs.prepare.outputs.matrix }}
+        run: |
+          python3 - <<'PY' >/tmp/manual-matrix-images.txt
+          import json
+          import os
+
+          matrix = json.loads(os.environ["MATRIX_JSON"])
+          images = []
+
+          if "include" in matrix:
+              for entry in matrix["include"]:
+                  image = f"nvidia/cuda:{entry['cuda-version']}-{entry['os-version']}"
+                  if image not in images:
+                      images.append(image)
+          else:
+              for os_version in matrix.get("os-version", []):
+                  for cuda_version in matrix.get("cuda-version", []):
+                      image = f"nvidia/cuda:{cuda_version}-{os_version}"
+                      if image not in images:
+                          images.append(image)
+
+          for image in images:
+              print(image)
+          PY
+
+          while IFS= read -r image; do
+            [[ -n "${image}" ]] || continue
+            docker pull "${image}"
+          done </tmp/manual-matrix-images.txt
+
   build-wheel:
     name: Build wheel (manual matrix)
-    needs: prepare
+    needs: [prepare, prefetch-images]
     permissions:
       contents: write
     strategy:
       fail-fast: false
-      max-parallel: 256
+      # act on nebius61 does not honor dynamic expressions here, so keep a
+      # conservative static cap that avoids oversaturating the host.
+      max-parallel: 6
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
     uses: ./.github/workflows/_build.yml
     with:

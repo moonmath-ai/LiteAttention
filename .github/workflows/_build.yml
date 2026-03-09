@@ -82,6 +82,19 @@ jobs:
       PIP_CACHE_OPT: --no-cache-dir
     name: Build wheel (${{ inputs.release-version }}-${{ inputs.python-version }}-${{ inputs.cuda-version }}-${{ inputs.torch-version }}-${{ inputs.cxx11_abi }})
     steps:
+      - name: Configure shared caches for act
+        if: ${{ env.ACT }}
+        run: |
+          ACT_CACHE_ROOT="${GITHUB_WORKSPACE}/.act-cache"
+          mkdir -p \
+            "${ACT_CACHE_ROOT}/pip" \
+            "${ACT_CACHE_ROOT}/ccache"
+
+          echo "PIP_CACHE_DIR=${ACT_CACHE_ROOT}/pip" >> "$GITHUB_ENV"
+          echo "PIP_CACHE_OPT=" >> "$GITHUB_ENV"
+          echo "CCACHE_DIR=${ACT_CACHE_ROOT}/ccache" >> "$GITHUB_ENV"
+          echo "CCACHE_BASEDIR=${GITHUB_WORKSPACE}" >> "$GITHUB_ENV"
+
       - name: Set up environment
         run: |
           ln -snf "/usr/share/zoneinfo/${TZ}" /etc/localtime
@@ -161,16 +174,6 @@ jobs:
           echo "MATRIX_TORCH_VERSION=$(echo ${{ inputs.torch-version }} | awk -F \. {'print $1 "." $2'})" >> $GITHUB_ENV
           echo "WHEEL_CUDA_VERSION=$(echo ${{ inputs.cuda-version }} | awk -F \. {'print $1 "." $2'})" >> $GITHUB_ENV
           echo "MATRIX_PYTHON_VERSION=$(echo ${{ inputs.python-version }} | awk -F \. {'print $1 $2'})" >> $GITHUB_ENV
-
-      - name: Configure shared caches for act
-        if: ${{ env.ACT }}
-        run: |
-          ACT_CACHE_ROOT="${GITHUB_WORKSPACE}/.act-cache"
-          mkdir -p "${ACT_CACHE_ROOT}/pip" "${ACT_CACHE_ROOT}/ccache"
-          echo "PIP_CACHE_DIR=${ACT_CACHE_ROOT}/pip" >> "$GITHUB_ENV"
-          echo "PIP_CACHE_OPT=" >> "$GITHUB_ENV"
-          echo "CCACHE_DIR=${ACT_CACHE_ROOT}/ccache" >> "$GITHUB_ENV"
-          echo "CCACHE_BASEDIR=${GITHUB_WORKSPACE}" >> "$GITHUB_ENV"
 
       - name: Compute ccache key
         id: ccache_key
