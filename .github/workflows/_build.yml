@@ -38,6 +38,16 @@ on:
         required: false
         type: string
         default: "default"
+      import-ccache-artifact:
+        description: "Optional artifact name containing ccache-bundle.tar.zst to import before build"
+        required: false
+        type: string
+        default: ""
+      import-ccache-bundle-path:
+        description: "Optional direct path to a ccache-bundle.tar.zst file (useful for act/local testing)"
+        required: false
+        type: string
+        default: ""
       run-wheel-tests:
         description: "Install built wheel and run lite_attention tests"
         required: false
@@ -205,6 +215,29 @@ jobs:
           ccache -o compiler_check="${CCACHE_COMPILERCHECK}"
           ccache -s || true
           ccache -z || true
+
+      - name: Download imported ccache bundle artifact
+        if: ${{ !env.ACT && inputs.enable-ccache && inputs.import-ccache-artifact != '' }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: ${{ inputs.import-ccache-artifact }}
+          path: /tmp/imported-ccache
+
+      - name: Import ccache bundle
+        if: ${{ inputs.enable-ccache && (inputs.import-ccache-bundle-path != '' || inputs.import-ccache-artifact != '') }}
+        run: |
+          bundle_path="${{ inputs.import-ccache-bundle-path }}"
+          if [[ -z "$bundle_path" ]]; then
+            bundle_path="/tmp/imported-ccache/ccache-bundle.tar.zst"
+          fi
+          if [[ ! -f "$bundle_path" ]]; then
+            echo "::error::Requested ccache bundle not found at '$bundle_path'"
+            exit 1
+          fi
+          mkdir -p "${CCACHE_DIR}"
+          tar --use-compress-program="zstd -d -T0" -xf "$bundle_path" -C "${CCACHE_DIR}"
+          echo "Imported ccache bundle from $bundle_path"
+          ccache -s || true
 
       - name: Check project Python minimum
         id: py_compat

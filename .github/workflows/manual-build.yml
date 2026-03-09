@@ -58,6 +58,16 @@ on:
         required: false
         default: "manual-build"
         type: string
+      import-ccache-artifact:
+        description: "Optional artifact name containing ccache-bundle.tar.zst to import before build"
+        required: false
+        default: ""
+        type: string
+      import-ccache-bundle-path:
+        description: "Optional direct path to a ccache-bundle.tar.zst file (useful for act/local testing)"
+        required: false
+        default: ""
+        type: string
       upload-to-release:
         description: "Upload wheel to a release"
         required: false
@@ -106,5 +116,7 @@ jobs:
       wheel-test-target: ${{ inputs.wheel-test-target }}
       enable-ccache: ${{ inputs.enable-ccache }}
       ccache-namespace: ${{ inputs.ccache-namespace }}
+      import-ccache-artifact: ${{ inputs.import-ccache-artifact }}
+      import-ccache-bundle-path: ${{ inputs.import-ccache-bundle-path }}
       release-version: ${{ needs.prepare.outputs.release_version }}
       upload-to-release: ${{ inputs.upload-to-release }}
