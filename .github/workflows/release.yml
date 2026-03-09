@@ -258,7 +258,7 @@ jobs:
             max_parallel="${{ vars.LITE_ATTENTION_WHEEL_MATRIX_MAX_PARALLEL }}"
           fi
           if [[ -z "$max_parallel" ]]; then
-            max_parallel="256"
+            max_parallel="6"
           fi
           if ! [[ "$max_parallel" =~ ^[0-9]+$ ]] || (( max_parallel < 1 )); then
             echo "::error::wheel_max_parallel must be a positive integer (got '$max_parallel')"
