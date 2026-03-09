@@ -1398,9 +1398,16 @@ class LiteAttention(nn.Module, ConfigurableModule):
             or current_timestep in self._capture_attn_map_timesteps
         )
 
-        capture_skip_lists = capture_qk_block_map or capture_attn_map or self._capture_skip_lists
+        capture_skip_lists = (
+            capture_qk_block_map or capture_attn_map or self._capture_skip_lists
+        )
 
-        if not (capture_attn_map or capture_stats or capture_qk_block_map or capture_skip_lists):
+        if not (
+            capture_attn_map
+            or capture_stats
+            or capture_qk_block_map
+            or capture_skip_lists
+        ):
             return
 
         # --- Block size for qk_block_map ---
