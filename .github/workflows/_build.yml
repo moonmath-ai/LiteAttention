@@ -303,11 +303,12 @@ jobs:
             # Keep CUDA_HOME stable so setup.py does not infer it from the ccache wrapper path.
             export CUDA_HOME=/usr/local/cuda
           fi
-          # Limit MAX_JOBS otherwise the github runner goes OOM
-          # nvcc 11.8 can compile with 2 jobs, but nvcc 12.3 goes OOM
-
-          export MAX_JOBS=$([ "$MATRIX_CUDA_VERSION" == "129" ] && echo 1 || echo 2)
-          export NVCC_THREADS=2
+          # Allow benchmark runs to override compile scheduling without changing
+          # which kernels are built. Fall back to the existing safe defaults.
+          default_max_jobs=$([ "$MATRIX_CUDA_VERSION" == "129" ] && echo 1 || echo 2)
+          export MAX_JOBS="${LITE_ATTENTION_BUILD_MAX_JOBS:-${MAX_JOBS:-$default_max_jobs}}"
+          export NVCC_THREADS="${LITE_ATTENTION_BUILD_NVCC_THREADS:-${NVCC_THREADS:-2}}"
+          echo "Compile settings: MAX_JOBS=${MAX_JOBS} NVCC_THREADS=${NVCC_THREADS}"
           export LITE_ATTENTION_FORCE_BUILD="TRUE"
           export LITE_ATTENTION_FORCE_CXX11_ABI=${{ inputs.cxx11_abi }}
 

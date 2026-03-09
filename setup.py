@@ -179,7 +179,11 @@ def _write_ninja_file(path,
         nvcc_gendeps = ''
         # --generate-dependencies-with-compile is not supported by ROCm
         # Nvcc flag `--generate-dependencies-with-compile` is not supported by sccache, which may increase build time.
-        if torch.version.cuda is not None and os.getenv('TORCH_EXTENSION_SKIP_NVCC_GEN_DEPENDENCIES', '0') != '1':
+        skip_nvcc_gendeps = (
+            os.getenv('TORCH_EXTENSION_SKIP_NVCC_GEN_DEPENDENCIES', '0') == '1'
+            or _env_flag_true('LITE_ATTENTION_SKIP_NVCC_GEN_DEPENDENCIES', '0')
+        )
+        if torch.version.cuda is not None and not skip_nvcc_gendeps:
             cuda_compile_rule.append('  depfile = $out.d')
             cuda_compile_rule.append('  deps = gcc')
             # Note: non-system deps with nvcc are only supported
@@ -376,6 +380,39 @@ def nvcc_threads_args():
     return ["--threads", nvcc_threads]
 
 
+def _env_flag_true(name: str, default: str = "0") -> bool:
+    return os.getenv(name, default).upper() in ["ON", "1", "YES", "TRUE", "Y"]
+
+
+def optional_nvcc_flag(env_name: str, flag: str, default: str = "1"):
+    # Keep defaults backward-compatible by enabling these flags unless explicitly disabled.
+    return [flag] if _env_flag_true(env_name, default) else []
+
+
+def nvcc_split_compile_args():
+    """
+    Optional split-compile support.
+    - Unset/empty: disabled (default, backward-compatible).
+    - TRUE/1/ON/YES/Y: use NVCC_THREADS.
+    - Integer N: emit --split-compile=N.
+    """
+    split_compile = os.getenv("LITE_ATTENTION_NVCC_SPLIT_COMPILE", "").strip()
+    if split_compile == "":
+        return []
+    if split_compile.upper() in ["ON", "1", "YES", "TRUE", "Y"]:
+        split_compile = (os.getenv("NVCC_THREADS") or "2").strip()
+    try:
+        split_compile_jobs = int(split_compile)
+        if split_compile_jobs <= 0:
+            raise ValueError
+    except ValueError:
+        warnings.warn(
+            f"Ignoring invalid LITE_ATTENTION_NVCC_SPLIT_COMPILE={split_compile!r}; expected a positive integer or boolean true."
+        )
+        return []
+    return [f"--split-compile={split_compile_jobs}"]
+
+
 # NVIDIA_TOOLCHAIN_VERSION = {"nvcc": "12.3.107"}
 NVIDIA_TOOLCHAIN_VERSION = {"nvcc": "12.6.85", "ptxas": "12.8.93"}
 
@@ -547,9 +584,9 @@ if not SKIP_CUDA_BUILD:
         "--use_fast_math",
         # "--keep",
         # "--ptxas-options=--verbose,--register-usage-level=5,--warn-on-local-memory-usage",  # printing out number of registers
-        "--resource-usage",  # printing out number of registers
-        # f"--split-compile={os.getenv('NVCC_THREADS', '4')}",  # split-compile is faster
-        "-lineinfo",  # TODO: disable this for release to reduce binary size
+        *optional_nvcc_flag("LITE_ATTENTION_NVCC_RESOURCE_USAGE", "--resource-usage", "1"),
+        *nvcc_split_compile_args(),
+        *optional_nvcc_flag("LITE_ATTENTION_NVCC_LINEINFO", "-lineinfo", "1"),
         "-DCUTE_SM90_EXTENDED_MMA_SHAPES_ENABLED",  # Necessary for the WGMMA shapes that we use
         # "-DCUTLASS_ENABLE_GDC_FOR_SM90",  # For PDL
         "-DCUTLASS_DEBUG_TRACE_LEVEL=0",  # Can toggle for debugging
