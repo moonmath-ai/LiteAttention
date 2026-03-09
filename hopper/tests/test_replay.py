@@ -276,3 +276,128 @@ def test_replay_via_toml_config(qkv, tmp_path):
             zip(outputs_capture[step], outputs_replay[step])
         ):
             torch.testing.assert_close(cap_out, rep_out, msg=f"step {step}, module {i}")
+
+
+# ===========================================================================
+# QK-map replay: compute skip lists from qk_block_map + threshold
+# ===========================================================================
+
+
+def test_qk_map_replay_matches_capture(qkv, tmp_path):
+    """Replay from qk_block_map with same threshold should match original run."""
+    q, k, v = qkv
+    n_steps = 5
+    threshold = -8.0
+
+    # Capture with qk_block_map
+    model = SimpleModel()
+    registry = LiteAttentionRegistry.from_model(
+        model, mode="const", threshold=threshold
+    )
+    capture_path = tmp_path / "capture.pt"
+    registry.enable_capture(save_path=capture_path, qk_block_map=True)
+    outputs_capture = run_steps(registry, q, k, v, n_steps)
+    registry.save()
+
+    # Replay from qk_block_map with same threshold
+    model2 = SimpleModel()
+    registry2 = LiteAttentionRegistry.from_model(
+        model2, mode="replay", filename=capture_path, threshold=threshold
+    )
+    outputs_replay = run_steps(registry2, q, k, v, n_steps)
+
+    # All steps should match
+    for step in range(n_steps):
+        for i, (cap_out, rep_out) in enumerate(
+            zip(outputs_capture[step], outputs_replay[step])
+        ):
+            torch.testing.assert_close(cap_out, rep_out, msg=f"step {step}, module {i}")
+
+
+def test_qk_map_replay_different_threshold(qkv, tmp_path):
+    """QK-map replay with a more aggressive threshold should skip more."""
+    q, k, v = qkv
+    n_steps = 4
+
+    # Capture with mild threshold
+    model = SimpleModel()
+    registry = LiteAttentionRegistry.from_model(model, mode="const", threshold=-12.0)
+    capture_path = tmp_path / "capture.pt"
+    registry.enable_capture(save_path=capture_path, qk_block_map=True)
+    run_steps(registry, q, k, v, n_steps)
+    registry.save()
+
+    # Replay with the same mild threshold (should compute most tiles)
+    model_mild = SimpleModel()
+    registry_mild = LiteAttentionRegistry.from_model(
+        model_mild, mode="replay", filename=capture_path, threshold=-12.0
+    )
+    outputs_mild = run_steps(registry_mild, q, k, v, n_steps)
+
+    # Replay with a more aggressive threshold (should skip more)
+    model_aggr = SimpleModel()
+    registry_aggr = LiteAttentionRegistry.from_model(
+        model_aggr, mode="replay", filename=capture_path, threshold=-4.0
+    )
+    outputs_aggr = run_steps(registry_aggr, q, k, v, n_steps)
+
+    # Both should run without errors. Outputs will differ since different
+    # tiles are computed, but both should be valid tensors.
+    for step in range(n_steps):
+        for i in range(len(outputs_mild[step])):
+            assert outputs_mild[step][i].shape == outputs_aggr[step][i].shape
+
+
+def test_qk_map_replay_no_qk_block_map_raises(qkv, tmp_path):
+    """QK-map replay should error if capture has no qk_block_map."""
+    q, k, v = qkv
+
+    # Capture with attn_map only (no qk_block_map)
+    model = SimpleModel()
+    registry = LiteAttentionRegistry.from_model(model, mode="const", threshold=-8.0)
+    capture_path = tmp_path / "capture.pt"
+    registry.enable_capture(save_path=capture_path, attn_map=True, qk_block_map=False)
+    run_steps(registry, q, k, v, 2)
+    registry.save()
+
+    model2 = SimpleModel()
+    with pytest.raises(ValueError, match="no qk_block_map"):
+        LiteAttentionRegistry.from_model(
+            model2, mode="replay", filename=capture_path, threshold=-8.0
+        )
+
+
+def test_qk_map_replay_with_disabled_steps(qkv, tmp_path):
+    """QK-map replay should work correctly with disabled_steps."""
+    q, k, v = qkv
+    n_steps = 5
+    disabled_steps = 2
+    threshold = -8.0
+
+    model = SimpleModel()
+    registry = LiteAttentionRegistry.from_model(
+        model,
+        mode="const",
+        threshold=threshold,
+        disabled_steps=disabled_steps,
+    )
+    capture_path = tmp_path / "capture.pt"
+    registry.enable_capture(save_path=capture_path, qk_block_map=True)
+    outputs_capture = run_steps(registry, q, k, v, n_steps)
+    registry.save()
+
+    model2 = SimpleModel()
+    registry2 = LiteAttentionRegistry.from_model(
+        model2,
+        mode="replay",
+        filename=capture_path,
+        threshold=threshold,
+        disabled_steps=disabled_steps,
+    )
+    outputs_replay = run_steps(registry2, q, k, v, n_steps)
+
+    for step in range(n_steps):
+        for i, (cap_out, rep_out) in enumerate(
+            zip(outputs_capture[step], outputs_replay[step])
+        ):
+            torch.testing.assert_close(cap_out, rep_out, msg=f"step {step}, module {i}")
