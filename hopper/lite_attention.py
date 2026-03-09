@@ -103,7 +103,8 @@ from .calibrated_module import (
     ModuleRegistry,
 )
 
-_lite_attention_ops = _C
+# CUDA registers ops under torch.ops.lite_attention; ROCm paths may use the module directly.
+_lite_attention_ops = _C if torch.version.hip is not None else torch.ops.lite_attention
 
 log = structlog.get_logger()
 
@@ -484,16 +485,11 @@ class LiteAttention(nn.Module, ConfigurableModule):
             )
         else:
             # Initialize first buffer with "compute all tiles" configuration
-            if reverse_skip_list:
-                # Forward/reverse phases use boundary pair [ktiles, 0] for full coverage.
-                skip_list[0, :, :, :, 0:3] = torch.tensor(
-                    [2, ktiles, 0], dtype=torch.int16, device=device
-                )
-            else:
-                # Legacy non-reversed representation for full coverage.
-                skip_list[0, :, :, :, 0:3] = torch.tensor(
-                    [2, ktiles - 1, -1], dtype=torch.int16, device=device
-                )
+            # Keep initialization aligned with upstream behavior: first read-list should
+            # represent full coverage [ktiles-1 ... 0].
+            skip_list[0, :, :, :, 0:3] = torch.tensor(
+                [2, ktiles - 1, -1], dtype=torch.int16, device=device
+            )
 
             # Note: Second buffer (skip_list[1]) is left uninitialized and will be populated
             # during the first forward pass

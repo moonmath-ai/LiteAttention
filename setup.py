@@ -75,6 +75,7 @@ from torch.utils.cpp_extension import (
     COMMON_HIP_FLAGS,
     IS_HIP_EXTENSION,
     IS_WINDOWS,
+    ROCM_HOME,
     SUBPROCESS_DECODE_ARGS,
     _is_cuda_file,
     _join_cuda_home,
@@ -362,6 +363,46 @@ def check_if_cuda_home_none(global_option: str) -> None:
     )
 
 
+def check_env_flag(name: str, default: str = "") -> bool:
+    return os.getenv(name, default).upper() in ["ON", "1", "YES", "TRUE", "Y"]
+
+
+def is_offline_build() -> bool:
+    return check_env_flag("LITE_ATTENTION_OFFLINE_BUILD", "")
+
+
+def get_lite_attention_cache_path():
+    user_home = os.getenv("LITE_ATTENTION_HOME")
+    if not user_home:
+        user_home = (
+            os.getenv("HOME")
+            or os.getenv("USERPROFILE")
+            or os.getenv("HOMEPATH")
+            or None
+        )
+    if not user_home:
+        raise RuntimeError("Could not find user home directory")
+    return os.path.join(user_home, ".lite_attention")
+
+
+def open_url(url):
+    user_agent = (
+        "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/119.0"
+    )
+    headers = {"User-Agent": user_agent}
+    request = urllib.request.Request(url, None, headers)
+    return urllib.request.urlopen(request, timeout=300)
+
+
+def cuda_archs():
+    archs = os.getenv("LITE_ATTENTION_CUDA_ARCHS")
+    if not archs:
+        # Keep local builds stable by defaulting to Hopper.
+        # Override with LITE_ATTENTION_CUDA_ARCHS / FLASH_ATTN_CUDA_ARCHS when needed.
+        archs = os.getenv("FLASH_ATTN_CUDA_ARCHS", "90")
+    return archs.split(";")
+
+
 def check_if_rocm_home_none(global_option: str) -> None:
     if ROCM_HOME is not None:
         return
@@ -431,7 +472,42 @@ ext_modules = []
 # files included in the source distribution, in case the user compiles from source.
 subprocess.run(["git", "submodule", "update", "--init", "csrc/cutlass"])
 
-if not SKIP_CUDA_BUILD:
+feature_args = (
+    []
+    + (["-DFLASHATTENTION_DISABLE_BACKWARD"] if DISABLE_BACKWARD else [])
+    + (["-DFLASHATTENTION_DISABLE_PAGEDKV"] if DISABLE_PAGEDKV else [])
+    + (["-DFLASHATTENTION_DISABLE_SPLIT"] if DISABLE_SPLIT else [])
+    + (["-DFLASHATTENTION_DISABLE_APPENDKV"] if DISABLE_APPENDKV else [])
+    + (["-DFLASHATTENTION_DISABLE_LOCAL"] if DISABLE_LOCAL else [])
+    + (["-DFLASHATTENTION_DISABLE_SOFTCAP"] if DISABLE_SOFTCAP else [])
+    + (["-DFLASHATTENTION_DISABLE_PACKGQA"] if DISABLE_PACKGQA else [])
+    + (["-DFLASHATTENTION_DISABLE_FP16"] if DISABLE_FP16 else [])
+    + (["-DFLASHATTENTION_DISABLE_FP8"] if DISABLE_FP8 else [])
+    + (["-DFLASHATTENTION_DISABLE_INT8"] if DISABLE_INT8 else [])
+    + (["-DFLASHATTENTION_DISABLE_VARLEN"] if DISABLE_VARLEN else [])
+    + (["-DFLASHATTENTION_DISABLE_CLUSTER"] if DISABLE_CLUSTER else [])
+    + (["-DFLASHATTENTION_DISABLE_HDIM64"] if DISABLE_HDIM64 else [])
+    + (["-DFLASHATTENTION_DISABLE_HDIM96"] if DISABLE_HDIM96 else [])
+    + (["-DFLASHATTENTION_DISABLE_HDIM128"] if DISABLE_HDIM128 else [])
+    + (["-DFLASHATTENTION_DISABLE_HDIM192"] if DISABLE_HDIM192 else [])
+    + (["-DFLASHATTENTION_DISABLE_HDIM256"] if DISABLE_HDIM256 else [])
+    + (["-DFLASHATTENTION_DISABLE_SM8x"] if DISABLE_SM8x else [])
+    + (["-DFLASHATTENTION_ENABLE_VCOLMAJOR"] if ENABLE_VCOLMAJOR else [])
+    + (["-DFLASHATTENTION_DISABLE_HDIMDIFF64"] if DISABLE_HDIMDIFF64 else [])
+    + (["-DFLASHATTENTION_DISABLE_HDIMDIFF192"] if DISABLE_HDIMDIFF192 else [])
+)
+
+
+def _rocm_toolchain_present():
+    if os.environ.get("ROCM_PATH") or os.environ.get("HIP_PATH"):
+        return True
+    return shutil.which("hipcc") is not None
+
+
+is_rocm = (torch.version.hip is not None) or _rocm_toolchain_present()
+
+
+if not SKIP_CUDA_BUILD and not is_rocm:
     print("\n\ntorch.__version__  = {}\n\n".format(torch.__version__))
     TORCH_MAJOR = int(torch.__version__.split(".")[0])
     TORCH_MINOR = int(torch.__version__.split(".")[1])
@@ -504,15 +580,17 @@ if not SKIP_CUDA_BUILD:
         cc_flag.append("-gencode")
         cc_flag.append("arch=compute_80,code=sm_80")
     if CUDA_HOME is not None:
+        # Hopper/Blackwell kernels in this tree use WGMMA paths that require *a architectures.
+        # Keep token names as 90/100/120 for env var compatibility, but emit sm_*a targets.
         if bare_metal_version >= Version("11.8") and "90" in cuda_archs():
             cc_flag.append("-gencode")
-            cc_flag.append("arch=compute_90,code=sm_90")
+            cc_flag.append("arch=compute_90a,code=sm_90a")
         if bare_metal_version >= Version("12.8") and "100" in cuda_archs():
             cc_flag.append("-gencode")
-            cc_flag.append("arch=compute_100,code=sm_100")
+            cc_flag.append("arch=compute_100a,code=sm_100a")
         if bare_metal_version >= Version("12.8") and "120" in cuda_archs():
             cc_flag.append("-gencode")
-            cc_flag.append("arch=compute_120,code=sm_120")
+            cc_flag.append("arch=compute_120a,code=sm_120a")
 
     # HACK: The compiler flag -D_GLIBCXX_USE_CXX11_ABI is set to be the same as
     # torch._C._GLIBCXX_USE_CXX11_ABI
@@ -521,31 +599,6 @@ if not SKIP_CUDA_BUILD:
         torch._C._GLIBCXX_USE_CXX11_ABI = True
     repo_dir = Path(this_dir)
     cutlass_dir = repo_dir / "csrc" / "cutlass"
-
-    feature_args = (
-        []
-        + (["-DFLASHATTENTION_DISABLE_BACKWARD"] if DISABLE_BACKWARD else [])
-        + (["-DFLASHATTENTION_DISABLE_PAGEDKV"] if DISABLE_PAGEDKV else [])
-        + (["-DFLASHATTENTION_DISABLE_SPLIT"] if DISABLE_SPLIT else [])
-        + (["-DFLASHATTENTION_DISABLE_APPENDKV"] if DISABLE_APPENDKV else [])
-        + (["-DFLASHATTENTION_DISABLE_LOCAL"] if DISABLE_LOCAL else [])
-        + (["-DFLASHATTENTION_DISABLE_SOFTCAP"] if DISABLE_SOFTCAP else [])
-        + (["-DFLASHATTENTION_DISABLE_PACKGQA"] if DISABLE_PACKGQA else [])
-        + (["-DFLASHATTENTION_DISABLE_FP16"] if DISABLE_FP16 else [])
-        + (["-DFLASHATTENTION_DISABLE_FP8"] if DISABLE_FP8 else [])
-        + (["-DFLASHATTENTION_DISABLE_INT8"] if DISABLE_INT8 else [])
-        + (["-DFLASHATTENTION_DISABLE_VARLEN"] if DISABLE_VARLEN else [])
-        + (["-DFLASHATTENTION_DISABLE_CLUSTER"] if DISABLE_CLUSTER else [])
-        + (["-DFLASHATTENTION_DISABLE_HDIM64"] if DISABLE_HDIM64 else [])
-        + (["-DFLASHATTENTION_DISABLE_HDIM96"] if DISABLE_HDIM96 else [])
-        + (["-DFLASHATTENTION_DISABLE_HDIM128"] if DISABLE_HDIM128 else [])
-        + (["-DFLASHATTENTION_DISABLE_HDIM192"] if DISABLE_HDIM192 else [])
-        + (["-DFLASHATTENTION_DISABLE_HDIM256"] if DISABLE_HDIM256 else [])
-        + (["-DFLASHATTENTION_DISABLE_SM8x"] if DISABLE_SM8x else [])
-        + (["-DFLASHATTENTION_ENABLE_VCOLMAJOR"] if ENABLE_VCOLMAJOR else [])
-        + (["-DFLASHATTENTION_DISABLE_HDIMDIFF64"] if DISABLE_HDIMDIFF64 else [])
-        + (["-DFLASHATTENTION_DISABLE_HDIMDIFF192"] if DISABLE_HDIMDIFF192 else [])
-    )
 
     DTYPE_FWD_SM80 = ["bf16"] + (["fp16"] if not DISABLE_FP16 else [])
     DTYPE_FWD_SM90 = (
@@ -683,128 +736,147 @@ if not SKIP_CUDA_BUILD:
             name=f"lite_attention._C",
             sources=sources,
             extra_compile_args={
-                "cxx": compiler_c17_flag,
-                "nvcc": append_nvcc_threads(nvcc_flags + cc_flag),
+                "cxx": ["-O3", "-std=c++17", "-DPy_LIMITED_API=0x03090000"]
+                + feature_args,
+                "nvcc": nvcc_threads_args() + nvcc_flags + cc_flag + feature_args,
             },
-            include_dirs=[
-                Path(this_dir) / "csrc" / "flash_attn",
-                Path(this_dir) / "csrc" / "flash_attn" / "src",
-                Path(this_dir) / "csrc" / "cutlass" / "include",
-            ],
+            include_dirs=include_dirs,
+            py_limited_api=True,
         )
     )
-elif not SKIP_CUDA_BUILD and IS_ROCM:
-    print("\n\ntorch.__version__  = {}\n\n".format(torch.__version__))
-    TORCH_MAJOR = int(torch.__version__.split(".")[0])
-    TORCH_MINOR = int(torch.__version__.split(".")[1])
+if not SKIP_CUDA_BUILD and is_rocm:
+    print("\n\nBuilding for AMD ROCm...\n\n")
 
-    # Skips CK C++ extension compilation if using Triton Backend
-    if not SKIP_CK_BUILD:
-        ck_dir = "csrc/composable_kernel"
+    ROCM_HDIMS = [64, 96, 128, 192, 256]
+    rocm_optdim = ",".join(str(h) for h in ROCM_HDIMS)
 
-        #use codegen get code dispatch
-        if not os.path.exists("./build"):
-            os.makedirs("build")
+    repo_root = Path(this_dir)
+    ck_dir = repo_root / "csrc" / "composable_kernel"
+    generate_script = ck_dir / "example" / "ck_tile" / "01_fmha" / "generate.py"
+    generated_dir = repo_root / "generated_ck"
+    generated_dir.mkdir(parents=True, exist_ok=True)
 
-        optdim = os.getenv("OPT_DIM", "32,64,128,256")
-        subprocess.run([sys.executable, f"{ck_dir}/example/ck_tile/01_fmha/generate.py", "-d", "fwd", "--output_dir", "build", "--receipt", "2", "--optdim", optdim], check=True)
-        subprocess.run([sys.executable, f"{ck_dir}/example/ck_tile/01_fmha/generate.py", "-d", "fwd_appendkv", "--output_dir", "build", "--receipt", "2", "--optdim", optdim], check=True)
-        subprocess.run([sys.executable, f"{ck_dir}/example/ck_tile/01_fmha/generate.py", "-d", "fwd_splitkv", "--output_dir", "build", "--receipt", "2", "--optdim", optdim], check=True)
-        subprocess.run([sys.executable, f"{ck_dir}/example/ck_tile/01_fmha/generate.py", "-d", "bwd", "--output_dir", "build", "--receipt", "2", "--optdim", optdim], check=True)
+    fwd_filter_parts = []
+    for h in ROCM_HDIMS:
+        fwd_filter_parts.append(
+            f"*d{h}_fp16_batch*lite*|*d{h}_fp16_batch*qr*nbias*nmask*|*d{h}_bf16_batch*lite*|*d{h}_bf16_batch*qr*nbias*nmask*"
+        )
+    fwd_filter = "|".join(fwd_filter_parts)
 
-        # Check, if ATen/CUDAGeneratorImpl.h is found, otherwise use ATen/cuda/CUDAGeneratorImpl.h
-        # See https://github.com/pytorch/pytorch/pull/70650
-        generator_flag = []
-        torch_dir = torch.__path__[0]
-        if os.path.exists(os.path.join(torch_dir, "include", "ATen", "CUDAGeneratorImpl.h")):
-            generator_flag = ["-DOLD_GENERATOR_PATH"]
+    print(f"Generating FWD kernels to {generated_dir} (head_dims={ROCM_HDIMS})...")
+    subprocess.run(
+        [
+            sys.executable,
+            str(generate_script),
+            "--api",
+            "fwd",
+            "--optdim",
+            rocm_optdim,
+            "--output_dir",
+            str(generated_dir),
+            "--filter",
+            fwd_filter,
+        ],
+        check=True,
+    )
 
-        check_if_rocm_home_none("flash_attn")
-        archs = os.getenv("GPU_ARCHS", "native").split(";")
-        validate_and_update_archs(archs)
+    bwd_filter_parts = [f"*d{h}_fp16_batch*|*d{h}_bf16_batch*" for h in ROCM_HDIMS]
+    bwd_filter = "|".join(bwd_filter_parts)
 
-        if archs != ['native']:
-            cc_flag = [f"--offload-arch={arch}" for arch in archs]
-        else:
-            arch = torch.cuda.get_device_properties("cuda").gcnArchName.split(":")[0]
-            cc_flag = [f"--offload-arch={arch}"]
+    print(f"Generating BWD kernels to {generated_dir} (head_dims={ROCM_HDIMS})...")
+    subprocess.run(
+        [
+            sys.executable,
+            str(generate_script),
+            "--api",
+            "bwd",
+            "--optdim",
+            rocm_optdim,
+            "--output_dir",
+            str(generated_dir),
+            "--filter",
+            bwd_filter,
+        ],
+        check=True,
+    )
 
-        # HACK: The compiler flag -D_GLIBCXX_USE_CXX11_ABI is set to be the same as
-        # torch._C._GLIBCXX_USE_CXX11_ABI
-        # https://github.com/pytorch/pytorch/blob/8472c24e3b5b60150096486616d98b7bea01500b/torch/utils/cpp_extension.py#L920
-        if FORCE_CXX11_ABI:
-            torch._C._GLIBCXX_USE_CXX11_ABI = True
+    for p in generated_dir.glob("*.cpp"):
+        p.rename(p.with_suffix(".hip"))
 
-        sources = ["csrc/flash_attn_ck/flash_api.cpp",
-                "csrc/flash_attn_ck/flash_common.cpp",
-                "csrc/flash_attn_ck/mha_bwd.cpp",
-                "csrc/flash_attn_ck/mha_fwd_kvcache.cpp",
-                "csrc/flash_attn_ck/mha_fwd.cpp",
-                "csrc/flash_attn_ck/mha_varlen_bwd.cpp",
-                "csrc/flash_attn_ck/mha_varlen_fwd.cpp"] + glob.glob(
-            f"build/fmha_*wd*.cpp"
+    flash_attn_ck_dir = repo_root / "csrc" / "flash_attn_ck"
+    shutil.copy(flash_attn_ck_dir / "flash_api.cpp", flash_attn_ck_dir / "flash_api.hip")
+
+    def get_rocm_source(path_str):
+        path = Path(path_str)
+        if path.suffix == ".cpp":
+            hip_path = path.with_suffix(".hip")
+            if hip_path.exists():
+                return str(hip_path)
+        return str(path)
+
+    sources = [
+        get_rocm_source(str(repo_root / "csrc" / "flash_attn_ck" / "flash_api.cpp")),
+        get_rocm_source(str(repo_root / "csrc" / "flash_attn_ck" / "flash_common.cpp")),
+        get_rocm_source(str(repo_root / "csrc" / "flash_attn_ck" / "mha_fwd.cpp")),
+        get_rocm_source(str(repo_root / "csrc" / "flash_attn_ck" / "mha_varlen_fwd.cpp")),
+        str(generated_dir / "fmha_fwd_api.hip"),
+    ]
+
+    if not DISABLE_APPENDKV and not DISABLE_SPLIT:
+        sources.append(
+            get_rocm_source(str(repo_root / "csrc" / "flash_attn_ck" / "mha_fwd_kvcache.cpp"))
         )
 
-        rename_cpp_to_cu(sources)
+    if not DISABLE_BACKWARD:
+        sources.append(
+            get_rocm_source(str(repo_root / "csrc" / "flash_attn_ck" / "mha_bwd.cpp"))
+        )
+        sources.append(
+            get_rocm_source(str(repo_root / "csrc" / "flash_attn_ck" / "mha_varlen_bwd.cpp"))
+        )
+        sources.append(str(generated_dir / "fmha_bwd_api.hip"))
 
-        renamed_sources = ["csrc/flash_attn_ck/flash_api.cu",
-                        "csrc/flash_attn_ck/flash_common.cu",
-                        "csrc/flash_attn_ck/mha_bwd.cu",
-                        "csrc/flash_attn_ck/mha_fwd_kvcache.cu",
-                        "csrc/flash_attn_ck/mha_fwd.cu",
-                        "csrc/flash_attn_ck/mha_varlen_bwd.cu",
-                        "csrc/flash_attn_ck/mha_varlen_fwd.cu"] + glob.glob(f"build/fmha_*wd*.cu")
+    sources.extend(
+        str(p)
+        for p in generated_dir.glob("*.hip")
+        if p.name not in ["fmha_fwd_api.hip", "fmha_bwd_api.hip"]
+    )
 
-        cc_flag += ["-O3","-std=c++17",
-                    "-DCK_TILE_FMHA_FWD_FAST_EXP2=1",
-                    "-fgpu-flush-denormals-to-zero",
-                    "-DCK_ENABLE_BF16",
-                    "-DCK_ENABLE_BF8",
-                    "-DCK_ENABLE_FP16",
-                    "-DCK_ENABLE_FP32",
-                    "-DCK_ENABLE_FP64",
-                    "-DCK_ENABLE_FP8",
-                    "-DCK_ENABLE_INT8",
-                    "-DCK_USE_XDL",
-                    "-DUSE_PROF_API=1",
-                    # "-DFLASHATTENTION_DISABLE_BACKWARD",
-                    "-D__HIP_PLATFORM_HCC__=1"]
+    include_dirs = [
+        str(repo_root / "csrc" / "flash_attn_ck"),
+        str(ck_dir / "include"),
+        str(ck_dir / "library" / "include"),
+        str(ck_dir / "example" / "ck_tile" / "01_fmha"),
+        str(generated_dir),
+    ]
 
-        cc_flag += [f"-DCK_TILE_FLOAT_TO_BFLOAT16_DEFAULT={os.environ.get('CK_TILE_FLOAT_TO_BFLOAT16_DEFAULT', 3)}"]
-
-        # Imitate https://github.com/ROCm/composable_kernel/blob/c8b6b64240e840a7decf76dfaa13c37da5294c4a/CMakeLists.txt#L190-L214
-        hip_version = get_hip_version()
-        if hip_version > Version('5.5.00000'):
-            cc_flag += ["-mllvm", "--lsr-drop-solution=1"]
-        if hip_version > Version('5.7.23302'):
-            cc_flag += ["-fno-offload-uniform-block"]
-        if hip_version > Version('6.1.40090'):
-            cc_flag += ["-mllvm", "-enable-post-misched=0"]
-        if hip_version > Version('6.2.41132'):
-            cc_flag += ["-mllvm", "-amdgpu-early-inline-all=true",
-                        "-mllvm", "-amdgpu-function-calls=false"]
-        if hip_version > Version('6.2.41133') and hip_version < Version('6.3.00000'):
-            cc_flag += ["-mllvm", "-amdgpu-coerce-illegal-types=1"]
-
-        extra_compile_args = {
-            "cxx": ["-O3", "-std=c++17"] + generator_flag,
-            "nvcc": cc_flag + generator_flag,
-        }
-
-        include_dirs = [
-            Path(this_dir) / "csrc" / "composable_kernel" / "include",
-            Path(this_dir) / "csrc" / "composable_kernel" / "library" / "include",
-            Path(this_dir) / "csrc" / "composable_kernel" / "example" / "ck_tile" / "01_fmha",
+    extra_compile_args = {
+        "cxx": [
+            "-O3",
+            "-std=c++17",
+            "-Wno-c++11-narrowing",
+            "-D__HIP_PLATFORM_AMD__=1",
+            "-DTORCH_EXTENSION_NAME=lite_attention._C",
         ]
+        + feature_args,
+        "nvcc": [
+            "-O3",
+            "-std=c++17",
+            "-Wno-c++11-narrowing",
+            "-D__HIP_PLATFORM_AMD__=1",
+            "--offload-arch=gfx942",
+        ]
+        + feature_args,
+    }
 
-        ext_modules.append(
-            CUDAExtension(
-                name="flash_attn_2_cuda",
-                sources=renamed_sources,
-                extra_compile_args=extra_compile_args,
-                include_dirs=include_dirs,
-            )
+    ext_modules.append(
+        CUDAExtension(
+            name="lite_attention._C",
+            sources=sources,
+            include_dirs=include_dirs,
+            extra_compile_args=extra_compile_args,
         )
+    )
 
 
 def get_package_version():
