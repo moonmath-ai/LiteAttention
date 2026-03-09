@@ -2195,14 +2195,6 @@ class LiteAttentionRegistry(ModuleRegistry):
             module._replay_skip_lists = replay_list
             module._replay_step_counter = 0
 
-            log.info(
-                "Replay data loaded",
-                module=name,
-                source="qk_block_map" if use_qk_map else "skip_lists",
-                threshold=replay_cfg.threshold,
-                timesteps=len(replay_list),
-            )
-
     @staticmethod
     def _make_compute_all(B: int, H: int, qtiles: int, ktiles: int) -> torch.Tensor:
         """Build a "compute all tiles" skip list buffer."""
