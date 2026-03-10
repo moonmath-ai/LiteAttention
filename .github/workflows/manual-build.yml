@@ -33,6 +33,11 @@ on:
         options:
           - "TRUE"
           - "FALSE"
+      cxx11_abi_list_json:
+        description: "Optional JSON array of ABI values to build sequentially in one job"
+        required: false
+        default: ""
+        type: string
       runner-labels-json:
         description: "Runner labels JSON (e.g. [\"self-hosted\",\"Linux\"])"
         required: false
@@ -119,6 +124,8 @@ jobs:
     runs-on: ${{ fromJSON(inputs.runner-labels-json) }}
     outputs:
       release_version: ${{ steps.set.outputs.release_version }}
+      resolved_cxx11_abi: ${{ steps.set.outputs.resolved_cxx11_abi }}
+      resolved_cxx11_abi_list_json: ${{ steps.set.outputs.resolved_cxx11_abi_list_json }}
     steps:
       - name: Set ref and release version
         id: set
@@ -134,6 +141,31 @@ jobs:
             echo "release_version=${{ github.ref }}" >> $GITHUB_OUTPUT
           fi
 
+          if [[ -z "${{ inputs.cxx11_abi_list_json }}" ]]; then
+            echo "resolved_cxx11_abi=${{ inputs.cxx11_abi }}" >> "$GITHUB_OUTPUT"
+            echo "resolved_cxx11_abi_list_json=" >> "$GITHUB_OUTPUT"
+          else
+            ABI_LIST_JSON='${{ inputs.cxx11_abi_list_json }}' python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+
+          abi_order = {"FALSE": 0, "TRUE": 1}
+          raw = json.loads(os.environ["ABI_LIST_JSON"])
+          if not isinstance(raw, list) or not raw:
+              raise SystemExit("cxx11_abi_list_json must decode to a non-empty JSON array")
+
+          seen = []
+          for abi in raw:
+              abi = str(abi)
+              if abi not in seen:
+                  seen.append(abi)
+
+          seen.sort(key=lambda abi: (abi_order.get(abi, 99), abi))
+          print(f"resolved_cxx11_abi={'_'.join(seen)}")
+          print(f"resolved_cxx11_abi_list_json={json.dumps(seen, separators=(',', ':'))}")
+          PY
+          fi
+
   build-wheel:
     name: Build wheel (manual)
     needs: prepare
@@ -145,7 +177,8 @@ jobs:
       python-version: ${{ inputs.python-version }}
       cuda-version: ${{ inputs.cuda-version }}
       torch-version: ${{ inputs.torch-version }}
-      cxx11_abi: ${{ inputs.cxx11_abi }}
+      cxx11_abi: ${{ needs.prepare.outputs.resolved_cxx11_abi }}
+      cxx11_abi_list_json: ${{ needs.prepare.outputs.resolved_cxx11_abi_list_json }}
       runner-labels-json: ${{ inputs.runner-labels-json }}
       run-wheel-tests: ${{ inputs.run-wheel-tests }}
       wheel-test-target: ${{ inputs.wheel-test-target }}

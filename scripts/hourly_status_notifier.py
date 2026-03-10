@@ -176,12 +176,29 @@ def subject_header(payload: dict[str, Any]) -> str:
     return f"eta {eta} | {speedup} vs unopt"
 
 
+def shorten_status_signal(text: str, *, max_chars: int = 160) -> str:
+    text = clean_text(text)
+    lowered = text.lower()
+    if "current_state=" in lowered:
+        text = clean_text(text.split("current_state=", 1)[1])
+    else:
+        for marker in ("failed because ", "blocked by ", "error: ", "error "):
+            idx = lowered.find(marker)
+            if idx != -1:
+                text = clean_text(text[idx:])
+                break
+    if len(text) <= max_chars:
+        return text
+    clipped = text[: max_chars - 3].rsplit(" ", 1)[0].rstrip(" ,;:")
+    return (clipped or text[: max_chars - 3]).rstrip() + "..."
+
+
 def infer_blocker(experiment_bullets: list[str], lanes: list[tuple[str, str]]) -> str:
     haystack = experiment_bullets + [value for _, value in lanes]
     for item in haystack:
         lowered = item.lower()
         if any(token in lowered for token in (" blocker", " blocked", " failed", " failure", " error", " unavailable", " stuck")):
-            return item
+            return shorten_status_signal(item)
     return "none"
 
 
@@ -232,10 +249,10 @@ def build_delta_lines(current: dict[str, Any], previous: dict[str, Any] | None) 
         return ["First hourly status from the repo-owned notifier."]
 
     lines: list[str] = []
+    if current["focus_tag"] != previous.get("focus_tag"):
+        lines.append(f"Focus: {current['focus_tag']}")
     if current["primary_task"] != previous.get("primary_task"):
         lines.append(f"Primary task: {current['primary_task']}")
-    if current["focus_tag"] != previous.get("focus_tag"):
-        lines.append(f"Focus tag: {current['focus_tag']}")
     if current["best_header"] != previous.get("best_header"):
         lines.append(f"ETA / speedup: {current['best_header']}")
     branch_head = f"{current['branch']} @ {current['head']}"

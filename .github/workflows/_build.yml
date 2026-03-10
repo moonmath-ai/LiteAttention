@@ -305,7 +305,7 @@ jobs:
 
       - name: Restore compatible ccache
         id: restore_ccache
-        if: ${{ !env.ACT && inputs.enable-ccache }}
+        if: ${{ !env.ACT && inputs.enable-ccache && inputs.import-ccache-artifact == '' && inputs.import-ccache-bundle-path == '' }}
         uses: actions/cache/restore@v4
         with:
           path: ${{ env.CCACHE_DIR }}
@@ -446,7 +446,9 @@ jobs:
 
           if [[ "${USE_CCACHE_WRAPPERS}" == "true" ]]; then
             REAL_NVCC=$(command -v nvcc)
-            WRAPPER_DIR="${GITHUB_WORKSPACE}/.ci-bin"
+            # Keep wrapper path stable across workspace locations to improve
+            # ccache command identity and cross-host reuse quality.
+            WRAPPER_DIR="/tmp/liteattention-ccache-wrappers"
             WRAPPER_NVCC="${WRAPPER_DIR}/nvcc"
             mkdir -p "${WRAPPER_DIR}"
             printf '%s\n' '#!/usr/bin/env bash' "exec ccache \"${REAL_NVCC}\" \"\$@\"" > "${WRAPPER_NVCC}"
