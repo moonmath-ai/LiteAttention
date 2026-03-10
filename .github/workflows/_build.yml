@@ -483,7 +483,10 @@ jobs:
           fi
           if [[ "${{ inputs.build-profile }}" == "true" ]]; then
             export LITE_ATTENTION_NVCC_TIME=TRUE
-            export LITE_ATTENTION_NVCC_FDEVICE_TIME_TRACE=TRUE
+            # CUDA 12.8 profiling in CI has been reliable with phase CSV plus
+            # per-TU walltime, but fdevice trace has repeatedly failed in the
+            # act/container path even on direct nvcc. Keep it opt-in via the
+            # setup.py env flag instead of enabling it by default here.
             export LITE_ATTENTION_NVCC_PER_TU_TIME=TRUE
             export NINJA_STATUS="[%f/%t %r active | %e sec]"
             mkdir -p build-profile
