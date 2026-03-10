@@ -13,24 +13,34 @@ pytestmark = [
 
 BATCH = 1
 SEQ_LEN = 4096
+SHORT_SEQ_LEN = 1024
 HEADS = 8
 HEAD_DIM = 128
 
 
-@pytest.fixture
-def qkv():
+def _make_qkv(batch, seq_len):
     torch.manual_seed(42)
     torch.cuda.manual_seed(42)
     q = torch.randn(
-        BATCH, SEQ_LEN, HEADS, HEAD_DIM, device="cuda", dtype=torch.bfloat16
+        batch, seq_len, HEADS, HEAD_DIM, device="cuda", dtype=torch.bfloat16
     )
     k = torch.randn(
-        BATCH, SEQ_LEN, HEADS, HEAD_DIM, device="cuda", dtype=torch.bfloat16
+        batch, seq_len, HEADS, HEAD_DIM, device="cuda", dtype=torch.bfloat16
     )
     v = torch.randn(
-        BATCH, SEQ_LEN, HEADS, HEAD_DIM, device="cuda", dtype=torch.bfloat16
+        batch, seq_len, HEADS, HEAD_DIM, device="cuda", dtype=torch.bfloat16
     )
     return q, k, v
+
+
+@pytest.fixture
+def qkv():
+    return _make_qkv(BATCH, SEQ_LEN)
+
+
+@pytest.fixture
+def short_qkv():
+    return _make_qkv(BATCH, SHORT_SEQ_LEN)
 
 
 class SimpleModel(nn.Module):
@@ -523,18 +533,8 @@ def test_stats_accumulate_all_timesteps(qkv, tmp_path):
 
 def test_stats_multiple_heads_and_batches(tmp_path):
     """Stats capture with multiple heads and batches has correct shape."""
-    torch.manual_seed(42)
-    torch.cuda.manual_seed(42)
     batch = 2
-    q = torch.randn(
-        batch, SEQ_LEN, HEADS, HEAD_DIM, device="cuda", dtype=torch.bfloat16
-    )
-    k = torch.randn(
-        batch, SEQ_LEN, HEADS, HEAD_DIM, device="cuda", dtype=torch.bfloat16
-    )
-    v = torch.randn(
-        batch, SEQ_LEN, HEADS, HEAD_DIM, device="cuda", dtype=torch.bfloat16
-    )
+    q, k, v = _make_qkv(batch, SHORT_SEQ_LEN)
 
     model = SimpleModel(max_batch_size=batch)
     registry = LiteAttentionRegistry.from_model(model, mode="const", threshold=-8.0)
@@ -560,17 +560,17 @@ def test_stats_multiple_heads_and_batches(tmp_path):
     assert attn0["stats_mean"].shape == (
         len(sel_batch),
         len(sel_heads),
-        SEQ_LEN,
-        SEQ_LEN,
+        SHORT_SEQ_LEN,
+        SHORT_SEQ_LEN,
     )
     assert attn0["stats_batch_indices"] == sel_batch
     assert attn0["stats_heads"] == sel_heads
     assert attn0["stats_count"] == 2
 
 
-def test_stats_all_heads_all_batches(qkv, tmp_path):
+def test_stats_all_heads_all_batches(short_qkv, tmp_path):
     """Stats with None heads/batch captures all heads and batches."""
-    q, k, v = qkv
+    q, k, v = short_qkv
     model = SimpleModel()
     registry = LiteAttentionRegistry.from_model(model, mode="const", threshold=-8.0)
     save_path = tmp_path / "capture.pt"
@@ -590,6 +590,6 @@ def test_stats_all_heads_all_batches(qkv, tmp_path):
     data = load_capture(save_path)
     attn0 = data["modules"]["attn0"]
 
-    assert attn0["stats_mean"].shape == (BATCH, HEADS, SEQ_LEN, SEQ_LEN)
+    assert attn0["stats_mean"].shape == (BATCH, HEADS, SHORT_SEQ_LEN, SHORT_SEQ_LEN)
     assert attn0["stats_batch_indices"] == list(range(BATCH))
     assert attn0["stats_heads"] == list(range(HEADS))
