@@ -284,10 +284,11 @@ def test_reset_skip_state_no_warn_when_empty(qkv):
 # ===========================================================================
 
 
-def test_capture_batch_out_of_range(qkv, tmp_path):
+@pytest.mark.parametrize("max_batch_size", [2, 3])
+def test_capture_batch_out_of_range(qkv, tmp_path, max_batch_size):
     """attn_map_batch_indices beyond actual batch size are silently skipped."""
     q, k, v = qkv  # BATCH=1
-    model = SimpleModel()
+    model = SimpleModel(max_batch_size=max_batch_size)
     registry = LiteAttentionRegistry.from_model(model, mode="const", threshold=-8.0)
     save_path = tmp_path / "capture.pt"
 
@@ -302,10 +303,10 @@ def test_capture_batch_out_of_range(qkv, tmp_path):
 
     data = load_capture(save_path)
     for mod_data in data["modules"].values():
-        # pct has all batch items (BATCH=1)
+        # pct has actual batch items (BATCH=1)
         assert mod_data["pct_per_head"].shape[1] == BATCH
-        # maps only have batch 0 (batch 5 > actual batch size 1)
-        assert mod_data["skip_lists"].shape[1] == 1
+        # skip_lists capture all batches from write_list (max_batch_size)
+        assert mod_data["skip_lists"].shape[1] == max_batch_size
 
 
 # ===========================================================================
