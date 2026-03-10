@@ -1446,7 +1446,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
         if capture_skip_lists:
             if lite_attention_disabled:
                 captured_skip = torch.zeros(
-                    batch_size,
+                    self.max_batch_size,
                     num_heads,
                     qtiles,
                     ktiles + 2,
