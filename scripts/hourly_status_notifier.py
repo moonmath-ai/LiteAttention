@@ -234,6 +234,8 @@ def build_delta_lines(current: dict[str, Any], previous: dict[str, Any] | None) 
     lines: list[str] = []
     if current["primary_task"] != previous.get("primary_task"):
         lines.append(f"Primary task: {current['primary_task']}")
+    if current["focus_tag"] != previous.get("focus_tag"):
+        lines.append(f"Focus tag: {current['focus_tag']}")
     if current["best_header"] != previous.get("best_header"):
         lines.append(f"ETA / speedup: {current['best_header']}")
     branch_head = f"{current['branch']} @ {current['head']}"
@@ -242,6 +244,16 @@ def build_delta_lines(current: dict[str, Any], previous: dict[str, Any] | None) 
         lines.append(f"Branch/head: {branch_head}")
     if current["top_blocker"] != previous.get("top_blocker"):
         lines.append(f"Top blocker: {current['top_blocker']}")
+    if current.get("secondary_tasks", [])[:2] != previous.get("secondary_tasks", [])[:2]:
+        for task in current.get("secondary_tasks", [])[:2]:
+            lines.append(f"Secondary task: {task}")
+            if len(lines) >= 4:
+                break
+    if current.get("ideas", [])[:2] != previous.get("ideas", [])[:2]:
+        for idea in current.get("ideas", [])[:2]:
+            lines.append(f"Idea lane: {idea}")
+            if len(lines) >= 4:
+                break
 
     prev_bullets = set(previous.get("experiment_bullets", []))
     for bullet in current["experiment_bullets"]:
@@ -394,12 +406,12 @@ def build_html_preview(payload: dict[str, Any], delta_lines: list[str], dt: date
 """.strip() + "\n"
 
 
-def fallback_body(payload: dict[str, Any]) -> str:
+def fallback_body(payload: dict[str, Any], dt: datetime) -> str:
     header = subject_header(payload)
     return (
         "LiteAttention hourly status\n\n"
-        "TL;DR: notifier fallback mode is active. Current work is continuing, "
-        "but the structured summary did not validate.\n\n"
+        f"TL;DR: {short_hour_label(dt)} notifier fallback mode is active. "
+        "Current work is continuing, but the structured summary did not validate.\n\n"
         f"Header: {header}\n\n"
         "Doing now\n"
         f"{fill_text(payload['primary_task'], initial_indent='- ', subsequent_indent='  ')}\n\n"
@@ -564,7 +576,7 @@ def main() -> int:
         return 1
     validation_errors = validate_body(body)
     if validation_errors:
-        body = fallback_body(payload)
+        body = fallback_body(payload, now)
         validation_errors = validate_body(body)
     if validation_errors:
         print(f"body validation failed: {validation_errors}", file=sys.stderr)
