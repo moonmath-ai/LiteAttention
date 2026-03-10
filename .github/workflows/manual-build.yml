@@ -48,6 +48,36 @@ on:
         required: false
         default: "hopper/tests/test_lite_attention.py"
         type: string
+      build-max-jobs:
+        description: "Optional override for MAX_JOBS in the wheel build"
+        required: false
+        default: ""
+        type: string
+      nvcc-threads:
+        description: "Optional override for NVCC_THREADS in the wheel build"
+        required: false
+        default: ""
+        type: string
+      nvcc-lineinfo:
+        description: "Optional override for LITE_ATTENTION_NVCC_LINEINFO"
+        required: false
+        default: ""
+        type: string
+      nvcc-resource-usage:
+        description: "Optional override for LITE_ATTENTION_NVCC_RESOURCE_USAGE"
+        required: false
+        default: ""
+        type: string
+      nvcc-split-compile:
+        description: "Optional override for LITE_ATTENTION_NVCC_SPLIT_COMPILE"
+        required: false
+        default: ""
+        type: string
+      skip-nvcc-gen-dependencies:
+        description: "Optional override for LITE_ATTENTION_SKIP_NVCC_GEN_DEPENDENCIES"
+        required: false
+        default: ""
+        type: string
       enable-ccache:
         description: "Enable ccache restore/save and bundle artifact"
         required: false
@@ -114,6 +144,12 @@ jobs:
       runner-labels-json: ${{ inputs.runner-labels-json }}
       run-wheel-tests: ${{ inputs.run-wheel-tests }}
       wheel-test-target: ${{ inputs.wheel-test-target }}
+      build-max-jobs: ${{ inputs.build-max-jobs }}
+      nvcc-threads: ${{ inputs.nvcc-threads }}
+      nvcc-lineinfo: ${{ inputs.nvcc-lineinfo }}
+      nvcc-resource-usage: ${{ inputs.nvcc-resource-usage }}
+      nvcc-split-compile: ${{ inputs.nvcc-split-compile }}
+      skip-nvcc-gen-dependencies: ${{ inputs.skip-nvcc-gen-dependencies }}
       enable-ccache: ${{ inputs.enable-ccache }}
       ccache-namespace: ${{ inputs.ccache-namespace }}
       import-ccache-artifact: ${{ inputs.import-ccache-artifact }}

@@ -58,6 +58,36 @@ on:
         required: false
         type: string
         default: "hopper/tests/test_lite_attention.py"
+      build-max-jobs:
+        description: "Optional override for MAX_JOBS in the wheel build"
+        required: false
+        type: string
+        default: ""
+      nvcc-threads:
+        description: "Optional override for NVCC_THREADS in the wheel build"
+        required: false
+        type: string
+        default: ""
+      nvcc-lineinfo:
+        description: "Optional override for LITE_ATTENTION_NVCC_LINEINFO"
+        required: false
+        type: string
+        default: ""
+      nvcc-resource-usage:
+        description: "Optional override for LITE_ATTENTION_NVCC_RESOURCE_USAGE"
+        required: false
+        type: string
+        default: ""
+      nvcc-split-compile:
+        description: "Optional override for LITE_ATTENTION_NVCC_SPLIT_COMPILE"
+        required: false
+        type: string
+        default: ""
+      skip-nvcc-gen-dependencies:
+        description: "Optional override for LITE_ATTENTION_SKIP_NVCC_GEN_DEPENDENCIES"
+        required: false
+        type: string
+        default: ""
       upload-to-release:
         description: "Upload wheel to this release"
         required: false
@@ -352,6 +382,24 @@ jobs:
             export CXX=g++
             # Keep CUDA_HOME stable so setup.py does not infer it from the ccache wrapper path.
             export CUDA_HOME=/usr/local/cuda
+          fi
+          if [[ -n "${{ inputs.build-max-jobs }}" ]]; then
+            export LITE_ATTENTION_BUILD_MAX_JOBS="${{ inputs.build-max-jobs }}"
+          fi
+          if [[ -n "${{ inputs.nvcc-threads }}" ]]; then
+            export LITE_ATTENTION_BUILD_NVCC_THREADS="${{ inputs.nvcc-threads }}"
+          fi
+          if [[ -n "${{ inputs.nvcc-lineinfo }}" ]]; then
+            export LITE_ATTENTION_NVCC_LINEINFO="${{ inputs.nvcc-lineinfo }}"
+          fi
+          if [[ -n "${{ inputs.nvcc-resource-usage }}" ]]; then
+            export LITE_ATTENTION_NVCC_RESOURCE_USAGE="${{ inputs.nvcc-resource-usage }}"
+          fi
+          if [[ -n "${{ inputs.nvcc-split-compile }}" ]]; then
+            export LITE_ATTENTION_NVCC_SPLIT_COMPILE="${{ inputs.nvcc-split-compile }}"
+          fi
+          if [[ -n "${{ inputs.skip-nvcc-gen-dependencies }}" ]]; then
+            export LITE_ATTENTION_SKIP_NVCC_GEN_DEPENDENCIES="${{ inputs.skip-nvcc-gen-dependencies }}"
           fi
           # Allow benchmark runs to override compile scheduling without changing
           # which kernels are built. Fall back to the existing safe defaults.
