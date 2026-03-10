@@ -84,6 +84,31 @@ on:
         required: false
         default: false
         type: boolean
+      build-max-jobs:
+        description: "Optional override for MAX_JOBS in each wheel build"
+        required: false
+        default: ""
+        type: string
+      nvcc-threads:
+        description: "Optional override for NVCC_THREADS in each wheel build"
+        required: false
+        default: ""
+        type: string
+      nvcc-lineinfo:
+        description: "Optional override for LITE_ATTENTION_NVCC_LINEINFO"
+        required: false
+        default: ""
+        type: string
+      nvcc-resource-usage:
+        description: "Optional override for LITE_ATTENTION_NVCC_RESOURCE_USAGE"
+        required: false
+        default: ""
+        type: string
+      nvcc-split-compile:
+        description: "Optional override for LITE_ATTENTION_NVCC_SPLIT_COMPILE"
+        required: false
+        default: ""
+        type: string
       skip-nvcc-gen-dependencies:
         description: "Optional override for LITE_ATTENTION_SKIP_NVCC_GEN_DEPENDENCIES"
         required: false
@@ -296,6 +321,11 @@ jobs:
       import-ccache-artifact: ${{ inputs.import-ccache-artifact }}
       import-ccache-bundle-path: ${{ inputs.import-ccache-bundle-path }}
       build-profile: ${{ inputs.build-profile }}
+      build-max-jobs: ${{ inputs.build-max-jobs }}
+      nvcc-threads: ${{ inputs.nvcc-threads }}
+      nvcc-lineinfo: ${{ inputs.nvcc-lineinfo }}
+      nvcc-resource-usage: ${{ inputs.nvcc-resource-usage }}
+      nvcc-split-compile: ${{ inputs.nvcc-split-compile }}
       skip-nvcc-gen-dependencies: ${{ inputs.skip-nvcc-gen-dependencies }}
       release-version: ${{ needs.prepare.outputs.release_version }}
       upload-to-release: ${{ inputs.upload-to-release }}

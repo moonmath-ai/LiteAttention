@@ -58,6 +58,36 @@ on:
         required: false
         default: "hopper/tests/test_lite_attention.py"
         type: string
+      wheel_build_max_jobs:
+        description: "Optional override for MAX_JOBS in each wheel build"
+        required: false
+        default: ""
+        type: string
+      wheel_nvcc_threads:
+        description: "Optional override for NVCC_THREADS in each wheel build"
+        required: false
+        default: ""
+        type: string
+      wheel_nvcc_lineinfo:
+        description: "Optional override for LITE_ATTENTION_NVCC_LINEINFO"
+        required: false
+        default: ""
+        type: string
+      wheel_nvcc_resource_usage:
+        description: "Optional override for LITE_ATTENTION_NVCC_RESOURCE_USAGE"
+        required: false
+        default: ""
+        type: string
+      wheel_nvcc_split_compile:
+        description: "Optional override for LITE_ATTENTION_NVCC_SPLIT_COMPILE"
+        required: false
+        default: ""
+        type: string
+      wheel_skip_nvcc_gen_dependencies:
+        description: "Optional override for LITE_ATTENTION_SKIP_NVCC_GEN_DEPENDENCIES"
+        required: false
+        default: ""
+        type: string
       batch_abi_wheels:
         description: "Batch TRUE/FALSE ABI wheels into one build job per python/cuda/torch tuple"
         required: false
@@ -380,6 +410,12 @@ jobs:
       wheel-test-target: ${{ inputs.wheel_test_target }}
       enable-ccache: ${{ inputs.enable_ccache }}
       ccache-namespace: ${{ inputs.ccache_namespace }}
+      build-max-jobs: ${{ inputs.wheel_build_max_jobs }}
+      nvcc-threads: ${{ inputs.wheel_nvcc_threads }}
+      nvcc-lineinfo: ${{ inputs.wheel_nvcc_lineinfo }}
+      nvcc-resource-usage: ${{ inputs.wheel_nvcc_resource_usage }}
+      nvcc-split-compile: ${{ inputs.wheel_nvcc_split_compile }}
+      skip-nvcc-gen-dependencies: ${{ inputs.wheel_skip_nvcc_gen_dependencies }}
       release-version: ${{ needs.get_release_tag.outputs.release_tag }}
       upload-to-release: false
 
