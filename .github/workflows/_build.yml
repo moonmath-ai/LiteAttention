@@ -517,7 +517,7 @@ jobs:
               EXIT_CODE=$ABI_EXIT_CODE
               echo "ABI ${ABI_VALUE} build failed with exit code ${ABI_EXIT_CODE}"
               echo "::endgroup::"
-              break
+              continue
             fi
 
             built_wheels=("dist-${ABI_VALUE}"/*.whl)
@@ -525,7 +525,7 @@ jobs:
               echo "::error::ABI ${ABI_VALUE} build completed without producing a wheel"
               EXIT_CODE=1
               echo "::endgroup::"
-              break
+              continue
             fi
 
             for built_wheel in "${built_wheels[@]}"; do
