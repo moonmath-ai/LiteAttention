@@ -58,6 +58,11 @@ on:
         required: false
         default: "hopper/tests/test_lite_attention.py"
         type: string
+      batch_abi_wheels:
+        description: "Batch TRUE/FALSE ABI wheels into one build job per python/cuda/torch tuple"
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   get_release_tag:
@@ -253,7 +258,7 @@ jobs:
         id: set
         run: |
           raw_matrix="$(env -u GITHUB_OUTPUT python3 .github/scripts/generate_wheel_matrix.py)"
-          grouped_matrix="$(RAW_MATRIX="$raw_matrix" python3 - <<'PY'
+          grouped_matrix="$(RAW_MATRIX="$raw_matrix" BATCH_ABI="${{ inputs.batch_abi_wheels }}" python3 - <<'PY'
           import itertools
           import json
           import os
@@ -291,36 +296,47 @@ jobs:
                   )
               ]
 
-          grouped = {}
+          batch_abi = os.environ.get("BATCH_ABI", "").lower() == "true"
           abi_order = {"FALSE": 0, "TRUE": 1}
-          for entry in entries:
-              key = tuple(entry[k] for k in GROUP_KEYS)
-              grouped_entry = grouped.setdefault(
-                  key,
-                  {
-                      **{k: v for k, v in entry.items() if k not in ABI_KEYS},
-                      "cxx11_abi_list": [],
-                  },
-              )
-              for extra_key, extra_value in entry.items():
-                  if extra_key in ABI_KEYS:
-                      continue
-                  if extra_key not in grouped_entry:
-                      grouped_entry[extra_key] = extra_value
-                  elif grouped_entry[extra_key] != extra_value:
-                      raise SystemExit(
-                          f"Cannot batch entries with conflicting '{extra_key}' values for tuple {key}: "
-                          f"{grouped_entry[extra_key]!r} vs {extra_value!r}"
-                      )
-              abi_values = entry.get("cxx11_abi_list")
-              if abi_values is None:
-                  abi_values = [entry["cxx11_abi"]]
-              for abi in abi_values:
-                  abi = str(abi)
-                  if abi not in grouped_entry["cxx11_abi_list"]:
-                      grouped_entry["cxx11_abi_list"].append(abi)
+          if batch_abi:
+              grouped = {}
+              for entry in entries:
+                  key = tuple(entry[k] for k in GROUP_KEYS)
+                  grouped_entry = grouped.setdefault(
+                      key,
+                      {
+                          **{k: v for k, v in entry.items() if k not in ABI_KEYS},
+                          "cxx11_abi_list": [],
+                      },
+                  )
+                  for extra_key, extra_value in entry.items():
+                      if extra_key in ABI_KEYS:
+                          continue
+                      if extra_key not in grouped_entry:
+                          grouped_entry[extra_key] = extra_value
+                      elif grouped_entry[extra_key] != extra_value:
+                          raise SystemExit(
+                              f"Cannot batch entries with conflicting '{extra_key}' values for tuple {key}: "
+                              f"{grouped_entry[extra_key]!r} vs {extra_value!r}"
+                          )
+                  abi_values = entry.get("cxx11_abi_list")
+                  if abi_values is None:
+                      abi_values = [entry["cxx11_abi"]]
+                  for abi in abi_values:
+                      abi = str(abi)
+                      if abi not in grouped_entry["cxx11_abi_list"]:
+                          grouped_entry["cxx11_abi_list"].append(abi)
+              include = list(grouped.values())
+          else:
+              include = []
+              for entry in entries:
+                  normalized = dict(entry)
+                  abi_values = normalized.get("cxx11_abi_list")
+                  if abi_values is None:
+                      abi_values = [normalized["cxx11_abi"]]
+                  normalized["cxx11_abi_list"] = [str(abi) for abi in abi_values]
+                  include.append(normalized)
 
-          include = list(grouped.values())
           for entry in include:
               entry["cxx11_abi_list"].sort(key=lambda abi: (abi_order.get(abi, 99), abi))
 
