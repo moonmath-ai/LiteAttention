@@ -145,25 +145,22 @@ jobs:
             echo "resolved_cxx11_abi=${{ inputs.cxx11_abi }}" >> "$GITHUB_OUTPUT"
             echo "resolved_cxx11_abi_list_json=" >> "$GITHUB_OUTPUT"
           else
-            ABI_LIST_JSON='${{ inputs.cxx11_abi_list_json }}' python3 - <<'PY' >> "$GITHUB_OUTPUT"
-          import json
-          import os
-
-          abi_order = {"FALSE": 0, "TRUE": 1}
-          raw = json.loads(os.environ["ABI_LIST_JSON"])
-          if not isinstance(raw, list) or not raw:
-              raise SystemExit("cxx11_abi_list_json must decode to a non-empty JSON array")
-
-          seen = []
-          for abi in raw:
-              abi = str(abi)
-              if abi not in seen:
-                  seen.append(abi)
-
-          seen.sort(key=lambda abi: (abi_order.get(abi, 99), abi))
-          print(f"resolved_cxx11_abi={'_'.join(seen)}")
-          print(f"resolved_cxx11_abi_list_json={json.dumps(seen, separators=(',', ':'))}")
-          PY
+            ABI_LIST_JSON='${{ inputs.cxx11_abi_list_json }}' GITHUB_OUTPUT="$GITHUB_OUTPUT" python3 -c 'import json, os
+            abi_order = {"FALSE": 0, "TRUE": 1}
+            raw = json.loads(os.environ["ABI_LIST_JSON"])
+            if not isinstance(raw, list) or not raw:
+                raise SystemExit("cxx11_abi_list_json must decode to a non-empty JSON array")
+            seen = []
+            for abi in raw:
+                abi = str(abi)
+                if abi not in seen:
+                    seen.append(abi)
+            seen.sort(key=lambda abi: (abi_order.get(abi, 99), abi))
+            payload = [
+                f"resolved_cxx11_abi={'_'.join(seen)}",
+                f"resolved_cxx11_abi_list_json={json.dumps(seen, separators=(',', ':'))}",
+            ]
+            open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8").write("\\n".join(payload) + "\\n")'
           fi
 
   build-wheel:

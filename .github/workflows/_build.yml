@@ -240,39 +240,23 @@ jobs:
         run: |
           ABI_LIST_JSON='${{ inputs.cxx11_abi_list_json }}'
           if [[ -z "$ABI_LIST_JSON" ]]; then
-            ABI_LIST_JSON="$(python3 - <<'PY'
-          import json
-          import os
-
-          print(json.dumps([os.environ["DEFAULT_ABI"]], separators=(",", ":")))
-          PY
-            )"
+            ABI_LIST_JSON="$(DEFAULT_ABI="${DEFAULT_ABI}" python3 -c 'import json, os; print(json.dumps([os.environ["DEFAULT_ABI"]], separators=(",", ":")))' )"
           fi
 
-          ABI_LIST_JSON="$ABI_LIST_JSON" python3 - <<'PY'
-          import json
-          import os
-
+          ABI_LIST_JSON="$ABI_LIST_JSON" python3 -c 'import json, os
           abis = json.loads(os.environ["ABI_LIST_JSON"])
           if not isinstance(abis, list) or not abis:
               raise SystemExit("cxx11_abi_list_json must decode to a non-empty JSON array")
-
           seen = []
           for abi in abis:
               abi = str(abi)
               if abi not in seen:
                   seen.append(abi)
-
           payload = json.dumps(seen, separators=(",", ":"))
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
-              fh.write(f"list_json={payload}\n")
-              fh.write(f"count={len(seen)}\n")
-              if len(seen) == 1:
-                  artifact_label = f"cxx11abi{seen[0]}"
-              else:
-                  artifact_label = "cxx11abis" + "_".join(seen)
-              fh.write(f"artifact_label={artifact_label}\n")
-          PY
+          artifact_label = f"cxx11abi{seen[0]}" if len(seen) == 1 else "cxx11abis" + "_".join(seen)
+          open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8").write(
+              f"list_json={payload}\ncount={len(seen)}\nartifact_label={artifact_label}\n"
+          )'
         env:
           DEFAULT_ABI: ${{ inputs.cxx11_abi }}
 
@@ -510,11 +494,7 @@ jobs:
           echo "Compile settings: MAX_JOBS=${MAX_JOBS} NVCC_THREADS=${NVCC_THREADS}"
           export LITE_ATTENTION_FORCE_BUILD="TRUE"
           if [[ "${{ inputs.build-profile }}" == "true" ]]; then
-            USE_CCACHE_WRAPPERS="${USE_CCACHE_WRAPPERS}" TIME_BIN="${TIME_BIN:-}" TIME_BIN_KIND="${TIME_BIN_KIND:-missing}" python3 - <<'PY'
-            import json
-            import os
-            import shutil
-
+            USE_CCACHE_WRAPPERS="${USE_CCACHE_WRAPPERS}" TIME_BIN="${TIME_BIN:-}" TIME_BIN_KIND="${TIME_BIN_KIND:-missing}" python3 -c 'import json, os, shutil
             runtime_info = {
                 "use_ccache_wrappers": os.environ["USE_CCACHE_WRAPPERS"],
                 "time_bin": os.environ.get("TIME_BIN", ""),
@@ -528,19 +508,12 @@ jobs:
                 "lite_attention_nvcc_per_tu_time": os.environ.get("LITE_ATTENTION_NVCC_PER_TU_TIME", ""),
                 "lite_attention_nvcc_fdevice_time_trace": os.environ.get("LITE_ATTENTION_NVCC_FDEVICE_TIME_TRACE", ""),
             }
-            with open("build-profile/runtime_info.json", "w", encoding="utf-8") as fh:
-                json.dump(runtime_info, fh, indent=2)
-            PY
+            open("build-profile/runtime_info.json", "w", encoding="utf-8").write(json.dumps(runtime_info, indent=2))'
           fi
 
-          mapfile -t ABI_VALUES < <(ABI_LIST_JSON="$ABI_LIST_JSON" python3 - <<'PY'
-          import json
-          import os
-
+          mapfile -t ABI_VALUES < <(ABI_LIST_JSON="$ABI_LIST_JSON" python3 -c 'import json, os
           for abi in json.loads(os.environ["ABI_LIST_JSON"]):
-              print(str(abi))
-          PY
-          )
+              print(str(abi))')
 
           ABI_COUNT=${#ABI_VALUES[@]}
           if (( ABI_COUNT > 1 )); then
