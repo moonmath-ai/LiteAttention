@@ -185,8 +185,12 @@ jobs:
         run: |
           git config --global --add safe.directory '*' || true
           git config --global --add safe.directory "${GITHUB_WORKSPACE}" || true
-          git submodule sync --recursive
-          git submodule update --init --recursive
+          if git rev-parse --show-toplevel >/dev/null 2>&1; then
+            git submodule sync --recursive
+            git submodule update --init --recursive
+          else
+            echo "::warning::ACT workspace is not a git checkout; skipping submodule sync/update and copying the mounted workspace as-is."
+          fi
           mkdir -p "${BUILD_WHEEL_DIR}"
           rsync -a --delete \
             --exclude '.git' \
@@ -775,7 +779,7 @@ jobs:
           tar -cvf build.tar . --atime-preserve=replace
 
       - name: Test built wheel
-        if: ${{ always() && steps.py_compat.outputs.skip_build != 'true' && steps.torch_install.outputs.skip_build != 'true' && inputs.run-wheel-tests }}
+        if: ${{ always() && steps.py_compat.outputs.skip_build != 'true' && steps.torch_install.outputs.skip_build != 'true' && inputs.run-wheel-tests && steps.build_wheel.outputs.build_exit_code == '0' }}
         working-directory: ${{ env.BUILD_WHEEL_DIR }}
         run: |
           python3 -m pip install pytest numpy
@@ -798,7 +802,7 @@ jobs:
           ls dist
 
       - name: Upload wheel as artifact
-        if: ${{ always() && !env.ACT && steps.py_compat.outputs.skip_build != 'true' && steps.torch_install.outputs.skip_build != 'true' }}
+        if: ${{ always() && !env.ACT && steps.py_compat.outputs.skip_build != 'true' && steps.torch_install.outputs.skip_build != 'true' && steps.build_wheel.outputs.build_exit_code == '0' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: wheel-py${{ inputs.python-version }}-cu${{ inputs.cuda-version }}-torch${{ inputs.torch-version }}-${{ steps.abi_batch.outputs.artifact_label }}
