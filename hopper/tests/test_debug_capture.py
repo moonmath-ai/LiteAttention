@@ -305,8 +305,8 @@ def test_capture_batch_out_of_range(qkv, tmp_path, max_batch_size):
     for mod_data in data["modules"].values():
         # pct has actual batch items (BATCH=1)
         assert mod_data["pct_per_head"].shape[1] == BATCH
-        # skip_lists capture all batches from write_list (max_batch_size)
-        assert mod_data["skip_lists"].shape[1] == max_batch_size
+        # skip_lists capture actual batch_size, not max_batch_size
+        assert mod_data["skip_lists"].shape[1] == BATCH
 
 
 # ===========================================================================

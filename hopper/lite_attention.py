@@ -1442,11 +1442,13 @@ class LiteAttention(nn.Module, ConfigurableModule):
         qtiles = self.ceil_div(query.shape[1], kBlockM)
         ktiles = self.ceil_div(key.shape[1], kBlockN)
 
-        # --- Skip list capture (always all heads/batches for replay compatibility) ---
+        # --- Skip list capture (actual batch_size, not max_batch_size) ---
+        # Only save valid batch slots so replay expansion (broadcast) works
+        # correctly when replaying with a larger batch.
         if capture_skip_lists:
             if lite_attention_disabled:
                 captured_skip = torch.zeros(
-                    self.max_batch_size,
+                    batch_size,
                     num_heads,
                     qtiles,
                     ktiles + 2,
@@ -1456,7 +1458,9 @@ class LiteAttention(nn.Module, ConfigurableModule):
                 captured_skip[:, :, :, 1] = ktiles - 1
                 captured_skip[:, :, :, 2] = -1
             else:
-                captured_skip = write_list.clone().to(dtype=torch.int16, device="cpu")
+                captured_skip = (
+                    write_list[:batch_size].clone().to(dtype=torch.int16, device="cpu")
+                )
 
         # --- Compute attention maps per head ---
         attn_maps = []
