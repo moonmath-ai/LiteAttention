@@ -243,7 +243,7 @@ jobs:
             ABI_LIST_JSON="$(DEFAULT_ABI="${DEFAULT_ABI}" python3 -c 'import json, os; print(json.dumps([os.environ["DEFAULT_ABI"]], separators=(",", ":")))' )"
           fi
 
-          ABI_LIST_JSON="$ABI_LIST_JSON" python3 -c 'import json, os; abis = json.loads(os.environ["ABI_LIST_JSON"]); if not isinstance(abis, list) or not abis: raise SystemExit("cxx11_abi_list_json must decode to a non-empty JSON array"); seen = []; [seen.append(abi) for abi in map(str, abis) if abi not in seen]; payload = json.dumps(seen, separators=(",", ":")); artifact_label = f"cxx11abi{seen[0]}" if len(seen) == 1 else "cxx11abis" + "_".join(seen); open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8").write(f"list_json={payload}\ncount={len(seen)}\nartifact_label={artifact_label}\n")'
+          ABI_LIST_JSON="$ABI_LIST_JSON" python3 -c 'import json, os; abis = json.loads(os.environ["ABI_LIST_JSON"]); assert isinstance(abis, list) and abis, "cxx11_abi_list_json must decode to a non-empty JSON array"; seen = []; [seen.append(abi) for abi in map(str, abis) if abi not in seen]; payload = json.dumps(seen, separators=(",", ":")); artifact_label = f"cxx11abi{seen[0]}" if len(seen) == 1 else "cxx11abis" + "_".join(seen); open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8").write(f"list_json={payload}\ncount={len(seen)}\nartifact_label={artifact_label}\n")'
         env:
           DEFAULT_ABI: ${{ inputs.cxx11_abi }}
 
