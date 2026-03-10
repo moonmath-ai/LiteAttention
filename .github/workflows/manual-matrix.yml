@@ -69,6 +69,16 @@ on:
         required: false
         default: "manual-matrix"
         type: string
+      import-ccache-artifact:
+        description: "Optional artifact name containing ccache-bundle.tar.zst to import before each build job"
+        required: false
+        default: ""
+        type: string
+      import-ccache-bundle-path:
+        description: "Optional direct path to a ccache-bundle.tar.zst file (for local act/manual testing)"
+        required: false
+        default: ""
+        type: string
       build-profile:
         description: "Enable detailed NVCC/Ninja profiling artifacts and summary"
         required: false
@@ -283,6 +293,8 @@ jobs:
       wheel-test-target: ${{ inputs.wheel-test-target }}
       enable-ccache: ${{ inputs.enable-ccache }}
       ccache-namespace: ${{ inputs.ccache-namespace }}
+      import-ccache-artifact: ${{ inputs.import-ccache-artifact }}
+      import-ccache-bundle-path: ${{ inputs.import-ccache-bundle-path }}
       build-profile: ${{ inputs.build-profile }}
       skip-nvcc-gen-dependencies: ${{ inputs.skip-nvcc-gen-dependencies }}
       release-version: ${{ needs.prepare.outputs.release_version }}
