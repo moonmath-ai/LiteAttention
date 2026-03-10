@@ -91,7 +91,7 @@ on:
       batch_abi_wheels:
         description: "Batch TRUE/FALSE ABI wheels into one build job per python/cuda/torch tuple"
         required: false
-        default: false
+        default: true
         type: boolean
 
 jobs:

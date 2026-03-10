@@ -414,7 +414,7 @@ jobs:
       cxx11_abi: ${{ join(matrix.cxx11_abi_list, '_') }}
       cxx11_abi_list_json: ${{ toJSON(matrix.cxx11_abi_list) }}
       runner-labels-json: ${{ inputs.runner-labels-json }}
-      run-wheel-tests: false
+      run-wheel-tests: ${{ inputs.run-wheel-tests }}
       wheel-test-target: ${{ inputs.wheel-test-target }}
       enable-ccache: ${{ inputs.enable-ccache }}
       ccache-namespace: ${{ inputs.ccache-namespace }}
@@ -428,7 +428,7 @@ jobs:
       nvcc-split-compile: ${{ inputs.nvcc-split-compile }}
       skip-nvcc-gen-dependencies: ${{ inputs.skip-nvcc-gen-dependencies }}
       release-version: ${{ needs.prepare.outputs.release_version }}
-      upload-to-release: false
+      upload-to-release: ${{ inputs.upload-to-release }}
 
   build-wheel:
     name: Build wheel (manual matrix)
@@ -441,7 +441,7 @@ jobs:
       # GitHub uses the resolved workflow input / repo variable here.
       # act may still ignore dynamic expressions in this field.
       max-parallel: ${{ fromJson(needs.prepare.outputs.max_parallel) }}
-      matrix: ${{ fromJson(inputs.seed-ccache-before-matrix && needs.prepare.outputs.fanout_matrix || needs.prepare.outputs.matrix) }}
+      matrix: ${{ fromJson((needs.seed-ccache.result == 'success' && needs.prepare.outputs.fanout_matrix) || needs.prepare.outputs.matrix) }}
     uses: ./.github/workflows/_build.yml
     with:
       docker-image: nvidia/cuda:${{ matrix.cuda-version }}-${{ matrix.os-version }}

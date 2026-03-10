@@ -7,6 +7,7 @@ import stat
 import re
 import shutil
 import ast
+import functools
 from pathlib import Path
 from packaging.version import parse, Version
 import platform
@@ -419,10 +420,40 @@ def nvcc_profile_command_prefix() -> str:
     """Optional per-translation-unit wall-time capture via /usr/bin/time."""
     if not _env_flag_true("LITE_ATTENTION_NVCC_PER_TU_TIME", "0"):
         return ""
-    if not os.path.exists("/usr/bin/time"):
+    time_bin = shutil.which("time")
+    if time_bin is None:
         warnings.warn("LITE_ATTENTION_NVCC_PER_TU_TIME requested, but /usr/bin/time was not found; skipping per-TU wall-time capture.")
         return ""
-    return '/usr/bin/time -f "wall_s=%e user_s=%U sys_s=%S maxrss_kb=%M exit=%x" -o $out.nvcc_walltime.txt '
+    return f'{time_bin} -f "wall_s=%e user_s=%U sys_s=%S maxrss_kb=%M exit=%x" -o $out.nvcc_walltime.txt '
+
+
+@functools.lru_cache(maxsize=1)
+def _nvcc_help_text() -> str:
+    candidates = []
+    env_nvcc = os.getenv("PYTORCH_NVCC", "").strip()
+    if env_nvcc:
+        candidates.append(env_nvcc)
+    if CUDA_HOME is not None:
+        candidates.append(os.path.join(CUDA_HOME, "bin", f"nvcc{exe_extension}"))
+    candidates.append("nvcc")
+
+    seen = set()
+    for candidate in candidates:
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        try:
+            out = subprocess.check_output([candidate, "--help"], stderr=subprocess.STDOUT, text=True)
+            if out:
+                return out.lower()
+        except Exception:
+            continue
+    return ""
+
+
+def nvcc_supports_option(option: str) -> bool:
+    help_text = _nvcc_help_text()
+    return bool(help_text) and option.lower() in help_text
 
 
 def nvcc_profile_command_args() -> str:
@@ -431,7 +462,14 @@ def nvcc_profile_command_args() -> str:
     if _env_flag_true("LITE_ATTENTION_NVCC_TIME", "0"):
         args.append("--time=$out.nvcc_time.csv")
     if _env_flag_true("LITE_ATTENTION_NVCC_FDEVICE_TIME_TRACE", "0"):
-        args.append("--fdevice-time-trace=$out.fdevice_time_trace.json")
+        # CUDA 12.4 and older nvcc builds do not support --fdevice-time-trace.
+        if nvcc_supports_option("--fdevice-time-trace"):
+            # Let nvcc derive one trace file per output object (e.g. foo.o.json).
+            args.append("--fdevice-time-trace=-")
+        else:
+            warnings.warn(
+                "LITE_ATTENTION_NVCC_FDEVICE_TIME_TRACE requested, but this nvcc does not support --fdevice-time-trace; skipping fdevice trace."
+            )
     return (" " + " ".join(args)) if args else ""
 
 

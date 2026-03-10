@@ -159,6 +159,7 @@ jobs:
             python3-pip \
             rsync \
             ccache \
+            time \
             zstd
 
       - name: Install GitHub CLI (release upload only)
@@ -435,7 +436,15 @@ jobs:
           export PATH=/usr/local/nvidia/bin:/usr/local/nvidia/lib64:$PATH
           export LD_LIBRARY_PATH=/usr/local/nvidia/lib64:/usr/local/cuda/lib64:$LD_LIBRARY_PATH
 
-          if [[ "${{ inputs.enable-ccache }}" == "true" ]]; then
+          USE_CCACHE_WRAPPERS="${{ inputs.enable-ccache }}"
+          if [[ "${{ inputs.build-profile }}" == "true" ]]; then
+            # Keep profiling runs on the direct nvcc path so timing/trace output
+            # is not distorted by the ccache wrapper layer and nvcc can resolve
+            # its helper binaries relative to the real compiler.
+            USE_CCACHE_WRAPPERS="false"
+          fi
+
+          if [[ "${USE_CCACHE_WRAPPERS}" == "true" ]]; then
             REAL_NVCC=$(command -v nvcc)
             WRAPPER_DIR="${GITHUB_WORKSPACE}/.ci-bin"
             WRAPPER_NVCC="${WRAPPER_DIR}/nvcc"
@@ -451,6 +460,8 @@ jobs:
             export CXX=g++
             # Keep CUDA_HOME stable so setup.py does not infer it from the ccache wrapper path.
             export CUDA_HOME=/usr/local/cuda
+          elif [[ "${{ inputs.enable-ccache }}" == "true" ]]; then
+            echo "Profiling run: bypassing ccache wrappers for direct nvcc execution."
           fi
           if [[ -n "${{ inputs.build-max-jobs }}" ]]; then
             export LITE_ATTENTION_BUILD_MAX_JOBS="${{ inputs.build-max-jobs }}"
@@ -556,7 +567,7 @@ jobs:
               if [ -d build ]; then
                 while IFS= read -r f; do
                   cp --parents "$f" "${abi_profile_dir}/"
-                done < <(find build -type f \( -name '*.nvcc_time.csv' -o -name '*.fdevice_time_trace.json' -o -name '*.nvcc_walltime.txt' -o -name '.ninja_log' \))
+                done < <(find build -type f \( -name '*.nvcc_time.csv' -o -name '*.json' -o -name '*.nvcc_walltime.txt' -o -name '.ninja_log' \))
               fi
             fi
             echo "::endgroup::"
@@ -671,10 +682,19 @@ jobs:
             return value, canonical_unit_token(m.group(2))
 
           nvcc_time_files = gather("*.nvcc_time.csv")
-          fdevice_files = gather("*.fdevice_time_trace.json")
+          trace_json_candidates = gather("*.json")
+          fdevice_files = []
           tu_wall_files = gather("*.nvcc_walltime.txt")
           ninja_logs = gather(".ninja_log")
           setup_py_wall_files = sorted(out_dir.glob("setup_py_*.walltime.txt"))
+
+          for p in trace_json_candidates:
+            try:
+              parsed = json.loads(p.read_text(encoding="utf-8", errors="ignore"))
+            except Exception:
+              continue
+            if isinstance(parsed, dict) and isinstance(parsed.get("traceEvents"), list):
+              fdevice_files.append(p)
 
           setup_py_walls = []
           for p in setup_py_wall_files:
@@ -743,7 +763,8 @@ jobs:
                 if not reader.fieldnames:
                   continue
                 stage_key = pick_header(reader.fieldnames, ["phase", "step", "activity", "tool", "name"])
-                time_key = pick_header(reader.fieldnames, ["duration", "elapsed", "time", "ms"])
+                time_key = pick_header(reader.fieldnames, ["duration", "elapsed", "time", "metric", "ms"])
+                unit_key = pick_header(reader.fieldnames, ["unit"])
                 if not stage_key or not time_key:
                   continue
                 header_unit_name, _ = infer_time_unit(time_key)
@@ -758,6 +779,8 @@ jobs:
                   stage = canonicalize_stage((row.get(stage_key) or "unknown"))
                   raw_val = (row.get(time_key) or "").strip()
                   parsed_val, parsed_unit = parse_time_value(raw_val)
+                  if parsed_unit is None and unit_key:
+                    parsed_unit = canonical_unit_token(row.get(unit_key) or "")
                   if parsed_val is None:
                     try:
                       parsed_val = float(raw_val)
