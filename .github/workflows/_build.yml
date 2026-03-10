@@ -604,13 +604,16 @@ jobs:
 
           out_dir = Path("build-profile")
           out_dir.mkdir(parents=True, exist_ok=True)
-          snapshot_roots = sorted(p for p in out_dir.glob("abi-*/raw/build") if p.exists())
-          search_roots = snapshot_roots if snapshot_roots else ([Path("build")] if Path("build").exists() else [])
+          snapshot_roots = []
+          for p in sorted(out_dir.glob("abi-*/raw/build")):
+            if p.exists():
+              snapshot_roots.append((abi_from_path(p), p))
+          search_roots = snapshot_roots if snapshot_roots else ([("unscoped", Path("build"))] if Path("build").exists() else [])
 
           def gather(pattern):
             files = []
-            for root in search_roots:
-              files.extend(sorted(root.rglob(pattern)))
+            for abi_label, root in search_roots:
+              files.extend((abi_label, p) for p in sorted(root.rglob(pattern)))
             return files
 
           def abi_from_path(path: Path) -> str:
@@ -691,7 +694,7 @@ jobs:
           ninja_logs = gather(".ninja_log")
           setup_py_wall_files = sorted(out_dir.glob("setup_py_*.walltime.txt"))
 
-          for p in trace_json_candidates:
+          for _, p in trace_json_candidates:
             try:
               parsed = json.loads(p.read_text(encoding="utf-8", errors="ignore"))
             except Exception:
@@ -708,16 +711,16 @@ jobs:
           setup_py_walls.sort(key=lambda x: x["wall_s"], reverse=True)
 
           tu_wall = []
-          for p in tu_wall_files:
+          for abi_label, p in tu_wall_files:
             text = p.read_text(encoding="utf-8", errors="ignore")
             m = re.search(r"wall_s=([0-9]+(?:\\.[0-9]+)?)", text)
             if not m:
               continue
-            tu_wall.append({"file": str(p), "wall_s": float(m.group(1))})
+            tu_wall.append({"abi": abi_label, "file": str(p), "wall_s": float(m.group(1))})
           tu_wall.sort(key=lambda x: x["wall_s"], reverse=True)
 
           ninja_entries = []
-          for log in ninja_logs:
+          for abi_label, log in ninja_logs:
             for line in log.read_text(encoding="utf-8", errors="ignore").splitlines():
               if not line or line.startswith("#"):
                 continue
@@ -732,6 +735,7 @@ jobs:
               output = parts[3] if len(parts) > 3 else parts[2]
               ninja_entries.append(
                 {
+                  "abi": abi_label,
                   "log": str(log),
                   "output": output,
                   "duration_s": max(0.0, (end_ms - start_ms) / 1000.0),
@@ -743,6 +747,8 @@ jobs:
           stage_totals_s = {}
           stage_totals_by_abi_raw = {}
           stage_totals_by_abi_s = {}
+          stage_totals_by_tu_raw = {}
+          stage_totals_by_tu_s = {}
           ptxas_total_raw = 0.0
           ptxas_total_s = 0.0
           units_detected = {}
@@ -759,7 +765,7 @@ jobs:
                   return k_orig
             return None
 
-          for p in nvcc_time_files:
+          for abi_label, p in nvcc_time_files:
             try:
               with p.open("r", encoding="utf-8", errors="ignore", newline="") as fh:
                 reader = csv.DictReader(fh)
@@ -768,19 +774,23 @@ jobs:
                 stage_key = pick_header(reader.fieldnames, ["phase", "step", "activity", "tool", "name"])
                 time_key = pick_header(reader.fieldnames, ["duration", "elapsed", "time", "metric", "ms"])
                 unit_key = pick_header(reader.fieldnames, ["unit"])
+                source_key = pick_header(reader.fieldnames, ["source file"])
                 if not stage_key or not time_key:
                   continue
                 header_unit_name, _ = infer_time_unit(time_key)
                 header_unit = header_unit_name if header_unit_name != "unknown" else None
-                abi = abi_from_path(p)
+                abi = abi_label or abi_from_path(p)
                 stage_totals_by_abi_raw.setdefault(abi, {})
                 stage_totals_by_abi_s.setdefault(abi, {})
+                stage_totals_by_tu_raw.setdefault(abi, {})
+                stage_totals_by_tu_s.setdefault(abi, {})
                 row_units = set()
                 rows_without_explicit_unit = 0
                 file_rows = []
                 for row in reader:
                   stage = canonicalize_stage((row.get(stage_key) or "unknown"))
                   raw_val = (row.get(time_key) or "").strip()
+                  source_name = (row.get(source_key) or "").strip() if source_key else ""
                   parsed_val, parsed_unit = parse_time_value(raw_val)
                   if parsed_unit is None and unit_key:
                     parsed_unit = canonical_unit_token(row.get(unit_key) or "")
@@ -793,7 +803,7 @@ jobs:
                     row_units.add(parsed_unit)
                   else:
                     rows_without_explicit_unit += 1
-                  file_rows.append((stage, parsed_val))
+                  file_rows.append((stage, parsed_val, source_name or str(p)))
 
                 if not file_rows:
                   continue
@@ -819,6 +829,7 @@ jobs:
                   units_detected[effective_unit] = units_detected.get(effective_unit, 0) + 1
                   nvcc_time_files_normalized.append(
                     {
+                      "abi": abi,
                       "file": str(p),
                       "unit": effective_unit,
                       "rows": len(file_rows),
@@ -829,6 +840,7 @@ jobs:
                   scale = None
                   nvcc_time_files_ambiguous.append(
                     {
+                      "abi": abi,
                       "file": str(p),
                       "rows": len(file_rows),
                       "header_time_column": time_key,
@@ -838,15 +850,19 @@ jobs:
                     }
                   )
 
-                for stage, t in file_rows:
+                for stage, t, source_name in file_rows:
                   parsed_rows += 1
                   stage_totals_raw[stage] = stage_totals_raw.get(stage, 0.0) + t
                   stage_totals_by_abi_raw[abi][stage] = stage_totals_by_abi_raw[abi].get(stage, 0.0) + t
+                  stage_totals_by_tu_raw[abi].setdefault(source_name, {})
+                  stage_totals_by_tu_raw[abi][source_name][stage] = stage_totals_by_tu_raw[abi][source_name].get(stage, 0.0) + t
                   if scale is not None:
                     t_s = t * scale
                     rows_seconds_applied += 1
                     stage_totals_s[stage] = stage_totals_s.get(stage, 0.0) + t_s
                     stage_totals_by_abi_s[abi][stage] = stage_totals_by_abi_s[abi].get(stage, 0.0) + t_s
+                    stage_totals_by_tu_s[abi].setdefault(source_name, {})
+                    stage_totals_by_tu_s[abi][source_name][stage] = stage_totals_by_tu_s[abi][source_name].get(stage, 0.0) + t_s
                   if stage == "ptxas":
                     ptxas_total_raw += t
                     if scale is not None:
@@ -868,6 +884,22 @@ jobs:
             abi: sorted(totals.items(), key=lambda kv: kv[1], reverse=True)
             for abi, totals in stage_totals_by_abi_s.items()
           }
+          top_tu_stage_totals_s = []
+          stage_totals_by_tu_s_sorted = {}
+          for abi, sources in stage_totals_by_tu_s.items():
+            stage_totals_by_tu_s_sorted[abi] = {}
+            for source_name, totals in sources.items():
+              sorted_totals = sorted(totals.items(), key=lambda kv: kv[1], reverse=True)
+              stage_totals_by_tu_s_sorted[abi][source_name] = sorted_totals
+              top_tu_stage_totals_s.append(
+                {
+                  "abi": abi,
+                  "source": source_name,
+                  "total_s": sum(value for _, value in sorted_totals),
+                  "stages": sorted_totals,
+                }
+              )
+          top_tu_stage_totals_s.sort(key=lambda row: row["total_s"], reverse=True)
 
           summary = {
             "counts": {
@@ -896,6 +928,8 @@ jobs:
             "nvcc_stage_totals_s": sorted(stage_totals_s.items(), key=lambda kv: kv[1], reverse=True),
             "nvcc_stage_totals_by_abi_raw": stage_totals_by_abi_raw,
             "nvcc_stage_totals_by_abi_s": stage_totals_by_abi_s,
+            "top_nvcc_tu_stage_totals_s": top_tu_stage_totals_s[:20],
+            "nvcc_stage_totals_by_tu_s": stage_totals_by_tu_s_sorted,
           }
 
           (out_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
@@ -930,11 +964,11 @@ jobs:
           md.append("")
           md.append("## Top per-TU walltime")
           for row in tu_wall[:10]:
-            md.append(f"- {row['wall_s']:.3f}s  {row['file']}")
+            md.append(f"- ABI {row['abi']}  {row['wall_s']:.3f}s  {row['file']}")
           md.append("")
           md.append("## Top Ninja edges")
           for row in ninja_entries[:10]:
-            md.append(f"- {row['duration_s']:.3f}s  {row['output']}")
+            md.append(f"- ABI {row['abi']}  {row['duration_s']:.3f}s  {row['output']}")
           md.append("")
           md.append("## Top NVCC stages (raw units from nvcc --time)")
           for stage, value in sorted(stage_totals_raw.items(), key=lambda kv: kv[1], reverse=True)[:10]:
@@ -945,6 +979,17 @@ jobs:
             for abi, totals in sorted(stage_totals_by_abi_s.items()):
               md.append(f"- ABI {abi}:")
               for stage, value in totals[:5]:
+                md.append(f"  - {value:.6f}s  {stage}")
+          if top_tu_stage_totals_s:
+            md.append("")
+            md.append("## Top NVCC per-TU totals (seconds)")
+            for row in top_tu_stage_totals_s[:10]:
+              md.append(f"- ABI {row['abi']}  {row['total_s']:.6f}s  {row['source']}")
+            md.append("")
+            md.append("## Per-TU NVCC stage breakdown (seconds)")
+            for row in top_tu_stage_totals_s[:5]:
+              md.append(f"- ABI {row['abi']}  {row['source']}:")
+              for stage, value in row["stages"][:5]:
                 md.append(f"  - {value:.6f}s  {stage}")
           md.append("")
           md.append("_Raw profiling artifacts are under build-profile/abi-<ABI>/raw._")
