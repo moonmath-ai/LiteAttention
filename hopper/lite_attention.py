@@ -1369,7 +1369,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
         forward passes. Independent of detailed map capture.
 
         Args:
-            write_list: The write skip list [batch, heads, qtiles, ktiles+1],
+            write_list: The write skip list [batch, heads, qtiles, ktiles+2],
                 or None for disabled timesteps.
             threshold: The threshold used for this forward pass.
             query: Query tensor [batch, seq_len_q, heads, head_dim].
@@ -1449,7 +1449,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
                     batch_size,
                     num_heads,
                     qtiles,
-                    ktiles + 1,
+                    ktiles + 2,
                     dtype=torch.int16,
                 )
                 captured_skip[:, :, :, 0] = 2
@@ -2179,9 +2179,9 @@ class LiteAttentionRegistry(ModuleRegistry):
                     )
                 skip_lists = mod_data[
                     "skip_lists"
-                ]  # [T, B_sel, H_sel, qtiles, ktiles+1]
-                B_sel, H_sel, qtiles, ktiles_plus_1 = skip_lists.shape[1:]
-                ktiles = ktiles_plus_1 - 1
+                ]  # [T, B_sel, H_sel, qtiles, ktiles+2]
+                B_sel, H_sel, qtiles, ktiles_plus_2 = skip_lists.shape[1:]
+                ktiles = ktiles_plus_2 - 2
                 compute_all = self._make_compute_all(B_sel, H_sel, qtiles, ktiles)
                 active_write_lists = [
                     skip_lists[t] for t in range(n_disabled, skip_lists.shape[0])
@@ -2194,7 +2194,7 @@ class LiteAttentionRegistry(ModuleRegistry):
     @staticmethod
     def _make_compute_all(B: int, H: int, qtiles: int, ktiles: int) -> torch.Tensor:
         """Build a "compute all tiles" skip list buffer."""
-        buf = torch.zeros(B, H, qtiles, ktiles + 1, dtype=torch.int16)
+        buf = torch.zeros(B, H, qtiles, ktiles + 2, dtype=torch.int16)
         buf[:, :, :, 0] = 2
         buf[:, :, :, 1] = ktiles - 1
         buf[:, :, :, 2] = -1
@@ -2221,7 +2221,7 @@ class LiteAttentionRegistry(ModuleRegistry):
                 (their entries are skipped).
 
         Returns:
-            List of ``[B, H, qtiles, ktiles+1]`` int16 tensors, starting with
+            List of ``[B, H, qtiles, ktiles+2]`` int16 tensors, starting with
             a "compute all" initial buffer at index 0.
         """
         T_total, B, H, qtiles, ktiles = qk_block_map.shape
@@ -2236,7 +2236,7 @@ class LiteAttentionRegistry(ModuleRegistry):
             replay_idx = t - n_disabled + 1
             phase_true = replay_idx % 2 == 0
 
-            skip_list = torch.zeros(B, H, qtiles, ktiles + 1, dtype=torch.int16)
+            skip_list = torch.zeros(B, H, qtiles, ktiles + 2, dtype=torch.int16)
 
             for b in range(B):
                 for h in range(H):

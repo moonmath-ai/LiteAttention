@@ -316,7 +316,7 @@ def test_capture_batch_out_of_range(qkv, tmp_path):
 def test_skip_list_to_mask_basic():
     """Verify mask decoding from a known skip list pattern."""
     ktiles = 8
-    row = torch.zeros(ktiles + 1, dtype=torch.int16)
+    row = torch.zeros(ktiles + 2, dtype=torch.int16)
     row[0] = 4
     row[1] = 7
     row[2] = 3

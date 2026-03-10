@@ -40,7 +40,7 @@ def _decode_skip_list_ranges(row: torch.Tensor):
     """Decode one skip list row into a list of (start_tile, end_tile) ranges.
 
     Args:
-        row: 1-D tensor of shape ``[ktiles + 1]``.
+        row: 1-D tensor of shape ``[ktiles + 2]``.
             Format: ``[length, r1, r2, r1, r2, ..., uninit...]``
 
     Returns:
@@ -71,9 +71,9 @@ def skip_list_to_mask(skip_list_row: torch.Tensor, ktiles: int) -> torch.Tensor:
     """Decode a 2-D skip list slice into a binary mask.
 
     Args:
-        skip_list_row: Tensor of shape ``[qtiles, ktiles + 1]`` — one skip list
+        skip_list_row: Tensor of shape ``[qtiles, ktiles + 2]`` — one skip list
             for a single (batch, head) pair.
-        ktiles: Number of key tiles (``skip_list_row.shape[-1] - 1``).
+        ktiles: Number of key tiles (``skip_list_row.shape[-1] - 2``).
 
     Returns:
         Boolean tensor of shape ``[qtiles, ktiles]`` where ``True`` means the
@@ -183,7 +183,7 @@ def render_skip_images(
                         plt.axvline(x=x - 0.5, color="black", linewidth=0.2, alpha=0.7)
 
                     # Overlay computed tile rectangles
-                    row_skip = skip_lists[ti, bi_idx, hi_idx]  # [qtiles, ktiles+1]
+                    row_skip = skip_lists[ti, bi_idx, hi_idx]  # [qtiles, ktiles+2]
                     for qi, row in enumerate(row_skip):
                         for lo, hi in _decode_skip_list_ranges(row):
                             rect = plt.Rectangle(

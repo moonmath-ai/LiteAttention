@@ -133,7 +133,7 @@ def test_skip_nothing(qkv, use_int8):
     # Warm up
     run_attention_warmup(attn, q, k, v, 2)
 
-    read_list = attn.read_list  # [batch, heads, qtiles, ktiles+1]
+    read_list = attn.read_list  # [batch, heads, qtiles, ktiles+2]
     assert (read_list[..., 0] == 2).all(), "Should contain exactly 1 range"
     rl_range = read_list[..., 1:3]
     orig_range = read_list_original[..., 1:3]
@@ -352,7 +352,7 @@ def test_consistency(qkv):
         new_percentage = attn.calc_percentage(skip_list).item()
         assert new_percentage <= percentage, "Percentage should not increase"
         percentage = new_percentage
-        # Check that the list length isn't bigger than ktiles + 1
+        # Check that the list length isn't bigger than ktiles + 2
         assert_skip_list_length_valid(skip_list)
         # Check that we don't have empty or negative ranges
         assert_no_empty_or_negative_ranges(skip_list)
