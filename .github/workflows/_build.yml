@@ -89,6 +89,7 @@ jobs:
       CCACHE_MAXSIZE: 8G
       CCACHE_COMPILERCHECK: content
       CCACHE_NOHASHDIR: "true"
+      PIP_CACHE_DIR: /root/.cache/pip
       PIP_CACHE_OPT: --no-cache-dir
     name: Build wheel (${{ inputs.release-version }}-${{ inputs.python-version }}-${{ inputs.cuda-version }}-${{ inputs.torch-version }}-${{ inputs.cxx11_abi }})
     steps:
@@ -193,6 +194,22 @@ jobs:
           prefix="ccache-${{ inputs.ccache-namespace }}-${{ runner.os }}-${{ runner.arch }}-${image_id}-py${{ inputs.python-version }}-cu${{ inputs.cuda-version }}-torch${{ inputs.torch-version }}-abi${{ inputs.cxx11_abi }}"
           echo "prefix=${prefix}-" >> "$GITHUB_OUTPUT"
           echo "key=${prefix}-${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Configure pip cache for GitHub
+        if: ${{ !env.ACT }}
+        run: |
+          mkdir -p "${PIP_CACHE_DIR}"
+          echo "PIP_CACHE_OPT=" >> "$GITHUB_ENV"
+
+      - name: Restore pip download cache
+        if: ${{ !env.ACT }}
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.PIP_CACHE_DIR }}
+          key: pip-${{ runner.os }}-${{ runner.arch }}-py${{ inputs.python-version }}-cu${{ inputs.cuda-version }}-torch${{ inputs.torch-version }}
+          restore-keys: |
+            pip-${{ runner.os }}-${{ runner.arch }}-py${{ inputs.python-version }}-cu${{ inputs.cuda-version }}-
+            pip-${{ runner.os }}-${{ runner.arch }}-py${{ inputs.python-version }}-
 
       - name: Restore compatible ccache
         id: restore_ccache
@@ -388,6 +405,13 @@ jobs:
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ${{ steps.ccache_key.outputs.key }}
+
+      - name: Save pip download cache
+        if: ${{ !env.ACT && steps.py_compat.outputs.skip_build != 'true' && steps.build_wheel.outputs.build_exit_code == '0' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.PIP_CACHE_DIR }}
+          key: pip-${{ runner.os }}-${{ runner.arch }}-py${{ inputs.python-version }}-cu${{ inputs.cuda-version }}-torch${{ inputs.torch-version }}
 
       - name: Log build logs after timeout
         if: always() && steps.build_wheel.outputs.build_exit_code == 124
