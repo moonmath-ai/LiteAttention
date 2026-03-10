@@ -115,6 +115,9 @@ defaults:
 jobs:
   build-wheel:
     runs-on: ${{ fromJSON(inputs.runner-labels-json) }}
+    # GitHub-hosted jobs top out at 6h. Batched ABI jobs need an explicit cap
+    # below that so teardown/upload steps still have room to run.
+    timeout-minutes: ${{ contains(inputs.cxx11_abi, '_') && 355 || 360 }}
     container:
       image: ${{ inputs.docker-image }}
       # Build-only jobs do not need host GPU access, and avoiding --gpus all
@@ -491,6 +494,18 @@ jobs:
           PY
           )
 
+          ABI_COUNT=${#ABI_VALUES[@]}
+          if (( ABI_COUNT > 1 )); then
+            JOB_TIMEOUT_MIN=355
+            BUILD_BUDGET_MIN=335
+            # Leave headroom for setup, wheel post-processing, and artifact uploads.
+            ABI_TIMEOUT_MIN=$(( BUILD_BUDGET_MIN / ABI_COUNT ))
+          else
+            JOB_TIMEOUT_MIN=360
+            ABI_TIMEOUT_MIN=300
+          fi
+          echo "Batch timeout budget: job=${JOB_TIMEOUT_MIN}m abi_count=${ABI_COUNT} per_abi=${ABI_TIMEOUT_MIN}m"
+
           mkdir -p dist
           EXIT_CODE=0
           shopt -s nullglob
@@ -504,13 +519,13 @@ jobs:
             if [[ "${{ inputs.build-profile }}" == "true" ]]; then
               if command -v /usr/bin/time >/dev/null 2>&1; then
                 /usr/bin/time -f "wall_s=%e user_s=%U sys_s=%S maxrss_kb=%M exit=%x" -o "build-profile/setup_py_${ABI_VALUE}.walltime.txt" \
-                  timeout 5h python3 setup.py bdist_wheel --dist-dir="dist-${ABI_VALUE}" || ABI_EXIT_CODE=$?
+                  timeout "${ABI_TIMEOUT_MIN}m" python3 setup.py bdist_wheel --dist-dir="dist-${ABI_VALUE}" || ABI_EXIT_CODE=$?
               else
                 echo "::warning::/usr/bin/time not found; setup.py walltime file will not be recorded."
-                timeout 5h python3 setup.py bdist_wheel --dist-dir="dist-${ABI_VALUE}" || ABI_EXIT_CODE=$?
+                timeout "${ABI_TIMEOUT_MIN}m" python3 setup.py bdist_wheel --dist-dir="dist-${ABI_VALUE}" || ABI_EXIT_CODE=$?
               fi
             else
-              timeout 5h python3 setup.py bdist_wheel --dist-dir="dist-${ABI_VALUE}" || ABI_EXIT_CODE=$?
+              timeout "${ABI_TIMEOUT_MIN}m" python3 setup.py bdist_wheel --dist-dir="dist-${ABI_VALUE}" || ABI_EXIT_CODE=$?
             fi
 
             if [ $ABI_EXIT_CODE -ne 0 ]; then
@@ -597,17 +612,63 @@ jobs:
               return "ptxas"
             return lowered
 
+          UNIT_SCALE = {
+            "ns": 1e-9,
+            "us": 1e-6,
+            "ms": 1e-3,
+            "s": 1.0,
+          }
+          UNIT_ALIASES = {
+            "ns": "ns",
+            "nsec": "ns",
+            "nsecs": "ns",
+            "nanosecond": "ns",
+            "nanoseconds": "ns",
+            "us": "us",
+            "usec": "us",
+            "usecs": "us",
+            "microsecond": "us",
+            "microseconds": "us",
+            "ms": "ms",
+            "msec": "ms",
+            "msecs": "ms",
+            "millisecond": "ms",
+            "milliseconds": "ms",
+            "s": "s",
+            "sec": "s",
+            "secs": "s",
+            "second": "s",
+            "seconds": "s",
+          }
+
+          def canonical_unit_token(token: str):
+            key = (token or "").strip().lower().replace("μ", "u").replace("µ", "u")
+            key = key.strip("()[]{}:;,")
+            if not key:
+              return None
+            return UNIT_ALIASES.get(key)
+
           def infer_time_unit(fieldname: str):
-            key = (fieldname or "").strip().lower()
-            if "nanosecond" in key or key.endswith("_ns") or " ns" in key:
-              return "ns", 1e-9
-            if "microsecond" in key or key.endswith("_us") or " us" in key:
-              return "us", 1e-6
-            if "millisecond" in key or key.endswith("_ms") or " ms" in key:
-              return "ms", 1e-3
-            if "second" in key or key.endswith("_s") or key == "seconds":
-              return "s", 1.0
+            key = (fieldname or "").strip().lower().replace("μ", "u").replace("µ", "u")
+            for token in re.split(r"[^a-z0-9]+", key):
+              unit = canonical_unit_token(token)
+              if unit is not None:
+                return unit, UNIT_SCALE[unit]
             return "unknown", None
+
+          def parse_time_value(raw_value: str):
+            text = (raw_value or "").strip()
+            if not text:
+              return None, None
+            normalized = text.replace(",", "").replace("μ", "u").replace("µ", "u")
+            m = re.match(r"^([+-]?(?:[0-9]+(?:[.][0-9]*)?|[.][0-9]+)(?:[eE][+-]?[0-9]+)?)[ \t]*([A-Za-z]*)$", normalized)
+            if not m:
+              return None, None
+            try:
+              value = float(m.group(1))
+            except ValueError:
+              return None, None
+            return value, canonical_unit_token(m.group(2))
 
           nvcc_time_files = gather("*.nvcc_time.csv")
           fdevice_files = gather("*.fdevice_time_trace.json")
@@ -662,6 +723,9 @@ jobs:
           ptxas_total_raw = 0.0
           ptxas_total_s = 0.0
           units_detected = {}
+          nvcc_time_files_normalized = []
+          nvcc_time_files_ambiguous = []
+          rows_seconds_applied = 0
           parsed_rows = 0
 
           def pick_header(fieldnames, candidates):
@@ -682,23 +746,79 @@ jobs:
                 time_key = pick_header(reader.fieldnames, ["duration", "elapsed", "time", "ms"])
                 if not stage_key or not time_key:
                   continue
-                unit_name, scale = infer_time_unit(time_key)
-                units_detected[unit_name] = units_detected.get(unit_name, 0) + 1
+                header_unit_name, _ = infer_time_unit(time_key)
+                header_unit = header_unit_name if header_unit_name != "unknown" else None
                 abi = abi_from_path(p)
                 stage_totals_by_abi_raw.setdefault(abi, {})
                 stage_totals_by_abi_s.setdefault(abi, {})
+                row_units = set()
+                rows_without_explicit_unit = 0
+                file_rows = []
                 for row in reader:
                   stage = canonicalize_stage((row.get(stage_key) or "unknown"))
-                  val = (row.get(time_key) or "").strip()
-                  try:
-                    t = float(val)
-                  except ValueError:
-                    continue
+                  raw_val = (row.get(time_key) or "").strip()
+                  parsed_val, parsed_unit = parse_time_value(raw_val)
+                  if parsed_val is None:
+                    try:
+                      parsed_val = float(raw_val)
+                    except ValueError:
+                      continue
+                  if parsed_unit is not None:
+                    row_units.add(parsed_unit)
+                  else:
+                    rows_without_explicit_unit += 1
+                  file_rows.append((stage, parsed_val))
+
+                if not file_rows:
+                  continue
+
+                effective_unit = None
+                unit_reason = ""
+                if len(row_units) > 1:
+                  unit_reason = "mixed_row_units"
+                elif len(row_units) == 1:
+                  row_unit = next(iter(row_units))
+                  if header_unit is None and rows_without_explicit_unit > 0:
+                    unit_reason = "partial_row_units_missing_without_header"
+                  elif header_unit is not None and header_unit != row_unit:
+                    unit_reason = "header_row_unit_mismatch"
+                  else:
+                    effective_unit = row_unit
+                elif header_unit is not None:
+                  effective_unit = header_unit
+                else:
+                  unit_reason = "missing_unit"
+
+                if effective_unit is not None:
+                  units_detected[effective_unit] = units_detected.get(effective_unit, 0) + 1
+                  nvcc_time_files_normalized.append(
+                    {
+                      "file": str(p),
+                      "unit": effective_unit,
+                      "rows": len(file_rows),
+                    }
+                  )
+                  scale = UNIT_SCALE[effective_unit]
+                else:
+                  scale = None
+                  nvcc_time_files_ambiguous.append(
+                    {
+                      "file": str(p),
+                      "rows": len(file_rows),
+                      "header_time_column": time_key,
+                      "header_unit": header_unit_name,
+                      "row_units": sorted(row_units),
+                      "reason": unit_reason or "unknown",
+                    }
+                  )
+
+                for stage, t in file_rows:
                   parsed_rows += 1
                   stage_totals_raw[stage] = stage_totals_raw.get(stage, 0.0) + t
                   stage_totals_by_abi_raw[abi][stage] = stage_totals_by_abi_raw[abi].get(stage, 0.0) + t
                   if scale is not None:
                     t_s = t * scale
+                    rows_seconds_applied += 1
                     stage_totals_s[stage] = stage_totals_s.get(stage, 0.0) + t_s
                     stage_totals_by_abi_s[abi][stage] = stage_totals_by_abi_s[abi].get(stage, 0.0) + t_s
                   if stage == "ptxas":
@@ -707,6 +827,12 @@ jobs:
                       ptxas_total_s += t * scale
             except Exception:
               continue
+
+          seconds_coverage_ratio = (
+            float(len(nvcc_time_files_normalized)) / float(len(nvcc_time_files))
+            if nvcc_time_files
+            else 1.0
+          )
 
           stage_totals_by_abi_raw = {
             abi: sorted(totals.items(), key=lambda kv: kv[1], reverse=True)
@@ -721,13 +847,20 @@ jobs:
             "counts": {
               "profile_snapshot_roots": len(search_roots),
               "nvcc_time_files": len(nvcc_time_files),
+              "nvcc_time_files_normalized": len(nvcc_time_files_normalized),
+              "nvcc_time_files_ambiguous": len(nvcc_time_files_ambiguous),
               "fdevice_time_trace_files": len(fdevice_files),
               "tu_walltime_files": len(tu_wall_files),
               "ninja_logs": len(ninja_logs),
               "setup_py_walltime_files": len(setup_py_wall_files),
               "nvcc_time_rows_parsed": parsed_rows,
+              "nvcc_time_rows_seconds_applied": rows_seconds_applied,
             },
             "nvcc_time_units_detected": units_detected,
+            "nvcc_time_seconds_coverage_ratio": seconds_coverage_ratio,
+            "nvcc_time_unit_normalization_strict": len(nvcc_time_files_ambiguous) == 0,
+            "nvcc_time_ambiguous_files": nvcc_time_files_ambiguous,
+            "nvcc_time_normalized_files": nvcc_time_files_normalized,
             "setup_py_wall_s": setup_py_walls,
             "ptxas_total_from_nvcc_time_raw": ptxas_total_raw,
             "ptxas_total_from_nvcc_time_s": ptxas_total_s,
@@ -750,10 +883,20 @@ jobs:
           md.append(f"- per-TU walltime files: {len(tu_wall_files)}")
           md.append(f"- ninja logs: {len(ninja_logs)}")
           md.append(f"- parsed nvcc --time rows: {parsed_rows}")
+          md.append(f"- nvcc --time rows with normalized seconds: {rows_seconds_applied}")
           md.append(f"- detected nvcc --time units: {json.dumps(units_detected, sort_keys=True)}")
+          md.append(f"- nvcc --time files with unambiguous units: {len(nvcc_time_files_normalized)}/{len(nvcc_time_files)}")
+          md.append(f"- nvcc seconds coverage ratio: {seconds_coverage_ratio:.3f}")
           md.append(f"- ptxas total from nvcc --time (raw units): {ptxas_total_raw}")
           if ptxas_total_s:
             md.append(f"- ptxas total from nvcc --time (seconds): {ptxas_total_s:.6f}")
+          if nvcc_time_files_ambiguous:
+            md.append("")
+            md.append("## NVCC unit normalization ambiguities")
+            for row in nvcc_time_files_ambiguous[:20]:
+              md.append(
+                f"- {row['reason']}  header={row['header_unit']}  row_units={','.join(row['row_units']) or 'none'}  {row['file']}"
+              )
           md.append("")
           md.append("## setup.py walltime by ABI")
           for row in setup_py_walls[:10]:

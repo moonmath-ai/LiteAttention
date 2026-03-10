@@ -69,6 +69,11 @@ on:
         required: false
         default: "manual-matrix"
         type: string
+      seed-ccache-before-matrix:
+        description: "Run one seed build first and import its ccache bundle into all matrix jobs"
+        required: false
+        default: false
+        type: boolean
       import-ccache-artifact:
         description: "Optional artifact name containing ccache-bundle.tar.zst to import before each build job"
         required: false
@@ -139,6 +144,8 @@ jobs:
       matrix: ${{ steps.set.outputs.matrix }}
       release_version: ${{ steps.set.outputs.release_version }}
       max_parallel: ${{ steps.set.outputs.max_parallel }}
+      seed_matrix: ${{ steps.set.outputs.seed_matrix }}
+      fanout_matrix: ${{ steps.set.outputs.fanout_matrix }}
     steps:
       - name: Checkout Repository
         if: ${{ !env.ACT }}
@@ -194,8 +201,8 @@ jobs:
                   )
               ]
 
-          grouped = {}
           abi_order = {"FALSE": 0, "TRUE": 1}
+          grouped = {}
           for entry in entries:
               key = tuple(entry[k] for k in GROUP_KEYS)
               grouped_entry = grouped.setdefault(
@@ -224,6 +231,7 @@ jobs:
                       grouped_entry["cxx11_abi_list"].append(abi)
 
           include = list(grouped.values())
+
           for entry in include:
               entry["cxx11_abi_list"].sort(key=lambda abi: (abi_order.get(abi, 99), abi))
 
@@ -231,6 +239,99 @@ jobs:
           PY
           )"
           echo "matrix=${grouped_matrix}" >> "$GITHUB_OUTPUT"
+          GROUPED_MATRIX="$grouped_matrix" python3 - <<'PY'
+          import json
+          import os
+
+          def py_sort_key(ver: str):
+              parts = ver.split(".")
+              major = int(parts[0]) if len(parts) > 0 and parts[0].isdigit() else 0
+              minor = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
+              return (major, minor, ver)
+
+          def seed_priority(ver: str):
+              # Prefer cp310 seed jobs for broad wheel coverage, then lowest available.
+              return (0, 0, ver) if ver == "3.10" else (1, *py_sort_key(ver))
+
+          matrix = json.loads(os.environ["GROUPED_MATRIX"])
+          entries = matrix.get("include") or []
+          seed_enabled = os.environ.get("SEED_ENABLED", "").lower() == "true"
+
+          seed_matrix = {"include": []}
+          fanout_matrix = {"include": entries}
+
+          if seed_enabled and entries:
+              normalized_entries = []
+              for entry in entries:
+                  row = dict(entry)
+                  abi_values = row.get("cxx11_abi_list")
+                  if abi_values is None:
+                      abi_values = [row.get("cxx11_abi", "")]
+                  abi_values = [str(abi) for abi in abi_values if str(abi)]
+                  if not abi_values:
+                      raise SystemExit("Resolved matrix entry has no ABI values")
+                  row["cxx11_abi_list"] = abi_values
+                  row["cxx11_abi"] = "_".join(abi_values)
+                  normalized_entries.append(row)
+
+              # Cohort key intentionally excludes python so one seed can fan out to all pythons.
+              cohorts = {}
+              for row in normalized_entries:
+                  key = (
+                      str(row["os-version"]),
+                      str(row["cuda-version"]),
+                      str(row["torch-version"]),
+                      str(row["cxx11_abi"]),
+                  )
+                  cohorts.setdefault(key, []).append(row)
+
+              selected_seed_keys = set()
+              seed_rows = []
+              fanout_rows = []
+              for key in sorted(cohorts):
+                  cohort_rows = cohorts[key]
+                  seed_row = min(
+                      cohort_rows,
+                      key=lambda r: seed_priority(str(r["python-version"])),
+                  )
+                  selected_key = (
+                      str(seed_row["os-version"]),
+                      str(seed_row["python-version"]),
+                      str(seed_row["cuda-version"]),
+                      str(seed_row["torch-version"]),
+                      str(seed_row["cxx11_abi"]),
+                  )
+                  selected_seed_keys.add(selected_key)
+                  seed_rows.append(seed_row)
+
+                  artifact = (
+                      f"ccache-{seed_row['python-version']}"
+                      f"-cu{seed_row['cuda-version']}"
+                      f"-torch{seed_row['torch-version']}"
+                      f"-cxx11abi{seed_row['cxx11_abi']}"
+                  )
+
+                  for row in cohort_rows:
+                      row_key = (
+                          str(row["os-version"]),
+                          str(row["python-version"]),
+                          str(row["cuda-version"]),
+                          str(row["torch-version"]),
+                          str(row["cxx11_abi"]),
+                      )
+                      if row_key in selected_seed_keys:
+                          continue
+                      fanout_row = dict(row)
+                      fanout_row["seed_ccache_artifact"] = artifact
+                      fanout_rows.append(fanout_row)
+
+              seed_matrix = {"include": seed_rows}
+              fanout_matrix = {"include": fanout_rows}
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"seed_matrix={json.dumps(seed_matrix, separators=(',', ':'))}\n")
+              fh.write(f"fanout_matrix={json.dumps(fanout_matrix, separators=(',', ':'))}\n")
+          PY
           if [[ "${{ inputs.upload-to-release }}" == "true" ]]; then
             echo "release_version=${{ inputs.release-tag }}" >> $GITHUB_OUTPUT
           else
@@ -256,6 +357,7 @@ jobs:
           OS_VERSION: ${{ inputs.os-version }}
           PRESET: ${{ inputs.preset }}
           MATRIX_JSON_INPUT: ${{ inputs.matrix-json }}
+          SEED_ENABLED: ${{ inputs.seed-ccache-before-matrix }}
 
   prefetch-images:
     name: Prefetch docker images
@@ -294,9 +396,44 @@ jobs:
             docker pull "${image}"
           done </tmp/manual-matrix-images.txt
 
+  seed-ccache:
+    name: Seed ccache (manual matrix)
+    if: ${{ inputs.seed-ccache-before-matrix && inputs.enable-ccache && inputs.import-ccache-bundle-path == '' }}
+    needs: [prepare, prefetch-images]
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.prepare.outputs.seed_matrix) }}
+    uses: ./.github/workflows/_build.yml
+    with:
+      docker-image: nvidia/cuda:${{ matrix.cuda-version }}-${{ matrix.os-version }}
+      python-version: ${{ matrix.python-version }}
+      cuda-version: ${{ matrix.cuda-version }}
+      torch-version: ${{ matrix.torch-version }}
+      cxx11_abi: ${{ join(matrix.cxx11_abi_list, '_') }}
+      cxx11_abi_list_json: ${{ toJSON(matrix.cxx11_abi_list) }}
+      runner-labels-json: ${{ inputs.runner-labels-json }}
+      run-wheel-tests: false
+      wheel-test-target: ${{ inputs.wheel-test-target }}
+      enable-ccache: ${{ inputs.enable-ccache }}
+      ccache-namespace: ${{ inputs.ccache-namespace }}
+      import-ccache-artifact: ${{ inputs.import-ccache-artifact }}
+      import-ccache-bundle-path: ${{ inputs.import-ccache-bundle-path }}
+      build-profile: ${{ inputs.build-profile }}
+      build-max-jobs: ${{ inputs.build-max-jobs }}
+      nvcc-threads: ${{ inputs.nvcc-threads }}
+      nvcc-lineinfo: ${{ inputs.nvcc-lineinfo }}
+      nvcc-resource-usage: ${{ inputs.nvcc-resource-usage }}
+      nvcc-split-compile: ${{ inputs.nvcc-split-compile }}
+      skip-nvcc-gen-dependencies: ${{ inputs.skip-nvcc-gen-dependencies }}
+      release-version: ${{ needs.prepare.outputs.release_version }}
+      upload-to-release: false
+
   build-wheel:
     name: Build wheel (manual matrix)
-    needs: [prepare, prefetch-images]
+    if: ${{ always() && needs.prepare.result == 'success' && needs.prefetch-images.result == 'success' && (needs.seed-ccache.result == 'success' || needs.seed-ccache.result == 'skipped') }}
+    needs: [prepare, prefetch-images, seed-ccache]
     permissions:
       contents: write
     strategy:
@@ -304,7 +441,7 @@ jobs:
       # GitHub uses the resolved workflow input / repo variable here.
       # act may still ignore dynamic expressions in this field.
       max-parallel: ${{ fromJson(needs.prepare.outputs.max_parallel) }}
-      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+      matrix: ${{ fromJson(inputs.seed-ccache-before-matrix && needs.prepare.outputs.fanout_matrix || needs.prepare.outputs.matrix) }}
     uses: ./.github/workflows/_build.yml
     with:
       docker-image: nvidia/cuda:${{ matrix.cuda-version }}-${{ matrix.os-version }}
@@ -318,7 +455,7 @@ jobs:
       wheel-test-target: ${{ inputs.wheel-test-target }}
       enable-ccache: ${{ inputs.enable-ccache }}
       ccache-namespace: ${{ inputs.ccache-namespace }}
-      import-ccache-artifact: ${{ inputs.import-ccache-artifact }}
+      import-ccache-artifact: ${{ (inputs.seed-ccache-before-matrix && inputs.enable-ccache && inputs.import-ccache-bundle-path == '' && needs.seed-ccache.result == 'success') && matrix.seed_ccache_artifact || inputs.import-ccache-artifact }}
       import-ccache-bundle-path: ${{ inputs.import-ccache-bundle-path }}
       build-profile: ${{ inputs.build-profile }}
       build-max-jobs: ${{ inputs.build-max-jobs }}
