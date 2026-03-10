@@ -25,7 +25,7 @@ DEFAULT_LOCK_FILE = Path("/tmp/liteattention_notify_once.lock")
 PROTON_DIR = Path("/root/.codex/skills/proton-notify")
 PROTON_SCRIPT = PROTON_DIR / "scripts" / "proton_notify.js"
 PROTON_CREDS = PROTON_DIR / "creds.txt"
-TEXT_WIDTH = 78
+TEXT_WIDTH = 72
 
 
 def utc_now() -> datetime:
@@ -165,6 +165,17 @@ def short_eta(eta_text: str) -> str:
     return eta_text.split(" with", 1)[0].strip()
 
 
+def subject_header(payload: dict[str, Any]) -> str:
+    best_header = clean_text(payload.get("best_header", ""))
+    if best_header.lower().startswith("eta ") and "vs unopt" in best_header.lower():
+        return best_header
+    eta = clean_text(payload.get("eta_short", "")) or "unknown"
+    speedup = clean_text(payload.get("speedup", "")) or "n/a"
+    if speedup not in {"n/a", ""} and not speedup.startswith(("+", "-")):
+        speedup = f"+{speedup}"
+    return f"eta {eta} | {speedup} vs unopt"
+
+
 def infer_blocker(experiment_bullets: list[str], lanes: list[tuple[str, str]]) -> str:
     haystack = experiment_bullets + [value for _, value in lanes]
     for item in haystack:
@@ -244,13 +255,14 @@ def build_delta_lines(current: dict[str, Any], previous: dict[str, Any] | None) 
 
 def tldr_line(payload: dict[str, Any], dt: datetime) -> str:
     templates = [
-        "TL;DR: Main work is {primary}. ETA stays {eta}.",
-        "TL;DR: Current focus is {focus}. Main risk is {blocker}.",
-        "TL;DR: This hour is on {primary}. Best estimate remains {eta}.",
-        "TL;DR: Work remains centered on {focus}. The current constraint is {blocker}.",
+        "TL;DR: {hour} main work is {primary}. ETA stays {eta}.",
+        "TL;DR: {hour} focus is {focus}. Main risk is {blocker}.",
+        "TL;DR: {hour} work is on {primary}. Best estimate remains {eta}.",
+        "TL;DR: {hour} work remains centered on {focus}. The current constraint is {blocker}.",
     ]
     template = templates[dt.hour % len(templates)]
     return template.format(
+        hour=short_hour_label(dt),
         primary=payload["primary_task"],
         eta=payload["eta_short"],
         focus=payload["focus_tag"],
@@ -259,22 +271,28 @@ def tldr_line(payload: dict[str, Any], dt: datetime) -> str:
 
 
 def build_subject(payload: dict[str, Any], dt: datetime) -> str:
-    return (
-        f"LiteAttention | ETA {payload['eta_short']} | {payload['speedup']} | "
-        f"{payload['focus_tag']} | {short_hour_label(dt)}"
-    )
+    return f"{subject_header(payload)} | {payload['focus_tag']} | {short_hour_label(dt)}"
+
+
+def is_no_change_delta(delta_lines: list[str]) -> bool:
+    return delta_lines == ["No material change in the last hour."]
 
 
 def build_body(payload: dict[str, Any], delta_lines: list[str], dt: datetime) -> str:
+    header = subject_header(payload)
+    compact = is_no_change_delta(delta_lines)
     lines = [
         "LiteAttention hourly status",
-        f"ETA / speedup: {payload['eta_short']} | {payload['speedup']}",
+        f"Header: {header}",
         "",
         fill_text(tldr_line(payload, dt)),
         "",
-        "Doing now",
     ]
-    lines.extend(render_bullets([payload["primary_task"], *payload["secondary_tasks"][:2]]))
+    lines.append("Doing now")
+    doing_now = [payload["primary_task"]]
+    if not compact:
+        doing_now.extend(payload["secondary_tasks"][:2])
+    lines.extend(render_bullets(doing_now))
 
     lines.extend(["", "What changed"])
     lines.extend(render_bullets(delta_lines[:4]))
@@ -289,8 +307,8 @@ def build_body(payload: dict[str, Any], delta_lines: list[str], dt: datetime) ->
         render_bullets(
             [
                 f"Current-task ETA: {payload['eta']}",
-                f"ETA/% header: {payload['best_header']}",
-                f"Top blocker: {payload['top_blocker']}",
+                f"ETA/% header: {header}",
+                "Top blocker: none" if compact and payload["top_blocker"] == "none" else f"Top blocker: {payload['top_blocker']}",
             ]
         )
     )
@@ -301,12 +319,10 @@ def build_body(payload: dict[str, Any], delta_lines: list[str], dt: datetime) ->
             "Idea list",
         ]
     )
-    lines.extend(
-        render_bullets(["; ".join(payload["ideas"][:6])])
-    )
+    lines.extend(render_bullets(payload["ideas"][: (2 if compact else 4)]))
 
     branch_head = f"{payload['branch']} @ {payload['head']}"
-    if delta_lines != ["No material change in the last hour."] or not payload["status_exists"]:
+    if not compact or not payload["status_exists"]:
         lines.extend(["", "Meta"])
         lines.extend(render_bullets([f"Branch/head: {branch_head}"]))
     return "\n".join(lines).strip() + "\n"
@@ -316,6 +332,17 @@ def build_html_preview(payload: dict[str, Any], delta_lines: list[str], dt: date
     def li(items: list[str]) -> str:
         return "".join(f"<li>{html_lib.escape(clean_text(item))}</li>" for item in items)
 
+    header = subject_header(payload)
+    compact = is_no_change_delta(delta_lines)
+    doing_now = [payload["primary_task"]]
+    if not compact:
+        doing_now.extend(payload["secondary_tasks"][:2])
+    ideas = payload["ideas"][: (2 if compact else 4)]
+    eta_risk = [
+        f"Current-task ETA: {payload['eta']}",
+        f"ETA/% header: {header}",
+        "Top blocker: none" if compact and payload["top_blocker"] == "none" else f"Top blocker: {payload['top_blocker']}",
+    ]
     return f"""\
 <!doctype html>
 <html lang="en">
@@ -328,13 +355,13 @@ def build_html_preview(payload: dict[str, Any], delta_lines: list[str], dt: date
     <div style="max-width:640px;margin:0 auto;padding:16px;">
       <div style="background:#ffffff;border-radius:18px;padding:18px;box-shadow:0 6px 24px rgba(18,32,51,0.08);">
         <div style="font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#5b6b82;margin-bottom:8px;">LiteAttention hourly status</div>
-        <div style="font-size:15px;line-height:1.45;margin-bottom:12px;">ETA / speedup: {html_lib.escape(payload['eta_short'])} | {html_lib.escape(payload['speedup'])}</div>
+        <div style="font-size:15px;line-height:1.45;margin-bottom:12px;">Header: {html_lib.escape(header)}</div>
         <div style="font-size:18px;line-height:1.35;font-weight:700;margin-bottom:14px;">{html_lib.escape(tldr_line(payload, dt))}</div>
 
         <div style="margin-bottom:14px;">
           <div style="font-size:12px;font-weight:700;text-transform:uppercase;color:#5b6b82;margin-bottom:6px;">Doing now</div>
           <ul style="margin:0;padding-left:18px;line-height:1.5;">
-            {li([payload['primary_task'], *payload['secondary_tasks'][:2]])}
+            {li(doing_now)}
           </ul>
         </div>
 
@@ -348,13 +375,15 @@ def build_html_preview(payload: dict[str, Any], delta_lines: list[str], dt: date
         <div style="margin-bottom:14px;">
           <div style="font-size:12px;font-weight:700;text-transform:uppercase;color:#5b6b82;margin-bottom:6px;">ETA / risk</div>
           <ul style="margin:0;padding-left:18px;line-height:1.5;">
-            {li([f"Current-task ETA: {payload['eta']}", f"ETA/% header: {payload['best_header']}", f"Top blocker: {payload['top_blocker']}"])}
+            {li(eta_risk)}
           </ul>
         </div>
 
         <div style="margin-bottom:14px;">
           <div style="font-size:12px;font-weight:700;text-transform:uppercase;color:#5b6b82;margin-bottom:6px;">Idea list</div>
-          <div style="font-size:13px;line-height:1.55;color:#22344f;">{html_lib.escape('; '.join(payload['ideas'][:6]))}</div>
+          <ul style="margin:0;padding-left:18px;line-height:1.5;">
+            {li(ideas)}
+          </ul>
         </div>
 
         <div style="font-size:12px;color:#5b6b82;">Branch/head: {html_lib.escape(payload['branch'])} @ {html_lib.escape(payload['head'])}</div>
@@ -366,20 +395,24 @@ def build_html_preview(payload: dict[str, Any], delta_lines: list[str], dt: date
 
 
 def fallback_body(payload: dict[str, Any]) -> str:
+    header = subject_header(payload)
     return (
         "LiteAttention hourly status\n\n"
         "TL;DR: notifier fallback mode is active. Current work is continuing, "
         "but the structured summary did not validate.\n\n"
+        f"Header: {header}\n\n"
         "Doing now\n"
         f"{fill_text(payload['primary_task'], initial_indent='- ', subsequent_indent='  ')}\n\n"
         "What changed\n"
         f"{fill_text('Fallback path used because the rendered body failed validation.', initial_indent='- ', subsequent_indent='  ')}\n\n"
         "ETA / risk\n"
         f"{fill_text(f'Current-task ETA: {payload['eta']}', initial_indent='- ', subsequent_indent='  ')}\n"
-        f"{fill_text(f'ETA/% header: {payload['best_header']}', initial_indent='- ', subsequent_indent='  ')}\n"
+        f"{fill_text(f'ETA/% header: {header}', initial_indent='- ', subsequent_indent='  ')}\n"
         f"{fill_text('Top blocker: notifier render failure', initial_indent='- ', subsequent_indent='  ')}\n\n"
         "Idea list\n"
-        f"{fill_text('restore payload quality; verify sender health; keep hourly delivery alive', initial_indent='- ', subsequent_indent='  ')}\n"
+        f"{fill_text('restore payload quality', initial_indent='- ', subsequent_indent='  ')}\n"
+        f"{fill_text('verify sender health', initial_indent='- ', subsequent_indent='  ')}\n"
+        f"{fill_text('keep hourly delivery alive', initial_indent='- ', subsequent_indent='  ')}\n"
     )
 
 
@@ -390,10 +423,12 @@ def validate_subject(subject: str) -> list[str]:
         errors.append("subject is empty")
     if len(stripped) > 200:
         errors.append("subject is too long")
-    if "ETA " not in subject:
-        errors.append("subject missing ETA")
+    if not stripped.lower().startswith("eta "):
+        errors.append("subject missing eta prefix")
     if "|" not in subject:
         errors.append("subject missing separators")
+    if "vs unopt" not in stripped.lower():
+        errors.append("subject missing vs unopt suffix")
     return errors
 
 

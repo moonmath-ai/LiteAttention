@@ -23,6 +23,11 @@ on:
         required: false
         default: "[\"self-hosted\",\"Linux\"]"
         type: string
+      wheel_host_shards_json:
+        description: "Optional JSON array of host shards with runner_labels_json/max_parallel defaults"
+        required: false
+        default: ""
+        type: string
       wheel_max_parallel:
         description: "Max concurrent wheel jobs (empty = repo/org variable or fallback)"
         required: false
@@ -373,8 +378,67 @@ jobs:
           print(json.dumps({"include": include}, separators=(",", ":")))
           PY
           )"
+          grouped_matrix="$(GROUPED_MATRIX="$grouped_matrix" HOST_SHARDS_JSON_INPUT="${HOST_SHARDS_JSON_INPUT}" python3 - <<'PY'
+          import json
+          import os
+
+          matrix = json.loads(os.environ["GROUPED_MATRIX"])
+          entries = [dict(entry) for entry in (matrix.get("include") or [])]
+          host_shards_raw = os.environ.get("HOST_SHARDS_JSON_INPUT", "").strip()
+
+          if host_shards_raw:
+              parsed = json.loads(host_shards_raw)
+              if not isinstance(parsed, list) or not parsed:
+                  raise SystemExit("wheel_host_shards_json must decode to a non-empty JSON array")
+              host_shards = []
+              for idx, shard in enumerate(parsed):
+                  if not isinstance(shard, dict):
+                      raise SystemExit(f"wheel_host_shards_json entry #{idx} must be an object")
+                  runner_labels_json = shard.get("runner_labels_json")
+                  if not isinstance(runner_labels_json, str) or not runner_labels_json.strip():
+                      raise SystemExit(f"wheel_host_shards_json entry #{idx} is missing non-empty runner_labels_json")
+                  labels = json.loads(runner_labels_json)
+                  if not isinstance(labels, list) or not all(isinstance(label, str) and label for label in labels):
+                      raise SystemExit(f"wheel_host_shards_json entry #{idx} runner_labels_json must decode to a non-empty string array")
+                  host_shards.append(
+                      {
+                          "name": str(shard.get("name") or f"host{idx+1}"),
+                          "runner_labels_json": runner_labels_json,
+                      }
+                  )
+
+              assigned = []
+              for idx, entry in enumerate(entries):
+                  shard = host_shards[idx % len(host_shards)]
+                  assigned_entry = dict(entry)
+                  assigned_entry["host_shard"] = shard["name"]
+                  assigned_entry["runner_labels_json"] = shard["runner_labels_json"]
+                  assigned.append(assigned_entry)
+              entries = assigned
+
+          print(json.dumps({"include": entries}, separators=(",", ":")))
+          PY
+          )"
           echo "matrix=${grouped_matrix}" >> "$GITHUB_OUTPUT"
           max_parallel="${{ inputs.wheel_max_parallel }}"
+          if [[ -z "$max_parallel" ]]; then
+            host_shard_default="$(HOST_SHARDS_JSON_INPUT="${HOST_SHARDS_JSON_INPUT}" python3 - <<'PY'
+          import json
+          import os
+
+          raw = os.environ.get("HOST_SHARDS_JSON_INPUT", "").strip()
+          if not raw:
+              raise SystemExit(0)
+
+          shards = json.loads(raw)
+          total = 0
+          for shard in shards:
+              total += int(shard.get("max_parallel", 1))
+          print(total)
+          PY
+            )"
+            max_parallel="${host_shard_default}"
+          fi
           if [[ -z "$max_parallel" ]]; then
             max_parallel="${{ vars.LITE_ATTENTION_WHEEL_MATRIX_MAX_PARALLEL }}"
           fi
@@ -388,6 +452,7 @@ jobs:
           echo "max_parallel=$max_parallel" >> "$GITHUB_OUTPUT"
         env:
           PRESET: full
+          HOST_SHARDS_JSON_INPUT: ${{ inputs.wheel_host_shards_json || vars.LITE_ATTENTION_WHEEL_HOST_SHARDS_JSON }}
 
   build_wheels:
     name: Build Wheel
@@ -405,7 +470,7 @@ jobs:
       torch-version: ${{ matrix.torch-version }}
       cxx11_abi: ${{ join(matrix.cxx11_abi_list, '_') }}
       cxx11_abi_list_json: ${{ toJSON(matrix.cxx11_abi_list) }}
-      runner-labels-json: ${{ inputs.build_runner_labels_json }}
+      runner-labels-json: ${{ matrix.runner_labels_json || inputs.build_runner_labels_json }}
       run-wheel-tests: ${{ inputs.run_wheel_tests }}
       wheel-test-target: ${{ inputs.wheel_test_target }}
       enable-ccache: ${{ inputs.enable_ccache }}

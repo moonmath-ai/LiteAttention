@@ -490,6 +490,15 @@ jobs:
             export LITE_ATTENTION_NVCC_PER_TU_TIME=TRUE
             export NINJA_STATUS="[%f/%t %r active | %e sec]"
             mkdir -p build-profile
+            TIME_BIN=""
+            TIME_BIN_KIND="missing"
+            if [[ -x /usr/bin/time ]]; then
+              TIME_BIN="/usr/bin/time"
+              TIME_BIN_KIND="usr-bin"
+            elif command -v time >/dev/null 2>&1; then
+              TIME_BIN="$(command -v time)"
+              TIME_BIN_KIND="path"
+            fi
           fi
           # Allow benchmark runs to override compile scheduling without changing
           # which kernels are built. Fall back to the existing safe defaults.
@@ -498,6 +507,29 @@ jobs:
           export NVCC_THREADS="${LITE_ATTENTION_BUILD_NVCC_THREADS:-${NVCC_THREADS:-2}}"
           echo "Compile settings: MAX_JOBS=${MAX_JOBS} NVCC_THREADS=${NVCC_THREADS}"
           export LITE_ATTENTION_FORCE_BUILD="TRUE"
+          if [[ "${{ inputs.build-profile }}" == "true" ]]; then
+            USE_CCACHE_WRAPPERS="${USE_CCACHE_WRAPPERS}" TIME_BIN="${TIME_BIN:-}" TIME_BIN_KIND="${TIME_BIN_KIND:-missing}" python3 - <<'PY'
+            import json
+            import os
+            import shutil
+
+            runtime_info = {
+                "use_ccache_wrappers": os.environ["USE_CCACHE_WRAPPERS"],
+                "time_bin": os.environ.get("TIME_BIN", ""),
+                "time_bin_kind": os.environ.get("TIME_BIN_KIND", "missing"),
+                "nvcc_path": shutil.which("nvcc") or "",
+                "cuda_nvcc_executable": os.environ.get("CUDA_NVCC_EXECUTABLE", ""),
+                "pytorch_nvcc": os.environ.get("PYTORCH_NVCC", ""),
+                "max_jobs": os.environ.get("MAX_JOBS", ""),
+                "nvcc_threads": os.environ.get("NVCC_THREADS", ""),
+                "lite_attention_nvcc_time": os.environ.get("LITE_ATTENTION_NVCC_TIME", ""),
+                "lite_attention_nvcc_per_tu_time": os.environ.get("LITE_ATTENTION_NVCC_PER_TU_TIME", ""),
+                "lite_attention_nvcc_fdevice_time_trace": os.environ.get("LITE_ATTENTION_NVCC_FDEVICE_TIME_TRACE", ""),
+            }
+            with open("build-profile/runtime_info.json", "w", encoding="utf-8") as fh:
+                json.dump(runtime_info, fh, indent=2)
+            PY
+          fi
 
           mapfile -t ABI_VALUES < <(ABI_LIST_JSON="$ABI_LIST_JSON" python3 - <<'PY'
           import json
@@ -604,6 +636,13 @@ jobs:
 
           out_dir = Path("build-profile")
           out_dir.mkdir(parents=True, exist_ok=True)
+
+          def abi_from_path(path: Path) -> str:
+            for part in path.parts:
+              if part.startswith("abi-"):
+                return part[4:]
+            return "unscoped"
+
           snapshot_roots = []
           for p in sorted(out_dir.glob("abi-*/raw/build")):
             if p.exists():
@@ -615,12 +654,6 @@ jobs:
             for abi_label, root in search_roots:
               files.extend((abi_label, p) for p in sorted(root.rglob(pattern)))
             return files
-
-          def abi_from_path(path: Path) -> str:
-            for part in path.parts:
-              if part.startswith("abi-"):
-                return part[4:]
-            return "unscoped"
 
           def canonicalize_stage(stage: str) -> str:
             cleaned = " ".join((stage or "unknown").strip().split()) or "unknown"
@@ -693,6 +726,13 @@ jobs:
           tu_wall_files = gather("*.nvcc_walltime.txt")
           ninja_logs = gather(".ninja_log")
           setup_py_wall_files = sorted(out_dir.glob("setup_py_*.walltime.txt"))
+          runtime_info_path = out_dir / "runtime_info.json"
+          runtime_info = {}
+          if runtime_info_path.exists():
+            try:
+              runtime_info = json.loads(runtime_info_path.read_text(encoding="utf-8"))
+            except Exception:
+              runtime_info = {}
 
           for _, p in trace_json_candidates:
             try:
@@ -754,6 +794,7 @@ jobs:
           units_detected = {}
           nvcc_time_files_normalized = []
           nvcc_time_files_ambiguous = []
+          nvcc_phase_rows = []
           rows_seconds_applied = 0
           parsed_rows = 0
 
@@ -775,6 +816,8 @@ jobs:
                 time_key = pick_header(reader.fieldnames, ["duration", "elapsed", "time", "metric", "ms"])
                 unit_key = pick_header(reader.fieldnames, ["unit"])
                 source_key = pick_header(reader.fieldnames, ["source file"])
+                arch_key = pick_header(reader.fieldnames, ["arch"])
+                phase_output_key = pick_header(reader.fieldnames, ["phase output file", "output file"])
                 if not stage_key or not time_key:
                   continue
                 header_unit_name, _ = infer_time_unit(time_key)
@@ -791,6 +834,8 @@ jobs:
                   stage = canonicalize_stage((row.get(stage_key) or "unknown"))
                   raw_val = (row.get(time_key) or "").strip()
                   source_name = (row.get(source_key) or "").strip() if source_key else ""
+                  arch_name = " ".join((row.get(arch_key) or "").strip().split()) if arch_key else ""
+                  phase_output = " ".join((row.get(phase_output_key) or "").strip().split()) if phase_output_key else ""
                   parsed_val, parsed_unit = parse_time_value(raw_val)
                   if parsed_unit is None and unit_key:
                     parsed_unit = canonical_unit_token(row.get(unit_key) or "")
@@ -803,7 +848,15 @@ jobs:
                     row_units.add(parsed_unit)
                   else:
                     rows_without_explicit_unit += 1
-                  file_rows.append((stage, parsed_val, source_name or str(p)))
+                  file_rows.append(
+                    {
+                      "stage": stage,
+                      "metric_raw": parsed_val,
+                      "source": source_name or str(p),
+                      "arch": arch_name,
+                      "phase_output": phase_output,
+                    }
+                  )
 
                 if not file_rows:
                   continue
@@ -850,12 +903,26 @@ jobs:
                     }
                   )
 
-                for stage, t, source_name in file_rows:
+                for row in file_rows:
+                  stage = row["stage"]
+                  t = row["metric_raw"]
+                  source_name = row["source"]
                   parsed_rows += 1
                   stage_totals_raw[stage] = stage_totals_raw.get(stage, 0.0) + t
                   stage_totals_by_abi_raw[abi][stage] = stage_totals_by_abi_raw[abi].get(stage, 0.0) + t
                   stage_totals_by_tu_raw[abi].setdefault(source_name, {})
                   stage_totals_by_tu_raw[abi][source_name][stage] = stage_totals_by_tu_raw[abi][source_name].get(stage, 0.0) + t
+                  phase_row = {
+                    "abi": abi,
+                    "time_file": str(p),
+                    "source": source_name,
+                    "stage": stage,
+                    "arch": row["arch"],
+                    "phase_output": row["phase_output"],
+                    "metric_raw": t,
+                    "unit": effective_unit or "",
+                    "metric_s": None,
+                  }
                   if scale is not None:
                     t_s = t * scale
                     rows_seconds_applied += 1
@@ -863,6 +930,8 @@ jobs:
                     stage_totals_by_abi_s[abi][stage] = stage_totals_by_abi_s[abi].get(stage, 0.0) + t_s
                     stage_totals_by_tu_s[abi].setdefault(source_name, {})
                     stage_totals_by_tu_s[abi][source_name][stage] = stage_totals_by_tu_s[abi][source_name].get(stage, 0.0) + t_s
+                    phase_row["metric_s"] = t_s
+                  nvcc_phase_rows.append(phase_row)
                   if stage == "ptxas":
                     ptxas_total_raw += t
                     if scale is not None:
@@ -900,6 +969,37 @@ jobs:
                 }
               )
           top_tu_stage_totals_s.sort(key=lambda row: row["total_s"], reverse=True)
+          nvcc_phase_rows_sorted = sorted(
+            nvcc_phase_rows,
+            key=lambda row: (
+              row["metric_s"] if row["metric_s"] is not None else -1.0,
+              row["metric_raw"],
+            ),
+            reverse=True,
+          )
+
+          phase_rows_csv = out_dir / "nvcc_time_rows.csv"
+          with phase_rows_csv.open("w", encoding="utf-8", newline="") as fh:
+            writer = csv.DictWriter(
+              fh,
+              fieldnames=[
+                "abi",
+                "time_file",
+                "source",
+                "stage",
+                "arch",
+                "phase_output",
+                "metric_raw",
+                "unit",
+                "metric_s",
+              ],
+            )
+            writer.writeheader()
+            writer.writerows(nvcc_phase_rows_sorted)
+          (out_dir / "nvcc_time_rows.json").write_text(
+            json.dumps(nvcc_phase_rows_sorted, indent=2),
+            encoding="utf-8",
+          )
 
           summary = {
             "counts": {
@@ -913,7 +1013,9 @@ jobs:
               "setup_py_walltime_files": len(setup_py_wall_files),
               "nvcc_time_rows_parsed": parsed_rows,
               "nvcc_time_rows_seconds_applied": rows_seconds_applied,
+              "nvcc_time_rows_written": len(nvcc_phase_rows_sorted),
             },
+            "runtime_info": runtime_info,
             "nvcc_time_units_detected": units_detected,
             "nvcc_time_seconds_coverage_ratio": seconds_coverage_ratio,
             "nvcc_time_unit_normalization_strict": len(nvcc_time_files_ambiguous) == 0,
@@ -928,6 +1030,7 @@ jobs:
             "nvcc_stage_totals_s": sorted(stage_totals_s.items(), key=lambda kv: kv[1], reverse=True),
             "nvcc_stage_totals_by_abi_raw": stage_totals_by_abi_raw,
             "nvcc_stage_totals_by_abi_s": stage_totals_by_abi_s,
+            "top_nvcc_phase_rows_s": nvcc_phase_rows_sorted[:50],
             "top_nvcc_tu_stage_totals_s": top_tu_stage_totals_s[:20],
             "nvcc_stage_totals_by_tu_s": stage_totals_by_tu_s_sorted,
           }
@@ -937,6 +1040,10 @@ jobs:
           md = []
           md.append("# Build profiling summary")
           md.append("")
+          if runtime_info:
+            md.append(f"- runtime time binary: {runtime_info.get('time_bin', '') or 'missing'} ({runtime_info.get('time_bin_kind', 'unknown')})")
+            md.append(f"- direct nvcc path: {runtime_info.get('nvcc_path', '') or 'missing'}")
+            md.append(f"- ccache wrappers enabled: {runtime_info.get('use_ccache_wrappers', 'unknown')}")
           md.append(f"- setup.py walltime files: {len(setup_py_wall_files)}")
           md.append(f"- nvcc --time files: {len(nvcc_time_files)}")
           md.append(f"- fdevice time-trace files: {len(fdevice_files)}")
@@ -944,6 +1051,7 @@ jobs:
           md.append(f"- ninja logs: {len(ninja_logs)}")
           md.append(f"- parsed nvcc --time rows: {parsed_rows}")
           md.append(f"- nvcc --time rows with normalized seconds: {rows_seconds_applied}")
+          md.append(f"- normalized per-phase rows written: {len(nvcc_phase_rows_sorted)}")
           md.append(f"- detected nvcc --time units: {json.dumps(units_detected, sort_keys=True)}")
           md.append(f"- nvcc --time files with unambiguous units: {len(nvcc_time_files_normalized)}/{len(nvcc_time_files)}")
           md.append(f"- nvcc seconds coverage ratio: {seconds_coverage_ratio:.3f}")
@@ -973,6 +1081,15 @@ jobs:
           md.append("## Top NVCC stages (raw units from nvcc --time)")
           for stage, value in sorted(stage_totals_raw.items(), key=lambda kv: kv[1], reverse=True)[:10]:
             md.append(f"- {value:.3f}  {stage}")
+          if nvcc_phase_rows_sorted:
+            md.append("")
+            md.append("## Top exact NVCC phase rows (seconds)")
+            for row in nvcc_phase_rows_sorted[:10]:
+              if row["metric_s"] is None:
+                continue
+              md.append(
+                f"- ABI {row['abi']}  {row['metric_s']:.6f}s  {row['stage']}  arch={row['arch'] or 'n/a'}  {row['source']}"
+              )
           if stage_totals_by_abi_s:
             md.append("")
             md.append("## Top NVCC stages by ABI (seconds when unit-detectable)")
@@ -992,7 +1109,7 @@ jobs:
               for stage, value in row["stages"][:5]:
                 md.append(f"  - {value:.6f}s  {stage}")
           md.append("")
-          md.append("_Raw profiling artifacts are under build-profile/abi-<ABI>/raw._")
+          md.append("_Raw profiling artifacts are under build-profile/abi-<ABI>/raw. Normalized per-phase rows are in build-profile/nvcc_time_rows.{csv,json}._")
 
           summary_md = "\n".join(md) + "\n"
           (out_dir / "summary.md").write_text(summary_md, encoding="utf-8")

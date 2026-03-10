@@ -416,11 +416,18 @@ def nvcc_split_compile_args():
     return [f"--split-compile={split_compile_jobs}"]
 
 
+def resolve_time_binary():
+    preferred = Path("/usr/bin/time")
+    if preferred.is_file() and os.access(preferred, os.X_OK):
+        return str(preferred)
+    return shutil.which("time")
+
+
 def nvcc_profile_command_prefix() -> str:
     """Optional per-translation-unit wall-time capture via /usr/bin/time."""
     if not _env_flag_true("LITE_ATTENTION_NVCC_PER_TU_TIME", "0"):
         return ""
-    time_bin = shutil.which("time")
+    time_bin = resolve_time_binary()
     if time_bin is None:
         warnings.warn("LITE_ATTENTION_NVCC_PER_TU_TIME requested, but /usr/bin/time was not found; skipping per-TU wall-time capture.")
         return ""
@@ -460,7 +467,12 @@ def nvcc_profile_command_args() -> str:
     """Optional NVCC sidecar outputs for detailed phase profiling."""
     args = []
     if _env_flag_true("LITE_ATTENTION_NVCC_TIME", "0"):
-        args.append("--time=$out.nvcc_time.csv")
+        if nvcc_supports_option("--time"):
+            args.append("--time=$out.nvcc_time.csv")
+        else:
+            warnings.warn(
+                "LITE_ATTENTION_NVCC_TIME requested, but this nvcc does not support --time; skipping phase CSV profiling."
+            )
     if _env_flag_true("LITE_ATTENTION_NVCC_FDEVICE_TIME_TRACE", "0"):
         # CUDA 12.4 and older nvcc builds do not support --fdevice-time-trace.
         if nvcc_supports_option("--fdevice-time-trace"):
