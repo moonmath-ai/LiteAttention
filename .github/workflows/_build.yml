@@ -23,6 +23,11 @@ on:
         description: "The C++11 ABI to use for the build"
         required: true
         type: string
+      cxx11_abi_list_json:
+        description: "Optional JSON array of C++11 ABI values to build sequentially in one job"
+        required: false
+        type: string
+        default: ""
       runner-labels-json:
         description: "JSON array of runner labels (e.g. [\"self-hosted\",\"Linux\"])"
         required: false
@@ -88,6 +93,11 @@ on:
         required: false
         type: string
         default: ""
+      build-profile:
+        description: "Enable detailed NVCC/Ninja profiling artifacts and summary"
+        required: false
+        type: boolean
+        default: false
       upload-to-release:
         description: "Upload wheel to this release"
         required: false
@@ -119,6 +129,7 @@ jobs:
       CCACHE_MAXSIZE: 8G
       CCACHE_COMPILERCHECK: content
       CCACHE_NOHASHDIR: "true"
+      CCACHE_STATSLOG: /tmp/ccache-stats-py${{ inputs.python-version }}-cu${{ inputs.cuda-version }}-torch${{ inputs.torch-version }}-abi${{ inputs.cxx11_abi }}.log
       PIP_CACHE_DIR: /root/.cache/pip
       PIP_CACHE_OPT: --no-cache-dir
     name: Build wheel (${{ inputs.release-version }}-${{ inputs.python-version }}-${{ inputs.cuda-version }}-${{ inputs.torch-version }}-${{ inputs.cxx11_abi }})
@@ -216,13 +227,56 @@ jobs:
           echo "WHEEL_CUDA_VERSION=$(echo ${{ inputs.cuda-version }} | awk -F \. {'print $1 "." $2'})" >> $GITHUB_ENV
           echo "MATRIX_PYTHON_VERSION=$(echo ${{ inputs.python-version }} | awk -F \. {'print $1 $2'})" >> $GITHUB_ENV
 
+      - name: Resolve ABI batch
+        id: abi_batch
+        run: |
+          ABI_LIST_JSON='${{ inputs.cxx11_abi_list_json }}'
+          if [[ -z "$ABI_LIST_JSON" ]]; then
+            ABI_LIST_JSON="$(python3 - <<'PY'
+          import json
+          import os
+
+          print(json.dumps([os.environ["DEFAULT_ABI"]], separators=(",", ":")))
+          PY
+            )"
+          fi
+
+          ABI_LIST_JSON="$ABI_LIST_JSON" python3 - <<'PY'
+          import json
+          import os
+
+          abis = json.loads(os.environ["ABI_LIST_JSON"])
+          if not isinstance(abis, list) or not abis:
+              raise SystemExit("cxx11_abi_list_json must decode to a non-empty JSON array")
+
+          seen = []
+          for abi in abis:
+              abi = str(abi)
+              if abi not in seen:
+                  seen.append(abi)
+
+          payload = json.dumps(seen, separators=(",", ":"))
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"list_json={payload}\n")
+              fh.write(f"count={len(seen)}\n")
+              if len(seen) == 1:
+                  artifact_label = f"cxx11abi{seen[0]}"
+              else:
+                  artifact_label = "cxx11abis" + "_".join(seen)
+              fh.write(f"artifact_label={artifact_label}\n")
+          PY
+        env:
+          DEFAULT_ABI: ${{ inputs.cxx11_abi }}
+
       - name: Compute ccache key
         id: ccache_key
         if: ${{ inputs.enable-ccache }}
         run: |
           image_id=$(echo "${{ inputs.docker-image }}" | tr '/:.' '-' | tr -cd 'A-Za-z0-9_-')
-          prefix="ccache-${{ inputs.ccache-namespace }}-${{ runner.os }}-${{ runner.arch }}-${image_id}-py${{ inputs.python-version }}-cu${{ inputs.cuda-version }}-torch${{ inputs.torch-version }}-abi${{ inputs.cxx11_abi }}"
+          base_prefix="ccache-${{ inputs.ccache-namespace }}-${{ runner.os }}-${{ runner.arch }}-${image_id}-cu${{ inputs.cuda-version }}-torch${{ inputs.torch-version }}-abi${{ inputs.cxx11_abi }}"
+          prefix="${base_prefix}-py${{ inputs.python-version }}"
           echo "prefix=${prefix}-" >> "$GITHUB_OUTPUT"
+          echo "cross_py_prefix=${base_prefix}-" >> "$GITHUB_OUTPUT"
           echo "key=${prefix}-${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
 
       - name: Configure pip cache for GitHub
@@ -250,6 +304,7 @@ jobs:
           key: ${{ steps.ccache_key.outputs.key }}
           restore-keys: |
             ${{ steps.ccache_key.outputs.prefix }}
+            ${{ steps.ccache_key.outputs.cross_py_prefix }}
 
       - name: Initialize ccache
         if: ${{ inputs.enable-ccache }}
@@ -260,6 +315,8 @@ jobs:
           ccache -o compression_level=5
           ccache -o base_dir="${CCACHE_BASEDIR}"
           ccache -o compiler_check="${CCACHE_COMPILERCHECK}"
+          ccache -o stats_log="${CCACHE_STATSLOG}"
+          : > "${CCACHE_STATSLOG}"
           ccache -s || true
           ccache -z || true
 
@@ -358,8 +415,11 @@ jobs:
 
       - name: Build wheel
         id: build_wheel
+        continue-on-error: true
         if: steps.py_compat.outputs.skip_build != 'true' && steps.torch_install.outputs.skip_build != 'true'
         working-directory: ${{ env.BUILD_WHEEL_DIR }}
+        env:
+          ABI_LIST_JSON: ${{ steps.abi_batch.outputs.list_json }}
         run: |
           git config --global --add safe.directory "${GITHUB_WORKSPACE}" || true
           git config --global --add safe.directory "$(pwd)" || true
@@ -370,12 +430,14 @@ jobs:
 
           if [[ "${{ inputs.enable-ccache }}" == "true" ]]; then
             REAL_NVCC=$(command -v nvcc)
-            mkdir -p .ci-bin
-            printf '%s\n' '#!/usr/bin/env bash' "exec ccache \"${REAL_NVCC}\" \"\$@\"" > .ci-bin/nvcc
-            chmod +x .ci-bin/nvcc
-            export PATH="/usr/lib/ccache:$(pwd)/.ci-bin:$PATH"
-            export CUDA_NVCC_EXECUTABLE="$(pwd)/.ci-bin/nvcc"
-            export PYTORCH_NVCC="$(pwd)/.ci-bin/nvcc"
+            WRAPPER_DIR="${GITHUB_WORKSPACE}/.ci-bin"
+            WRAPPER_NVCC="${WRAPPER_DIR}/nvcc"
+            mkdir -p "${WRAPPER_DIR}"
+            printf '%s\n' '#!/usr/bin/env bash' "exec ccache \"${REAL_NVCC}\" \"\$@\"" > "${WRAPPER_NVCC}"
+            chmod +x "${WRAPPER_NVCC}"
+            export PATH="/usr/lib/ccache:${WRAPPER_DIR}:$PATH"
+            export CUDA_NVCC_EXECUTABLE="${WRAPPER_NVCC}"
+            export PYTORCH_NVCC="${WRAPPER_NVCC}"
             # Let PATH-resolved ccache compiler shims handle gcc/g++ instead of passing
             # a space-containing command through CC/CXX, which breaks Ninja invocation.
             export CC=gcc
@@ -401,6 +463,13 @@ jobs:
           if [[ -n "${{ inputs.skip-nvcc-gen-dependencies }}" ]]; then
             export LITE_ATTENTION_SKIP_NVCC_GEN_DEPENDENCIES="${{ inputs.skip-nvcc-gen-dependencies }}"
           fi
+          if [[ "${{ inputs.build-profile }}" == "true" ]]; then
+            export LITE_ATTENTION_NVCC_TIME=TRUE
+            export LITE_ATTENTION_NVCC_FDEVICE_TIME_TRACE=TRUE
+            export LITE_ATTENTION_NVCC_PER_TU_TIME=TRUE
+            export NINJA_STATUS="[%f/%t %r active | %e sec]"
+            mkdir -p build-profile
+          fi
           # Allow benchmark runs to override compile scheduling without changing
           # which kernels are built. Fall back to the existing safe defaults.
           default_max_jobs=$([ "$MATRIX_CUDA_VERSION" == "129" ] && echo 1 || echo 2)
@@ -408,28 +477,265 @@ jobs:
           export NVCC_THREADS="${LITE_ATTENTION_BUILD_NVCC_THREADS:-${NVCC_THREADS:-2}}"
           echo "Compile settings: MAX_JOBS=${MAX_JOBS} NVCC_THREADS=${NVCC_THREADS}"
           export LITE_ATTENTION_FORCE_BUILD="TRUE"
-          export LITE_ATTENTION_FORCE_CXX11_ABI=${{ inputs.cxx11_abi }}
 
-          # 5h timeout since GH allows max 6h and we want some buffer
+          mapfile -t ABI_VALUES < <(ABI_LIST_JSON="$ABI_LIST_JSON" python3 - <<'PY'
+          import json
+          import os
+
+          for abi in json.loads(os.environ["ABI_LIST_JSON"]):
+              print(str(abi))
+          PY
+          )
+
+          mkdir -p dist
           EXIT_CODE=0
-          timeout 5h python3 setup.py bdist_wheel --dist-dir=dist || EXIT_CODE=$?
+          shopt -s nullglob
+          for ABI_VALUE in "${ABI_VALUES[@]}"; do
+            echo "::group::Build wheel for ABI ${ABI_VALUE}"
+            rm -rf build "dist-${ABI_VALUE}"
+            mkdir -p "dist-${ABI_VALUE}"
+            export LITE_ATTENTION_FORCE_CXX11_ABI="${ABI_VALUE}"
 
-          if [ $EXIT_CODE -eq 0 ]; then
-            tmpname=cu${WHEEL_CUDA_VERSION}torch${MATRIX_TORCH_VERSION}cxx11abi${{ inputs.cxx11_abi }}
-            wheel_name=$(ls dist/*whl | xargs -n 1 basename | sed "s/-/+$tmpname-/2")
-            ls dist/*whl | xargs -I {} mv {} dist/${wheel_name}
-            echo "wheel_name=${wheel_name}" >> $GITHUB_ENV
-          fi
+            ABI_EXIT_CODE=0
+            if [[ "${{ inputs.build-profile }}" == "true" ]]; then
+              if command -v /usr/bin/time >/dev/null 2>&1; then
+                /usr/bin/time -f "wall_s=%e user_s=%U sys_s=%S maxrss_kb=%M exit=%x" -o "build-profile/setup_py_${ABI_VALUE}.walltime.txt" \
+                  timeout 5h python3 setup.py bdist_wheel --dist-dir="dist-${ABI_VALUE}" || ABI_EXIT_CODE=$?
+              else
+                echo "::warning::/usr/bin/time not found; setup.py walltime file will not be recorded."
+                timeout 5h python3 setup.py bdist_wheel --dist-dir="dist-${ABI_VALUE}" || ABI_EXIT_CODE=$?
+              fi
+            else
+              timeout 5h python3 setup.py bdist_wheel --dist-dir="dist-${ABI_VALUE}" || ABI_EXIT_CODE=$?
+            fi
+
+            if [ $ABI_EXIT_CODE -ne 0 ]; then
+              EXIT_CODE=$ABI_EXIT_CODE
+              echo "ABI ${ABI_VALUE} build failed with exit code ${ABI_EXIT_CODE}"
+              echo "::endgroup::"
+              break
+            fi
+
+            built_wheels=("dist-${ABI_VALUE}"/*.whl)
+            if [ ${#built_wheels[@]} -eq 0 ]; then
+              echo "::error::ABI ${ABI_VALUE} build completed without producing a wheel"
+              EXIT_CODE=1
+              echo "::endgroup::"
+              break
+            fi
+
+            for built_wheel in "${built_wheels[@]}"; do
+              base_wheel_name="$(basename "$built_wheel")"
+              tmpname="cu${WHEEL_CUDA_VERSION}torch${MATRIX_TORCH_VERSION}cxx11abi${ABI_VALUE}"
+              wheel_name="$(echo "$base_wheel_name" | sed "s/-/+$tmpname-/2")"
+              mv "$built_wheel" "dist/${wheel_name}"
+            done
+
+            if [[ "${{ inputs.build-profile }}" == "true" ]]; then
+              abi_profile_dir="build-profile/abi-${ABI_VALUE}/raw"
+              mkdir -p "${abi_profile_dir}"
+              if [ -d build ]; then
+                while IFS= read -r f; do
+                  cp --parents "$f" "${abi_profile_dir}/"
+                done < <(find build -type f \( -name '*.nvcc_time.csv' -o -name '*.fdevice_time_trace.json' -o -name '*.nvcc_walltime.txt' -o -name '.ninja_log' \))
+              fi
+            fi
+            echo "::endgroup::"
+          done
 
           # Store exit code in GitHub env for later steps
           echo "build_exit_code=$EXIT_CODE" | tee -a "$GITHUB_OUTPUT"
 
           if [[ "${{ inputs.enable-ccache }}" == "true" ]]; then
-            ccache -s || true
+            ccache -sv || true
+            if [[ -f "${CCACHE_STATSLOG}" ]]; then
+              echo "::group::ccache log stats"
+              ccache --show-log-stats || true
+              echo "::endgroup::"
+            fi
           fi
 
           # Do not fail the job if timeout killed the build
           exit $EXIT_CODE
+
+      - name: Collect build profile summary
+        if: ${{ always() && inputs.build-profile && steps.py_compat.outputs.skip_build != 'true' && steps.torch_install.outputs.skip_build != 'true' }}
+        working-directory: ${{ env.BUILD_WHEEL_DIR }}
+        run: |
+          python3 - <<'PY'
+          import csv
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          out_dir = Path("build-profile")
+          out_dir.mkdir(parents=True, exist_ok=True)
+          snapshot_roots = sorted(p for p in out_dir.glob("abi-*/raw/build") if p.exists())
+          search_roots = snapshot_roots if snapshot_roots else ([Path("build")] if Path("build").exists() else [])
+
+          def gather(pattern):
+            files = []
+            for root in search_roots:
+              files.extend(sorted(root.rglob(pattern)))
+            return files
+
+          nvcc_time_files = gather("*.nvcc_time.csv")
+          fdevice_files = gather("*.fdevice_time_trace.json")
+          tu_wall_files = gather("*.nvcc_walltime.txt")
+          ninja_logs = gather(".ninja_log")
+          setup_py_wall_files = sorted(out_dir.glob("setup_py_*.walltime.txt"))
+
+          setup_py_walls = []
+          for p in setup_py_wall_files:
+            text = p.read_text(encoding="utf-8", errors="ignore")
+            m = re.search(r"wall_s=([0-9]+(?:\\.[0-9]+)?)", text)
+            if m:
+              setup_py_walls.append({"file": str(p), "wall_s": float(m.group(1))})
+          setup_py_walls.sort(key=lambda x: x["wall_s"], reverse=True)
+
+          tu_wall = []
+          for p in tu_wall_files:
+            text = p.read_text(encoding="utf-8", errors="ignore")
+            m = re.search(r"wall_s=([0-9]+(?:\\.[0-9]+)?)", text)
+            if not m:
+              continue
+            tu_wall.append({"file": str(p), "wall_s": float(m.group(1))})
+          tu_wall.sort(key=lambda x: x["wall_s"], reverse=True)
+
+          ninja_entries = []
+          for log in ninja_logs:
+            for line in log.read_text(encoding="utf-8", errors="ignore").splitlines():
+              if not line or line.startswith("#"):
+                continue
+              parts = line.split("\t")
+              if len(parts) < 3:
+                continue
+              try:
+                start_ms = int(parts[0])
+                end_ms = int(parts[1])
+              except ValueError:
+                continue
+              output = parts[3] if len(parts) > 3 else parts[2]
+              ninja_entries.append(
+                {
+                  "log": str(log),
+                  "output": output,
+                  "duration_s": max(0.0, (end_ms - start_ms) / 1000.0),
+                }
+              )
+          ninja_entries.sort(key=lambda x: x["duration_s"], reverse=True)
+
+          stage_totals = {}
+          ptxas_total = 0.0
+          parsed_rows = 0
+
+          def pick_header(fieldnames, candidates):
+            lowered = {k.lower(): k for k in (fieldnames or []) if k}
+            for cand in candidates:
+              for k_lower, k_orig in lowered.items():
+                if cand in k_lower:
+                  return k_orig
+            return None
+
+          for p in nvcc_time_files:
+            try:
+              with p.open("r", encoding="utf-8", errors="ignore", newline="") as fh:
+                reader = csv.DictReader(fh)
+                if not reader.fieldnames:
+                  continue
+                stage_key = pick_header(reader.fieldnames, ["phase", "step", "activity", "tool", "name"])
+                time_key = pick_header(reader.fieldnames, ["duration", "elapsed", "time", "ms"])
+                if not stage_key or not time_key:
+                  continue
+                for row in reader:
+                  stage = (row.get(stage_key) or "unknown").strip() or "unknown"
+                  val = (row.get(time_key) or "").strip()
+                  try:
+                    t = float(val)
+                  except ValueError:
+                    continue
+                  parsed_rows += 1
+                  stage_totals[stage] = stage_totals.get(stage, 0.0) + t
+                  if "ptxas" in stage.lower():
+                    ptxas_total += t
+            except Exception:
+              continue
+
+          summary = {
+            "counts": {
+              "profile_snapshot_roots": len(search_roots),
+              "nvcc_time_files": len(nvcc_time_files),
+              "fdevice_time_trace_files": len(fdevice_files),
+              "tu_walltime_files": len(tu_wall_files),
+              "ninja_logs": len(ninja_logs),
+              "setup_py_walltime_files": len(setup_py_wall_files),
+              "nvcc_time_rows_parsed": parsed_rows,
+            },
+            "setup_py_wall_s": setup_py_walls,
+            "ptxas_total_from_nvcc_time_raw": ptxas_total,
+            "top_tu_wall_s": tu_wall[:20],
+            "top_ninja_outputs_s": ninja_entries[:20],
+            "nvcc_stage_totals_raw": sorted(stage_totals.items(), key=lambda kv: kv[1], reverse=True),
+          }
+
+          (out_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+
+          md = []
+          md.append("# Build profiling summary")
+          md.append("")
+          md.append(f"- setup.py walltime files: {len(setup_py_wall_files)}")
+          md.append(f"- nvcc --time files: {len(nvcc_time_files)}")
+          md.append(f"- fdevice time-trace files: {len(fdevice_files)}")
+          md.append(f"- per-TU walltime files: {len(tu_wall_files)}")
+          md.append(f"- ninja logs: {len(ninja_logs)}")
+          md.append(f"- parsed nvcc --time rows: {parsed_rows}")
+          md.append(f"- ptxas total from nvcc --time (raw units): {ptxas_total}")
+          md.append("")
+          md.append("## setup.py walltime by ABI")
+          for row in setup_py_walls[:10]:
+            md.append(f"- {row['wall_s']:.3f}s  {row['file']}")
+          md.append("")
+          md.append("## Top per-TU walltime")
+          for row in tu_wall[:10]:
+            md.append(f"- {row['wall_s']:.3f}s  {row['file']}")
+          md.append("")
+          md.append("## Top Ninja edges")
+          for row in ninja_entries[:10]:
+            md.append(f"- {row['duration_s']:.3f}s  {row['output']}")
+          md.append("")
+          md.append("## Top NVCC stages (raw units from nvcc --time)")
+          for stage, value in sorted(stage_totals.items(), key=lambda kv: kv[1], reverse=True)[:10]:
+            md.append(f"- {value:.3f}  {stage}")
+          md.append("")
+          md.append("_Raw profiling artifacts are under build-profile/raw._")
+
+          summary_md = "\n".join(md) + "\n"
+          (out_dir / "summary.md").write_text(summary_md, encoding="utf-8")
+
+          step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if step_summary:
+            with open(step_summary, "a", encoding="utf-8") as fh:
+              fh.write(summary_md)
+          PY
+
+      - name: Upload build profile artifact
+        if: ${{ always() && !env.ACT && inputs.build-profile && steps.py_compat.outputs.skip_build != 'true' && steps.torch_install.outputs.skip_build != 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: build-profile-py${{ inputs.python-version }}-cu${{ inputs.cuda-version }}-torch${{ inputs.torch-version }}-cxx11abi${{ inputs.cxx11_abi }}
+          path: ${{ env.BUILD_WHEEL_DIR }}/build-profile
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload ccache stats log
+        if: ${{ always() && !env.ACT && inputs.enable-ccache && steps.py_compat.outputs.skip_build != 'true' && steps.torch_install.outputs.skip_build != 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ccache-statslog-py${{ inputs.python-version }}-cu${{ inputs.cuda-version }}-torch${{ inputs.torch-version }}-cxx11abi${{ inputs.cxx11_abi }}
+          path: ${{ env.CCACHE_STATSLOG }}
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Bundle ccache
         if: ${{ always() && !env.ACT && inputs.enable-ccache && steps.py_compat.outputs.skip_build != 'true' && steps.torch_install.outputs.skip_build != 'true' }}
@@ -448,14 +754,14 @@ jobs:
           retention-days: 14
 
       - name: Save compatible ccache
-        if: ${{ !env.ACT && inputs.enable-ccache && steps.build_wheel.outputs.build_exit_code == '0' && steps.restore_ccache.outputs.cache-hit != 'true' }}
+        if: ${{ !env.ACT && inputs.enable-ccache && steps.py_compat.outputs.skip_build != 'true' && steps.torch_install.outputs.skip_build != 'true' && steps.restore_ccache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ${{ steps.ccache_key.outputs.key }}
 
       - name: Save pip download cache
-        if: ${{ !env.ACT && steps.py_compat.outputs.skip_build != 'true' && steps.build_wheel.outputs.build_exit_code == '0' }}
+        if: ${{ !env.ACT && steps.py_compat.outputs.skip_build != 'true' && steps.torch_install.outputs.skip_build != 'true' }}
         uses: actions/cache/save@v4
         with:
           path: ${{ env.PIP_CACHE_DIR }}
@@ -469,13 +775,21 @@ jobs:
           tar -cvf build.tar . --atime-preserve=replace
 
       - name: Test built wheel
-        if: ${{ steps.py_compat.outputs.skip_build != 'true' && steps.torch_install.outputs.skip_build != 'true' && steps.build_wheel.outputs.build_exit_code == '0' && inputs.run-wheel-tests }}
+        if: ${{ always() && steps.py_compat.outputs.skip_build != 'true' && steps.torch_install.outputs.skip_build != 'true' && inputs.run-wheel-tests }}
         working-directory: ${{ env.BUILD_WHEEL_DIR }}
         run: |
-          python3 -m pip uninstall -y lite_attention 2>/dev/null || true
           python3 -m pip install pytest numpy
-          python3 -m pip install --force-reinstall dist/*.whl
-          pytest ${{ inputs.wheel-test-target }}
+          shopt -s nullglob
+          wheels=(dist/*.whl)
+          if [ ${#wheels[@]} -eq 0 ]; then
+            echo "No built wheels found to test; skipping."
+            exit 0
+          fi
+          for wheel in "${wheels[@]}"; do
+            python3 -m pip uninstall -y lite_attention 2>/dev/null || true
+            python3 -m pip install --force-reinstall "$wheel"
+            pytest ${{ inputs.wheel-test-target }}
+          done
 
       - name: Log Built Wheels
         if: steps.py_compat.outputs.skip_build != 'true' && steps.torch_install.outputs.skip_build != 'true'
@@ -484,11 +798,12 @@ jobs:
           ls dist
 
       - name: Upload wheel as artifact
-        if: ${{ !env.ACT && steps.build_wheel.outputs.build_exit_code == '0' }}
+        if: ${{ always() && !env.ACT && steps.py_compat.outputs.skip_build != 'true' && steps.torch_install.outputs.skip_build != 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: wheel-py${{ inputs.python-version }}-cu${{ inputs.cuda-version }}-torch${{ inputs.torch-version }}-cxx11abi${{ inputs.cxx11_abi }}
+          name: wheel-py${{ inputs.python-version }}-cu${{ inputs.cuda-version }}-torch${{ inputs.torch-version }}-${{ steps.abi_batch.outputs.artifact_label }}
           path: ${{ env.BUILD_WHEEL_DIR }}/dist/*.whl
+          if-no-files-found: ignore
           retention-days: 30
 
       - name: Upload wheel to Release
@@ -498,9 +813,15 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ inputs.release-version }}
         run: |
-          gh release upload ${{ env.RELEASE_TAG }} dist/${{env.wheel_name}} --clobber
+          gh release upload ${{ env.RELEASE_TAG }} dist/*.whl --clobber
 
       - name: Skip note (incompatible combo)
         if: steps.py_compat.outputs.skip_build == 'true' || steps.torch_install.outputs.skip_build == 'true'
         run: |
           echo "Skipping build because Python/CUDA/PyTorch combination is incompatible."
+
+      - name: Fail job if any ABI build failed
+        if: ${{ always() && steps.py_compat.outputs.skip_build != 'true' && steps.torch_install.outputs.skip_build != 'true' && steps.build_wheel.outputs.build_exit_code != '0' }}
+        run: |
+          echo "::error::One or more ABI builds failed inside the batched build job."
+          exit 1

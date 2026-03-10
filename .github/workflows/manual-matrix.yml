@@ -69,6 +69,16 @@ on:
         required: false
         default: "manual-matrix"
         type: string
+      build-profile:
+        description: "Enable detailed NVCC/Ninja profiling artifacts and summary"
+        required: false
+        default: false
+        type: boolean
+      skip-nvcc-gen-dependencies:
+        description: "Optional override for LITE_ATTENTION_SKIP_NVCC_GEN_DEPENDENCIES"
+        required: false
+        default: ""
+        type: string
       matrix-json:
         description: "Optional JSON matrix object (overrides axis inputs)"
         required: false
@@ -106,11 +116,86 @@ jobs:
             echo "::error::release-tag is required when upload-to-release is true"
             exit 1
           fi
-          if [[ -n "${{ inputs.matrix-json }}" ]]; then
-            echo "matrix=${{ inputs.matrix-json }}" >> $GITHUB_OUTPUT
+          if [[ -n "${MATRIX_JSON_INPUT}" ]]; then
+            raw_matrix="${MATRIX_JSON_INPUT}"
           else
-            python3 .github/scripts/generate_wheel_matrix.py
+            raw_matrix="$(env -u GITHUB_OUTPUT python3 .github/scripts/generate_wheel_matrix.py)"
           fi
+          grouped_matrix="$(RAW_MATRIX="$raw_matrix" python3 - <<'PY'
+          import itertools
+          import json
+          import os
+
+          GROUP_KEYS = ("os-version", "python-version", "cuda-version", "torch-version")
+          ABI_KEYS = {"cxx11_abi", "cxx11_abi_list"}
+
+          matrix = json.loads(os.environ["RAW_MATRIX"])
+
+          if "include" in matrix:
+              entries = matrix["include"]
+          else:
+              axes = {
+                  "os-version": matrix.get("os-version", []),
+                  "python-version": matrix.get("python-version", []),
+                  "cuda-version": matrix.get("cuda-version", []),
+                  "torch-version": matrix.get("torch-version", []),
+                  "cxx11_abi": matrix.get("cxx11_abi", []),
+              }
+              entries = [
+                  {
+                      "os-version": os_version,
+                      "python-version": python_version,
+                      "cuda-version": cuda_version,
+                      "torch-version": torch_version,
+                      "cxx11_abi": cxx11_abi,
+                  }
+                  for os_version, python_version, cuda_version, torch_version, cxx11_abi
+                  in itertools.product(
+                      axes["os-version"],
+                      axes["python-version"],
+                      axes["cuda-version"],
+                      axes["torch-version"],
+                      axes["cxx11_abi"],
+                  )
+              ]
+
+          grouped = {}
+          abi_order = {"FALSE": 0, "TRUE": 1}
+          for entry in entries:
+              key = tuple(entry[k] for k in GROUP_KEYS)
+              grouped_entry = grouped.setdefault(
+                  key,
+                  {
+                      **{k: v for k, v in entry.items() if k not in ABI_KEYS},
+                      "cxx11_abi_list": [],
+                  },
+              )
+              for extra_key, extra_value in entry.items():
+                  if extra_key in ABI_KEYS:
+                      continue
+                  if extra_key not in grouped_entry:
+                      grouped_entry[extra_key] = extra_value
+                  elif grouped_entry[extra_key] != extra_value:
+                      raise SystemExit(
+                          f"Cannot batch entries with conflicting '{extra_key}' values for tuple {key}: "
+                          f"{grouped_entry[extra_key]!r} vs {extra_value!r}"
+                      )
+              abi_values = entry.get("cxx11_abi_list")
+              if abi_values is None:
+                  abi_values = [entry["cxx11_abi"]]
+              for abi in abi_values:
+                  abi = str(abi)
+                  if abi not in grouped_entry["cxx11_abi_list"]:
+                      grouped_entry["cxx11_abi_list"].append(abi)
+
+          include = list(grouped.values())
+          for entry in include:
+              entry["cxx11_abi_list"].sort(key=lambda abi: (abi_order.get(abi, 99), abi))
+
+          print(json.dumps({"include": include}, separators=(",", ":")))
+          PY
+          )"
+          echo "matrix=${grouped_matrix}" >> "$GITHUB_OUTPUT"
           if [[ "${{ inputs.upload-to-release }}" == "true" ]]; then
             echo "release_version=${{ inputs.release-tag }}" >> $GITHUB_OUTPUT
           else
@@ -135,6 +220,7 @@ jobs:
           CXX11_ABI: ${{ inputs.cxx11-abi }}
           OS_VERSION: ${{ inputs.os-version }}
           PRESET: ${{ inputs.preset }}
+          MATRIX_JSON_INPUT: ${{ inputs.matrix-json }}
 
   prefetch-images:
     name: Prefetch docker images
@@ -190,11 +276,14 @@ jobs:
       python-version: ${{ matrix.python-version }}
       cuda-version: ${{ matrix.cuda-version }}
       torch-version: ${{ matrix.torch-version }}
-      cxx11_abi: ${{ matrix.cxx11_abi }}
+      cxx11_abi: ${{ join(matrix.cxx11_abi_list, '_') }}
+      cxx11_abi_list_json: ${{ toJSON(matrix.cxx11_abi_list) }}
       runner-labels-json: ${{ inputs.runner-labels-json }}
       run-wheel-tests: ${{ inputs.run-wheel-tests }}
       wheel-test-target: ${{ inputs.wheel-test-target }}
       enable-ccache: ${{ inputs.enable-ccache }}
       ccache-namespace: ${{ inputs.ccache-namespace }}
+      build-profile: ${{ inputs.build-profile }}
+      skip-nvcc-gen-dependencies: ${{ inputs.skip-nvcc-gen-dependencies }}
       release-version: ${{ needs.prepare.outputs.release_version }}
       upload-to-release: ${{ inputs.upload-to-release }}

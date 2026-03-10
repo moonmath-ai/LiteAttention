@@ -252,7 +252,82 @@ jobs:
       - name: Generate supported wheel matrix
         id: set
         run: |
-          python3 .github/scripts/generate_wheel_matrix.py
+          raw_matrix="$(env -u GITHUB_OUTPUT python3 .github/scripts/generate_wheel_matrix.py)"
+          grouped_matrix="$(RAW_MATRIX="$raw_matrix" python3 - <<'PY'
+          import itertools
+          import json
+          import os
+
+          GROUP_KEYS = ("os-version", "python-version", "cuda-version", "torch-version")
+          ABI_KEYS = {"cxx11_abi", "cxx11_abi_list"}
+
+          matrix = json.loads(os.environ["RAW_MATRIX"])
+
+          if "include" in matrix:
+              entries = matrix["include"]
+          else:
+              axes = {
+                  "os-version": matrix.get("os-version", []),
+                  "python-version": matrix.get("python-version", []),
+                  "cuda-version": matrix.get("cuda-version", []),
+                  "torch-version": matrix.get("torch-version", []),
+                  "cxx11_abi": matrix.get("cxx11_abi", []),
+              }
+              entries = [
+                  {
+                      "os-version": os_version,
+                      "python-version": python_version,
+                      "cuda-version": cuda_version,
+                      "torch-version": torch_version,
+                      "cxx11_abi": cxx11_abi,
+                  }
+                  for os_version, python_version, cuda_version, torch_version, cxx11_abi
+                  in itertools.product(
+                      axes["os-version"],
+                      axes["python-version"],
+                      axes["cuda-version"],
+                      axes["torch-version"],
+                      axes["cxx11_abi"],
+                  )
+              ]
+
+          grouped = {}
+          abi_order = {"FALSE": 0, "TRUE": 1}
+          for entry in entries:
+              key = tuple(entry[k] for k in GROUP_KEYS)
+              grouped_entry = grouped.setdefault(
+                  key,
+                  {
+                      **{k: v for k, v in entry.items() if k not in ABI_KEYS},
+                      "cxx11_abi_list": [],
+                  },
+              )
+              for extra_key, extra_value in entry.items():
+                  if extra_key in ABI_KEYS:
+                      continue
+                  if extra_key not in grouped_entry:
+                      grouped_entry[extra_key] = extra_value
+                  elif grouped_entry[extra_key] != extra_value:
+                      raise SystemExit(
+                          f"Cannot batch entries with conflicting '{extra_key}' values for tuple {key}: "
+                          f"{grouped_entry[extra_key]!r} vs {extra_value!r}"
+                      )
+              abi_values = entry.get("cxx11_abi_list")
+              if abi_values is None:
+                  abi_values = [entry["cxx11_abi"]]
+              for abi in abi_values:
+                  abi = str(abi)
+                  if abi not in grouped_entry["cxx11_abi_list"]:
+                      grouped_entry["cxx11_abi_list"].append(abi)
+
+          include = list(grouped.values())
+          for entry in include:
+              entry["cxx11_abi_list"].sort(key=lambda abi: (abi_order.get(abi, 99), abi))
+
+          print(json.dumps({"include": include}, separators=(",", ":")))
+          PY
+          )"
+          echo "matrix=${grouped_matrix}" >> "$GITHUB_OUTPUT"
           max_parallel="${{ inputs.wheel_max_parallel }}"
           if [[ -z "$max_parallel" ]]; then
             max_parallel="${{ vars.LITE_ATTENTION_WHEEL_MATRIX_MAX_PARALLEL }}"
@@ -282,7 +357,8 @@ jobs:
       python-version: ${{ matrix.python-version }}
       cuda-version: ${{ matrix.cuda-version }}
       torch-version: ${{ matrix.torch-version }}
-      cxx11_abi: ${{ matrix.cxx11_abi }}
+      cxx11_abi: ${{ join(matrix.cxx11_abi_list, '_') }}
+      cxx11_abi_list_json: ${{ toJSON(matrix.cxx11_abi_list) }}
       runner-labels-json: ${{ inputs.build_runner_labels_json }}
       run-wheel-tests: ${{ inputs.run_wheel_tests }}
       wheel-test-target: ${{ inputs.wheel_test_target }}

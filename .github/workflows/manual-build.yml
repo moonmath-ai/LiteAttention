@@ -78,6 +78,11 @@ on:
         required: false
         default: ""
         type: string
+      build-profile:
+        description: "Enable detailed NVCC/Ninja profiling artifacts and summary"
+        required: false
+        default: false
+        type: boolean
       enable-ccache:
         description: "Enable ccache restore/save and bundle artifact"
         required: false
@@ -150,6 +155,7 @@ jobs:
       nvcc-resource-usage: ${{ inputs.nvcc-resource-usage }}
       nvcc-split-compile: ${{ inputs.nvcc-split-compile }}
       skip-nvcc-gen-dependencies: ${{ inputs.skip-nvcc-gen-dependencies }}
+      build-profile: ${{ inputs.build-profile }}
       enable-ccache: ${{ inputs.enable-ccache }}
       ccache-namespace: ${{ inputs.ccache-namespace }}
       import-ccache-artifact: ${{ inputs.import-ccache-artifact }}

@@ -177,6 +177,8 @@ def _write_ninja_file(path,
     if with_cuda:
         cuda_compile_rule = ['rule cuda_compile']
         nvcc_gendeps = ''
+        nvcc_profile_prefix = nvcc_profile_command_prefix()
+        nvcc_profile_args = nvcc_profile_command_args()
         # --generate-dependencies-with-compile is not supported by ROCm
         # Nvcc flag `--generate-dependencies-with-compile` is not supported by sccache, which may increase build time.
         skip_nvcc_gendeps = (
@@ -191,16 +193,16 @@ def _write_ninja_file(path,
             # to make this work on Windows too.
             nvcc_gendeps = '--generate-dependencies-with-compile --dependency-output $out.d'
         cuda_compile_rule_sm80 = ['rule cuda_compile_sm80'] + cuda_compile_rule[1:] + [
-            f'  command = $nvcc_from_env {nvcc_gendeps} $cuda_cflags -c $in -o $out $cuda_post_cflags_sm80'
+            f'  command = {nvcc_profile_prefix}$nvcc_from_env {nvcc_gendeps} $cuda_cflags -c $in -o $out $cuda_post_cflags_sm80{nvcc_profile_args}'
         ]
         cuda_compile_rule_sm80_sm90 = ['rule cuda_compile_sm80_sm90'] + cuda_compile_rule[1:] + [
-            f'  command = $nvcc_from_env {nvcc_gendeps} $cuda_cflags -c $in -o $out $cuda_post_cflags_sm80_sm90'
+            f'  command = {nvcc_profile_prefix}$nvcc_from_env {nvcc_gendeps} $cuda_cflags -c $in -o $out $cuda_post_cflags_sm80_sm90{nvcc_profile_args}'
         ]
         cuda_compile_rule_sm100 = ['rule cuda_compile_sm100'] + cuda_compile_rule[1:] + [
-            f'  command = $nvcc_from_env {nvcc_gendeps} $cuda_cflags -c $in -o $out $cuda_post_cflags_sm100'
+            f'  command = {nvcc_profile_prefix}$nvcc_from_env {nvcc_gendeps} $cuda_cflags -c $in -o $out $cuda_post_cflags_sm100{nvcc_profile_args}'
         ]
         cuda_compile_rule.append(
-            f'  command = $nvcc_from_env {nvcc_gendeps} $cuda_cflags -c $in -o $out $cuda_post_cflags')
+            f'  command = {nvcc_profile_prefix}$nvcc_from_env {nvcc_gendeps} $cuda_cflags -c $in -o $out $cuda_post_cflags{nvcc_profile_args}')
 
     # Emit one build rule per source to enable incremental build.
     build = []
@@ -411,6 +413,26 @@ def nvcc_split_compile_args():
         )
         return []
     return [f"--split-compile={split_compile_jobs}"]
+
+
+def nvcc_profile_command_prefix() -> str:
+    """Optional per-translation-unit wall-time capture via /usr/bin/time."""
+    if not _env_flag_true("LITE_ATTENTION_NVCC_PER_TU_TIME", "0"):
+        return ""
+    if not os.path.exists("/usr/bin/time"):
+        warnings.warn("LITE_ATTENTION_NVCC_PER_TU_TIME requested, but /usr/bin/time was not found; skipping per-TU wall-time capture.")
+        return ""
+    return '/usr/bin/time -f "wall_s=%e user_s=%U sys_s=%S maxrss_kb=%M exit=%x" -o $out.nvcc_walltime.txt '
+
+
+def nvcc_profile_command_args() -> str:
+    """Optional NVCC sidecar outputs for detailed phase profiling."""
+    args = []
+    if _env_flag_true("LITE_ATTENTION_NVCC_TIME", "0"):
+        args.append("--time=$out.nvcc_time.csv")
+    if _env_flag_true("LITE_ATTENTION_NVCC_FDEVICE_TIME_TRACE", "0"):
+        args.append("--fdevice-time-trace=$out.fdevice_time_trace.json")
+    return (" " + " ".join(args)) if args else ""
 
 
 # NVIDIA_TOOLCHAIN_VERSION = {"nvcc": "12.3.107"}
