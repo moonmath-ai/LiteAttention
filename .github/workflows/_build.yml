@@ -538,46 +538,7 @@ jobs:
           echo "Compile settings: MAX_JOBS=${MAX_JOBS} NVCC_THREADS=${NVCC_THREADS}"
           if [[ "${{ inputs.enable-ccache }}" == "true" ]]; then
             echo "::group::ccache runtime"
-            python3 - <<'PY'
-            import json
-            import os
-            import shutil
-            import subprocess
-
-            keys = [
-                "USE_CCACHE_WRAPPERS",
-                "CCACHE_DIR",
-                "CCACHE_BASEDIR",
-                "CCACHE_MAXSIZE",
-                "CCACHE_COMPILERCHECK",
-                "CCACHE_NOHASHDIR",
-                "CCACHE_STATSLOG",
-                "CCACHE_LOGFILE",
-                "CCACHE_DEBUG",
-                "CCACHE_DEBUGLEVEL",
-                "CCACHE_DEBUGDIR",
-                "CUDA_NVCC_EXECUTABLE",
-                "PYTORCH_NVCC",
-                "CUDA_HOME",
-                "CC",
-                "CXX",
-                "MAX_JOBS",
-                "NVCC_THREADS",
-                "LITE_ATTENTION_SKIP_NVCC_GEN_DEPENDENCIES",
-                "LITE_ATTENTION_NVCC_RESOURCE_USAGE",
-                "LITE_ATTENTION_NVCC_LINEINFO",
-                "LITE_ATTENTION_NVCC_SPLIT_COMPILE",
-            ]
-            info = {key: os.environ.get(key, "") for key in keys}
-            info["which"] = {tool: shutil.which(tool) or "" for tool in ("ccache", "nvcc", "gcc", "g++")}
-            if info["which"]["ccache"]:
-                try:
-                    version_lines = subprocess.check_output(["ccache", "--version"], text=True).splitlines()
-                    info["ccache_version"] = version_lines[0] if version_lines else ""
-                except Exception as exc:
-                    info["ccache_version_error"] = str(exc)
-            print(json.dumps(info, indent=2, sort_keys=True))
-            PY
+            python3 -c 'import json, os, shutil, subprocess; keys=["USE_CCACHE_WRAPPERS","CCACHE_DIR","CCACHE_BASEDIR","CCACHE_MAXSIZE","CCACHE_COMPILERCHECK","CCACHE_NOHASHDIR","CCACHE_STATSLOG","CCACHE_LOGFILE","CCACHE_DEBUG","CCACHE_DEBUGLEVEL","CCACHE_DEBUGDIR","CUDA_NVCC_EXECUTABLE","PYTORCH_NVCC","CUDA_HOME","CC","CXX","MAX_JOBS","NVCC_THREADS","LITE_ATTENTION_SKIP_NVCC_GEN_DEPENDENCIES","LITE_ATTENTION_NVCC_RESOURCE_USAGE","LITE_ATTENTION_NVCC_LINEINFO","LITE_ATTENTION_NVCC_SPLIT_COMPILE"]; info={key: os.environ.get(key, "") for key in keys}; info["which"]={tool: shutil.which(tool) or "" for tool in ("ccache","nvcc","gcc","g++")}; version_result = subprocess.run(["ccache","--version"], capture_output=True, text=True, check=False) if info["which"]["ccache"] else None; version_lines = version_result.stdout.splitlines() if version_result else []; info["ccache_version"] = (version_lines[0] if version_lines else "") if version_result else ""; print(json.dumps(info, indent=2, sort_keys=True))'
             ccache -p | sed -n 's/^\(base_dir\|cache_dir\|compiler_check\|debug\|debug_dir\|hash_dir\|log_file\|namespace\|sloppiness\|stats_log\|temporary_dir\) = /\1=/p' || true
             echo "::endgroup::"
           fi
