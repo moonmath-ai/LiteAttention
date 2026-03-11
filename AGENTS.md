@@ -9,6 +9,10 @@ Key concepts:
 - **Threshold-based skipping**: Tiles are skipped when their max score is too far below the running max (compared in log2 scale). Threshold must be negative in non-debug mode.
 - **Must-do/must-skip lists**: Force computation or skipping of specific sequence ranges (e.g., text tokens vs video tokens).
 
+## Code Style
+
+- Pre-commit hooks enforce `ruff` formatting. Always run `ruff format .` before committing to avoid hook failures.
+
 ## Build Commands
 
 Requires an H100/H200 GPU, CUDA >= 12.3, and a C++20 compiler.
