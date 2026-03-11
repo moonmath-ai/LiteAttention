@@ -554,7 +554,7 @@ jobs:
       build-max-jobs: ${{ inputs.build-max-jobs }}
       nvcc-threads: ${{ inputs.nvcc-threads }}
       nvcc-lineinfo: ${{ inputs.nvcc-lineinfo }}
-      nvcc-resource-usage: ${{ inputs.nvcc-resource-usage }}
+      nvcc-resource-usage: ${{ inputs.nvcc-resource-usage != '' && inputs.nvcc-resource-usage || (!inputs.build-profile && '0') || '' }}
       nvcc-split-compile: ${{ inputs.nvcc-split-compile }}
       skip-nvcc-gen-dependencies: ${{ inputs.skip-nvcc-gen-dependencies }}
       release-version: ${{ needs.prepare.outputs.release_version }}
@@ -593,7 +593,7 @@ jobs:
       build-max-jobs: ${{ inputs.build-max-jobs }}
       nvcc-threads: ${{ inputs.nvcc-threads }}
       nvcc-lineinfo: ${{ inputs.nvcc-lineinfo }}
-      nvcc-resource-usage: ${{ inputs.nvcc-resource-usage }}
+      nvcc-resource-usage: ${{ inputs.nvcc-resource-usage != '' && inputs.nvcc-resource-usage || (!inputs.build-profile && '0') || '' }}
       nvcc-split-compile: ${{ inputs.nvcc-split-compile }}
       skip-nvcc-gen-dependencies: ${{ inputs.skip-nvcc-gen-dependencies }}
       release-version: ${{ needs.prepare.outputs.release_version }}
