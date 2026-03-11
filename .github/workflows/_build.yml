@@ -230,9 +230,17 @@ jobs:
             exit 0
           fi
           apt-get update
-          apt-get install -y software-properties-common
-          add-apt-repository ppa:deadsnakes/ppa -y
-          apt-get update
+          apt-get install -y software-properties-common python3-apt
+          candidate="$(apt-cache policy "python${py_ver}" | awk '/Candidate:/ {print $2}')"
+          if [[ -z "$candidate" || "$candidate" == "(none)" ]]; then
+            add-apt-repository ppa:deadsnakes/ppa -y
+            apt-get update
+            candidate="$(apt-cache policy "python${py_ver}" | awk '/Candidate:/ {print $2}')"
+          fi
+          if [[ -z "$candidate" || "$candidate" == "(none)" ]]; then
+            echo "::error::No candidate package found for python${py_ver}"
+            exit 1
+          fi
           apt-get install -y "python${py_ver}" "python${py_ver}-dev" "python${py_ver}-venv"
           update-alternatives --install /usr/bin/python3 python3 "/usr/bin/python${py_ver}" 2
           python3 -m ensurepip --upgrade || true
