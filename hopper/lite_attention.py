@@ -2171,15 +2171,8 @@ class LiteAttentionRegistry(ModuleRegistry):
                 qk_block_map = mod_data[
                     "qk_block_map"
                 ]  # [T, B_sel, H_sel, qtiles, ktiles]
-                import time as _time
-
-                _t0 = _time.perf_counter()
                 replay_list = self._qk_map_to_replay_skip_lists(
                     qk_block_map, replay_cfg.threshold, n_disabled
-                )
-                _dt = _time.perf_counter() - _t0
-                print(
-                    f"  _qk_map_to_replay: {name.split('.')[-2]} {_dt:.2f}s", flush=True
                 )
             else:
                 # --- Skip-list replay: use captured write-lists directly ---
@@ -2326,29 +2319,31 @@ class LiteAttentionRegistry(ModuleRegistry):
             # Length field
             sl_flat[:, 0] = (nr * 2).to(torch.int16)
 
-            # Fill range pairs (reversed: last range first)
+            # Fill range pairs (reversed: last range first).
+            # For each forward index r, the reversed slot is:
+            #   slot = 1 + (nr - 1 - r) * 2  (per-row, since nr varies)
+            # We iterate r in [0, max_ranges) and scatter into per-row slots.
             for r in range(max_ranges):
-                # r-th range from the end = range index (max_ranges - 1 - r) in forward order
-                # But our dense arrays are in forward order, so reverse:
-                fwd_idx = max_ranges - 1 - r
-                slot = 1 + r * 2  # position in skip_list
+                active = nr > r  # [N] bool — range r exists for this row
 
-                # Mask: only rows that have enough ranges
-                active = nr > fwd_idx  # [N] bool — this range exists for this row
+                s = sd[:, r]  # [N] start of forward range r
+                e = ed[:, r]  # [N] end of forward range r
 
-                s = sd[:, fwd_idx]  # [N] start values
-                e = ed[:, fwd_idx]  # [N] end values
+                # Reversed slot position: last range (r=nr-1) → slot 1,
+                # second-to-last (r=nr-2) → slot 3, etc.
+                rev_slot = 1 + (nr - 1 - r) * 2  # [N] per-row slot positions
+
+                # Scatter into per-row positions using advanced indexing
+                row_idx = torch.arange(N)
+                active_rows = active.nonzero(as_tuple=True)[0]
+                slots = rev_slot[active_rows].long()
 
                 if phase_true:
-                    sl_flat[:, slot] = torch.where(active, e, sl_flat[:, slot])
-                    sl_flat[:, slot + 1] = torch.where(
-                        active, s - 1, sl_flat[:, slot + 1]
-                    )
+                    sl_flat[active_rows, slots] = e[active_rows]
+                    sl_flat[active_rows, slots + 1] = s[active_rows] - 1
                 else:
-                    sl_flat[:, slot] = torch.where(active, s, sl_flat[:, slot])
-                    sl_flat[:, slot + 1] = torch.where(
-                        active, e + 1, sl_flat[:, slot + 1]
-                    )
+                    sl_flat[active_rows, slots] = s[active_rows]
+                    sl_flat[active_rows, slots + 1] = e[active_rows] + 1
 
             result.append(skip_list)
 
