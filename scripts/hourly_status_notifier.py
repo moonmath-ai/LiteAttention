@@ -670,7 +670,7 @@ def main() -> int:
     if not args.force and not args.dry_run and last_email_sent is not None:
         observed_elapsed_seconds = elapsed_seconds_since_last_sent(last_email_sent, now)
         required_elapsed_seconds = max(0, args.min_send_interval_seconds)
-        if observed_elapsed_seconds < required_elapsed_seconds:
+        if observed_elapsed_seconds <= required_elapsed_seconds:
             log_event(
                 "skip_interval_gate",
                 last_sent_at=utc_iso(last_email_sent),
@@ -695,21 +695,15 @@ def main() -> int:
         body = fallback_body(payload, now)
     subject_errors = validate_subject(subject)
     if subject_errors:
-        if not args.dry_run:
-            append_lastcheck(args.lastcheck_file, utc_now(), "SUBJECT_FAIL")
         log_event("subject_validation_failed", errors="; ".join(subject_errors))
         print(f"subject validation failed: {subject_errors}", file=sys.stderr)
         return 1
     validation_errors = validate_body(body)
     if validation_errors:
         log_event("body_validation_failed_primary", errors="; ".join(validation_errors))
-        if not args.dry_run:
-            append_lastcheck(args.lastcheck_file, utc_now(), "BODY_FALLBACK")
         body = fallback_body(payload, now)
         validation_errors = validate_body(body)
     if validation_errors:
-        if not args.dry_run:
-            append_lastcheck(args.lastcheck_file, utc_now(), "BODY_FAIL")
         log_event("body_validation_failed_fallback", errors="; ".join(validation_errors))
         print(f"body validation failed: {validation_errors}", file=sys.stderr)
         return 1
@@ -775,7 +769,6 @@ def main() -> int:
     save_state(args.state_file, new_state)
 
     if not success:
-        append_lastcheck(args.lastcheck_file, utc_now(), "SEND_FAIL")
         log_event("send_failed", output_tail=send_output[-800:])
         print(send_output, file=sys.stderr)
         return 1
