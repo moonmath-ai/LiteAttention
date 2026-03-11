@@ -434,6 +434,9 @@ jobs:
           obs_dir = os.environ["OBS_DIR"]
           payload = {
               "mode": os.environ.get("CCACHE_OBSERVABILITY_MODE", ""),
+              "host": os.environ.get("RUNNER_NAME") or os.environ.get("HOSTNAME", ""),
+              "head": os.environ.get("GITHUB_SHA", ""),
+              "ref_name": os.environ.get("GITHUB_REF_NAME", ""),
               "restore_cache_hit": os.environ.get("RESTORE_CACHE_HIT", ""),
               "restore_mode": os.environ.get("RESTORE_MODE", ""),
               "cache_key": os.environ.get("CACHE_KEY", ""),
@@ -447,6 +450,7 @@ jobs:
               "pytorch_nvcc": os.environ.get("PYTORCH_NVCC", ""),
               "max_jobs": os.environ.get("MAX_JOBS", ""),
               "nvcc_threads": os.environ.get("NVCC_THREADS", ""),
+              "use_ccache_wrappers": os.environ.get("USE_CCACHE_WRAPPERS", ""),
           }
           with open(os.path.join(obs_dir, "metadata.json"), "w", encoding="utf-8") as fh:
               json.dump(payload, fh, indent=2, sort_keys=True)
@@ -1247,6 +1251,12 @@ jobs:
       - name: Collect ccache miss analysis
         if: ${{ always() && inputs.enable-ccache && inputs.ccache-observability != 'off' && steps.py_compat.outputs.skip_build != 'true' && steps.torch_install.outputs.skip_build != 'true' }}
         continue-on-error: true
+        env:
+          RESTORE_CACHE_HIT: ${{ steps.restore_ccache.outputs.cache-hit || '' }}
+          RESTORE_MODE: ${{ steps.ccache_restore_mode.outputs.mode || '' }}
+          CACHE_KEY: ${{ steps.ccache_key.outputs.key || '' }}
+          CACHE_PREFIX: ${{ steps.ccache_key.outputs.prefix || '' }}
+          CACHE_CROSS_PY_PREFIX: ${{ steps.ccache_key.outputs.cross_py_prefix || '' }}
         run: |
           obs_dir="${CCACHE_OBS_DIR:-${BUILD_WHEEL_DIR}/ccache-observability}"
           mkdir -p "${obs_dir}"
@@ -1265,11 +1275,71 @@ jobs:
           obs_dir = pathlib.Path(os.environ["OBS_DIR"])
           log_file = os.environ.get("CCACHE_LOGFILE", "")
           debug_dir = os.environ.get("CCACHE_DEBUGDIR", "")
+          build_wheel_dir = os.environ.get("BUILD_WHEEL_DIR", "")
+          github_workspace = os.environ.get("GITHUB_WORKSPACE", "")
+          ccache_basedir = os.environ.get("CCACHE_BASEDIR", "")
 
           source_re = re.compile(r'([A-Za-z0-9_./+-]+\.(?:cu|cuh|cpp|cc|cxx))')
           reason_counter = collections.Counter()
           missed_files = collections.Counter()
           cicc_context = collections.Counter()
+
+          metric_aliases = {
+              "cacheable calls": "cacheable_calls",
+              "direct": "direct_hits",
+              "cache hit (direct)": "direct_hits",
+              "preprocessed": "preprocessed_hits",
+              "cache hit (preprocessed)": "preprocessed_hits",
+              "misses": "misses",
+              "cache miss": "misses",
+              "called for link": "called_for_link",
+              "compile failed": "compile_failed",
+          }
+
+          def normalize_source(src: str) -> str:
+              value = src.strip()
+              if not value:
+                  return "<unknown>"
+              for root in (build_wheel_dir, github_workspace, ccache_basedir):
+                  if root:
+                      prefix = root.rstrip("/") + "/"
+                      if value.startswith(prefix):
+                          value = value[len(prefix):]
+              for marker in ("hopper/", "csrc/", "flash_attn/", ".github/"):
+                  idx = value.find(marker)
+                  if idx != -1:
+                      return value[idx:]
+              if value.startswith("/"):
+                  return pathlib.Path(value).name or value
+              return value
+
+          def parse_stats(path: pathlib.Path) -> dict[str, int]:
+              stats: dict[str, int] = {}
+              if not path.is_file():
+                  return stats
+              patterns = (
+                  re.compile(r'^\s*([A-Za-z][A-Za-z ()-]+?):\s*([0-9]+)(?:\s*/.*)?$'),
+                  re.compile(r'^\s*([A-Za-z][A-Za-z ()-]+?)\s+([0-9]+)(?:\s*/.*)?$'),
+              )
+              with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                  for raw in fh:
+                      line = raw.strip()
+                      if not line:
+                          continue
+                      for pattern in patterns:
+                          match = pattern.match(line)
+                          if not match:
+                              continue
+                          label = " ".join(match.group(1).strip().lower().split())
+                          key = metric_aliases.get(label)
+                          if key:
+                              stats[key] = int(match.group(2))
+                          break
+              return stats
+
+          def stat_delta(pre: dict[str, int], post: dict[str, int]) -> dict[str, int]:
+              keys = set(pre) | set(post)
+              return {key: int(post.get(key, 0)) - int(pre.get(key, 0)) for key in sorted(keys)}
 
           def ingest_line(line: str):
               low = line.lower()
@@ -1289,7 +1359,7 @@ jobs:
                   sources = source_re.findall(line)
                   if sources:
                       for src in sources:
-                          missed_files[src] += 1
+                          missed_files[normalize_source(src)] += 1
                   else:
                       missed_files["<unknown>"] += 1
 
@@ -1327,14 +1397,56 @@ jobs:
                               break
                           ingest_line(line)
 
+          pre_stats = parse_stats(obs_dir / "ccache-pre-s.txt")
+          post_stats = parse_stats(obs_dir / "ccache-post-s.txt")
+          delta_stats = stat_delta(pre_stats, post_stats)
+          cacheable_calls = delta_stats.get("cacheable_calls", post_stats.get("cacheable_calls", 0))
+          total_hits = delta_stats.get("direct_hits", post_stats.get("direct_hits", 0)) + delta_stats.get("preprocessed_hits", post_stats.get("preprocessed_hits", 0))
+          hit_rate_pct = (100.0 * total_hits / cacheable_calls) if cacheable_calls else None
+
           summary = {
               "mode": os.environ.get("CCACHE_OBSERVABILITY_MODE", ""),
+              "host": os.environ.get("RUNNER_NAME") or os.environ.get("HOSTNAME", ""),
+              "head": os.environ.get("GITHUB_SHA", ""),
+              "restore_cache_hit": os.environ.get("RESTORE_CACHE_HIT", ""),
+              "restore_mode": os.environ.get("RESTORE_MODE", ""),
+              "cache_key": os.environ.get("CACHE_KEY", ""),
+              "cache_prefix": os.environ.get("CACHE_PREFIX", ""),
+              "cache_cross_py_prefix": os.environ.get("CACHE_CROSS_PY_PREFIX", ""),
               "scanned_file_count": len(scanned_files),
               "scanned_files_sample": scanned_files[:40],
+              "pre_stats": pre_stats,
+              "post_stats": post_stats,
+              "delta_stats": delta_stats,
+              "cacheable_calls": cacheable_calls,
+              "total_hits": total_hits,
+              "hit_rate_pct": hit_rate_pct,
               "top_miss_reasons": reason_counter.most_common(20),
               "top_missed_files": missed_files.most_common(30),
               "cicc_context": dict(cicc_context),
           }
+          top_miss_reason = summary["top_miss_reasons"][0][0] if summary["top_miss_reasons"] else "none"
+          top_miss_reason_count = summary["top_miss_reasons"][0][1] if summary["top_miss_reasons"] else 0
+          top_missed_file = summary["top_missed_files"][0][0] if summary["top_missed_files"] else "none"
+          top_missed_file_count = summary["top_missed_files"][0][1] if summary["top_missed_files"] else 0
+          compare_summary = {
+              "host": summary["host"],
+              "head": summary["head"],
+              "restore_cache_hit": summary["restore_cache_hit"],
+              "restore_mode": summary["restore_mode"],
+              "cacheable_calls": summary["cacheable_calls"],
+              "direct_hits": delta_stats.get("direct_hits", post_stats.get("direct_hits", 0)),
+              "preprocessed_hits": delta_stats.get("preprocessed_hits", post_stats.get("preprocessed_hits", 0)),
+              "misses": delta_stats.get("misses", post_stats.get("misses", 0)),
+              "total_hits": summary["total_hits"],
+              "hit_rate_pct": summary["hit_rate_pct"],
+              "top_miss_reason": top_miss_reason,
+              "top_miss_reason_count": top_miss_reason_count,
+              "top_missed_file": top_missed_file,
+              "top_missed_file_count": top_missed_file_count,
+          }
+          with open(obs_dir / "ccache-compare-summary.json", "w", encoding="utf-8") as fh:
+              json.dump(compare_summary, fh, indent=2, sort_keys=True)
 
           with open(obs_dir / "ccache-miss-summary.json", "w", encoding="utf-8") as fh:
               json.dump(summary, fh, indent=2, sort_keys=True)
@@ -1343,10 +1455,26 @@ jobs:
               "# ccache miss summary",
               "",
               f"- mode: {summary['mode']}",
+              f"- host: {summary['host'] or 'unknown'}",
+              f"- head: {summary['head'] or 'unknown'}",
               f"- scanned_file_count: {summary['scanned_file_count']}",
+              f"- cacheable_calls: {summary['cacheable_calls']}",
+              f"- total_hits: {summary['total_hits']}",
+              f"- hit_rate_pct: {summary['hit_rate_pct']:.2f}" if summary["hit_rate_pct"] is not None else "- hit_rate_pct: n/a",
+              f"- restore_cache_hit: {summary['restore_cache_hit'] or 'unknown'}",
+              f"- restore_mode: {summary['restore_mode'] or 'unknown'}",
+              "",
+              "## Warm run delta stats",
+          ]
+          if summary["delta_stats"]:
+              for key, value in summary["delta_stats"].items():
+                  lines.append(f"- {key}: {value}")
+          else:
+              lines.append("- none")
+          lines.extend([
               "",
               "## Top miss reasons",
-          ]
+          ])
           if summary["top_miss_reasons"]:
               for reason, count in summary["top_miss_reasons"][:10]:
                   lines.append(f"- {count}  {reason}")
@@ -1367,6 +1495,51 @@ jobs:
 
           with open(obs_dir / "ccache-miss-summary.md", "w", encoding="utf-8") as fh:
               fh.write("\n".join(lines) + "\n")
+
+          compare_lines = [
+              "# ccache compare summary",
+              "",
+              f"- host: {compare_summary['host'] or 'unknown'}",
+              f"- head: {compare_summary['head'] or 'unknown'}",
+              f"- restore_cache_hit: {compare_summary['restore_cache_hit'] or 'unknown'}",
+              f"- restore_mode: {compare_summary['restore_mode'] or 'unknown'}",
+              f"- cacheable_calls: {compare_summary['cacheable_calls']}",
+              f"- direct_hits: {compare_summary['direct_hits']}",
+              f"- preprocessed_hits: {compare_summary['preprocessed_hits']}",
+              f"- misses: {compare_summary['misses']}",
+              f"- total_hits: {compare_summary['total_hits']}",
+              f"- hit_rate_pct: {compare_summary['hit_rate_pct']:.2f}" if compare_summary["hit_rate_pct"] is not None else "- hit_rate_pct: n/a",
+              f"- top_miss_reason: {compare_summary['top_miss_reason']} ({compare_summary['top_miss_reason_count']})",
+              f"- top_missed_file: {compare_summary['top_missed_file']} ({compare_summary['top_missed_file_count']})",
+          ]
+          with open(obs_dir / "ccache-compare-summary.md", "w", encoding="utf-8") as fh:
+              fh.write("\n".join(compare_lines) + "\n")
+
+          compare_log = (
+              f"CCACHE_COMPARE host={compare_summary['host'] or 'unknown'} "
+              f"head={compare_summary['head'] or 'unknown'} "
+              f"restore_cache_hit={compare_summary['restore_cache_hit'] or 'unknown'} "
+              f"restore_mode={compare_summary['restore_mode'] or 'unknown'} "
+              f"cacheable_calls={compare_summary['cacheable_calls']} "
+              f"direct_hits={compare_summary['direct_hits']} "
+              f"preprocessed_hits={compare_summary['preprocessed_hits']} "
+              f"misses={compare_summary['misses']} "
+              f"hit_rate_pct={compare_summary['hit_rate_pct']:.2f}" if compare_summary["hit_rate_pct"] is not None else
+              f"CCACHE_COMPARE host={compare_summary['host'] or 'unknown'} "
+              f"head={compare_summary['head'] or 'unknown'} "
+              f"restore_cache_hit={compare_summary['restore_cache_hit'] or 'unknown'} "
+              f"restore_mode={compare_summary['restore_mode'] or 'unknown'} "
+              f"cacheable_calls={compare_summary['cacheable_calls']} "
+              f"direct_hits={compare_summary['direct_hits']} "
+              f"preprocessed_hits={compare_summary['preprocessed_hits']} "
+              f"misses={compare_summary['misses']} "
+              "hit_rate_pct=n/a"
+          )
+          compare_log += (
+              f" top_miss_reason={compare_summary['top_miss_reason']}:{compare_summary['top_miss_reason_count']}"
+              f" top_missed_file={compare_summary['top_missed_file']}:{compare_summary['top_missed_file_count']}"
+          )
+          print(compare_log)
           PY
 
       - name: Upload ccache observability artifact
