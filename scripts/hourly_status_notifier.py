@@ -69,6 +69,26 @@ def render_bullets(items: list[str]) -> list[str]:
     return lines
 
 
+def render_dense_ideas(items: list[str]) -> list[str]:
+    if not items:
+        return render_bullets(["keep workflow work moving"])
+    return [fill_text("; ".join(clean_text(item) for item in items), initial_indent="- ", subsequent_indent="  ")]
+
+
+def unique_items(items: list[str], *, limit: int) -> list[str]:
+    unique: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        cleaned = clean_text(item)
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        unique.append(cleaned)
+        if len(unique) >= limit:
+            break
+    return unique
+
+
 def parse_status(text: str) -> tuple[dict[str, str], dict[str, list[str]]]:
     kv: dict[str, str] = {}
     sections: dict[str, list[str]] = {}
@@ -219,7 +239,10 @@ def build_payload(status_text: str, status_exists: bool) -> dict[str, Any]:
     focus_tag = lanes[0][0].replace("_", "-") if lanes else "status"
     primary_task = lanes[0][1] if lanes else "maintain benchmark coordination"
     secondary_tasks = [value for _, value in lanes[1:3]]
-    ideas = future_ideas[:4] + [f"{key.replace('_', ' ')}: {value}" for key, value in lanes[:2]]
+    ideas = unique_items(
+        future_ideas[:4] + [f"{key.replace('_', ' ')}: {value}" for key, value in lanes[:2]],
+        limit=5,
+    )
     if not ideas:
         ideas = [
             "keep workflow work moving",
@@ -332,15 +355,12 @@ def build_body(payload: dict[str, Any], delta_lines: list[str], dt: datetime) ->
             "ETA / risk",
         ]
     )
-    lines.extend(
-        render_bullets(
-            [
-                f"Current-task ETA: {payload['eta']}",
-                f"ETA/% header: {header}",
-                "Top blocker: none" if compact and payload["top_blocker"] == "none" else f"Top blocker: {payload['top_blocker']}",
-            ]
-        )
-    )
+    eta_risk = [f"Current-task ETA: {payload['eta']}"]
+    if not compact:
+        eta_risk.append(f"ETA/% header: {header}")
+    if not compact or payload["top_blocker"] != "none":
+        eta_risk.append(f"Top blocker: {payload['top_blocker']}")
+    lines.extend(render_bullets(eta_risk))
 
     lines.extend(
         [
@@ -348,7 +368,7 @@ def build_body(payload: dict[str, Any], delta_lines: list[str], dt: datetime) ->
             "Idea list",
         ]
     )
-    lines.extend(render_bullets(payload["ideas"][: (2 if compact else 4)]))
+    lines.extend(render_dense_ideas(payload["ideas"][: (3 if compact else 4)]))
 
     branch_head = f"{payload['branch']} @ {payload['head']}"
     if not compact or not payload["status_exists"]:
@@ -366,12 +386,12 @@ def build_html_preview(payload: dict[str, Any], delta_lines: list[str], dt: date
     doing_now = [payload["primary_task"]]
     if not compact:
         doing_now.extend(payload["secondary_tasks"][:2])
-    ideas = payload["ideas"][: (2 if compact else 4)]
-    eta_risk = [
-        f"Current-task ETA: {payload['eta']}",
-        f"ETA/% header: {header}",
-        "Top blocker: none" if compact and payload["top_blocker"] == "none" else f"Top blocker: {payload['top_blocker']}",
-    ]
+    ideas = payload["ideas"][: (3 if compact else 4)]
+    eta_risk = [f"Current-task ETA: {payload['eta']}"]
+    if not compact:
+        eta_risk.append(f"ETA/% header: {header}")
+    if not compact or payload["top_blocker"] != "none":
+        eta_risk.append(f"Top blocker: {payload['top_blocker']}")
     return f"""\
 <!doctype html>
 <html lang="en">
@@ -410,9 +430,7 @@ def build_html_preview(payload: dict[str, Any], delta_lines: list[str], dt: date
 
         <div style="margin-bottom:14px;">
           <div style="font-size:12px;font-weight:700;text-transform:uppercase;color:#5b6b82;margin-bottom:6px;">Idea list</div>
-          <ul style="margin:0;padding-left:18px;line-height:1.5;">
-            {li(ideas)}
-          </ul>
+          <div style="font-size:13px;line-height:1.55;color:#22344f;">{html_lib.escape('; '.join(clean_text(item) for item in ideas))}</div>
         </div>
 
         <div style="font-size:12px;color:#5b6b82;">Branch/head: {html_lib.escape(payload['branch'])} @ {html_lib.escape(payload['head'])}</div>
@@ -439,9 +457,7 @@ def fallback_body(payload: dict[str, Any], dt: datetime) -> str:
         f"{fill_text(f'ETA/% header: {header}', initial_indent='- ', subsequent_indent='  ')}\n"
         f"{fill_text('Top blocker: notifier render failure', initial_indent='- ', subsequent_indent='  ')}\n\n"
         "Idea list\n"
-        f"{fill_text('restore payload quality', initial_indent='- ', subsequent_indent='  ')}\n"
-        f"{fill_text('verify sender health', initial_indent='- ', subsequent_indent='  ')}\n"
-        f"{fill_text('keep hourly delivery alive', initial_indent='- ', subsequent_indent='  ')}\n"
+        f"{fill_text('restore payload quality; verify sender health; keep hourly delivery alive', initial_indent='- ', subsequent_indent='  ')}\n"
     )
 
 
