@@ -2171,8 +2171,15 @@ class LiteAttentionRegistry(ModuleRegistry):
                 qk_block_map = mod_data[
                     "qk_block_map"
                 ]  # [T, B_sel, H_sel, qtiles, ktiles]
+                import time as _time
+
+                _t0 = _time.perf_counter()
                 replay_list = self._qk_map_to_replay_skip_lists(
                     qk_block_map, replay_cfg.threshold, n_disabled
+                )
+                _dt = _time.perf_counter() - _t0
+                print(
+                    f"  _qk_map_to_replay: {name.split('.')[-2]} {_dt:.2f}s", flush=True
                 )
             else:
                 # --- Skip-list replay: use captured write-lists directly ---
@@ -2232,52 +2239,116 @@ class LiteAttentionRegistry(ModuleRegistry):
         compute_all = LiteAttentionRegistry._make_compute_all(B, H, qtiles, ktiles)
         result: list[torch.Tensor] = [compute_all]
 
-        # Boolean mask: which tiles to compute
-        compute_mask = qk_block_map >= threshold  # [T, B, H, qtiles, ktiles]
+        # Boolean mask, flattened: [T, N, ktiles] where N = B*H*qtiles
+        compute_mask = (qk_block_map >= threshold).reshape(T_total, -1, ktiles)
+        N = compute_mask.shape[1]
 
+        # Detect range boundaries: pad with False, diff gives +1 at start, -1 past end
+        padded = torch.nn.functional.pad(compute_mask.to(torch.int8), (1, 1), value=0)
+        diff = padded[:, :, 1:] - padded[:, :, :-1]  # [T, N, ktiles+1]
+
+        # starts_mask[t,n,k]=True where a contiguous range begins at tile k
+        # ends_mask[t,n,k]=True where a contiguous range ends at tile k (inclusive)
+        starts_mask = diff == 1  # [T, N, ktiles+1] — only cols 0..ktiles-1 can be True
+        ends_mask = diff == -1  # [T, N, ktiles+1] — only cols 1..ktiles can be True
+
+        # Number of ranges per row: [T, N]
+        n_ranges = starts_mask.sum(dim=-1)
+
+        # Max ranges across all rows (determines buffer width needed)
+        max_ranges = int(n_ranges.max().item()) if n_ranges.any() else 0
+
+        if max_ranges == 0:
+            # No tiles to compute anywhere — all skip lists are empty
+            for _ in range(n_disabled, T_total):
+                result.append(torch.zeros(B, H, qtiles, ktiles + 2, dtype=torch.int16))
+            return result
+
+        # For each row, gather the start/end positions into dense arrays.
+        # argsort trick: sort the column indices where starts_mask is True,
+        # grouping by row via a stable sort on (row, col).
+        # We process all timesteps at once: flatten T and N.
+        TN = T_total * N
+        starts_flat = starts_mask[:T_total].reshape(TN, ktiles + 1)
+        ends_flat = ends_mask[:T_total].reshape(TN, ktiles + 1)
+        n_ranges_flat = n_ranges[:T_total].reshape(TN)
+
+        # Gather start/end column indices per row into [TN, max_ranges] tensors
+        # For rows with fewer ranges, the extra slots are zero (unused).
+        # Use topk on the mask to get the column indices of True values, sorted.
+        # topk with k=max_ranges on int8 gives the largest values (1s first).
+        if max_ranges > 0:
+            # Positions where starts are True — we want sorted col indices per row
+            # Use cumsum-within-row approach: for each row, the True positions
+            # get sequential indices via cumsum, then we scatter into dense array.
+            starts_cumsum = starts_flat.cumsum(dim=-1) * starts_flat  # [TN, ktiles+1]
+            ends_cumsum = ends_flat.cumsum(dim=-1) * ends_flat
+
+            # Dense arrays: starts_dense[row, range_idx] = col index of that range's start
+            starts_dense = torch.zeros(TN, max_ranges, dtype=torch.int16)
+            ends_dense = torch.zeros(TN, max_ranges, dtype=torch.int16)
+
+            col_indices = (
+                torch.arange(ktiles + 1, dtype=torch.int16).unsqueeze(0).expand(TN, -1)
+            )
+
+            # Where starts_flat is True, scatter col index into position (cumsum-1)
+            s_pos = starts_cumsum.long()  # 1-based positions
+            s_mask = starts_flat.bool()
+            # Linearize: row * max_ranges + (pos - 1)
+            row_offsets = torch.arange(TN, dtype=torch.long).unsqueeze(1) * max_ranges
+            s_linear = (row_offsets + s_pos - 1).masked_select(s_mask)
+            starts_dense.reshape(-1).scatter_(
+                0, s_linear, col_indices.masked_select(s_mask)
+            )
+
+            e_pos = ends_cumsum.long()
+            e_mask = ends_flat.bool()
+            e_linear = (row_offsets + e_pos - 1).masked_select(e_mask)
+            # ends_mask is at col+1, so subtract 1 to get inclusive end
+            ends_dense.reshape(-1).scatter_(
+                0, e_linear, (col_indices - 1).masked_select(e_mask)
+            )
+
+        # Now build skip lists for each timestep
         for t in range(n_disabled, T_total):
-            # replay_idx = position in result list (1-based)
             replay_idx = t - n_disabled + 1
             phase_true = replay_idx % 2 == 0
 
             skip_list = torch.zeros(B, H, qtiles, ktiles + 2, dtype=torch.int16)
+            sl_flat = skip_list.reshape(N, ktiles + 2)
 
-            for b in range(B):
-                for h in range(H):
-                    for q in range(qtiles):
-                        row = compute_mask[t, b, h, q]  # [ktiles] bool
+            t_offset = t * N
+            nr = n_ranges_flat[t_offset : t_offset + N]  # [N]
+            sd = starts_dense[t_offset : t_offset + N]  # [N, max_ranges]
+            ed = ends_dense[t_offset : t_offset + N]  # [N, max_ranges]
 
-                        # Find contiguous True ranges
-                        ranges: list[tuple[int, int]] = []
-                        i = 0
-                        while i < ktiles:
-                            if row[i]:
-                                start = i
-                                while i < ktiles and row[i]:
-                                    i += 1
-                                ranges.append((start, i - 1))  # inclusive end
-                            else:
-                                i += 1
+            # Length field
+            sl_flat[:, 0] = (nr * 2).to(torch.int16)
 
-                        if not ranges:
-                            # length=0 → skip everything
-                            continue
+            # Fill range pairs (reversed: last range first)
+            for r in range(max_ranges):
+                # r-th range from the end = range index (max_ranges - 1 - r) in forward order
+                # But our dense arrays are in forward order, so reverse:
+                fwd_idx = max_ranges - 1 - r
+                slot = 1 + r * 2  # position in skip_list
 
-                        skip_list[b, h, q, 0] = len(ranges) * 2
-                        idx = 1
-                        # Reversed order: last range first
-                        for s, e in reversed(ranges):
-                            if phase_true:
-                                # phase=True: start_x < end_x
-                                # kernel iterates range(start_x+1, end_x+1)
-                                skip_list[b, h, q, idx] = e  # end_x
-                                skip_list[b, h, q, idx + 1] = s - 1  # start_x
-                            else:
-                                # phase=False: start_x > end_x
-                                # kernel iterates range(start_x-1, end_x-1, -1)
-                                skip_list[b, h, q, idx] = s  # end_x
-                                skip_list[b, h, q, idx + 1] = e + 1  # start_x
-                            idx += 2
+                # Mask: only rows that have enough ranges
+                active = nr > fwd_idx  # [N] bool — this range exists for this row
+
+                s = sd[:, fwd_idx]  # [N] start values
+                e = ed[:, fwd_idx]  # [N] end values
+
+                if phase_true:
+                    sl_flat[:, slot] = torch.where(active, e, sl_flat[:, slot])
+                    sl_flat[:, slot + 1] = torch.where(
+                        active, s - 1, sl_flat[:, slot + 1]
+                    )
+                else:
+                    sl_flat[:, slot] = torch.where(active, s, sl_flat[:, slot])
+                    sl_flat[:, slot + 1] = torch.where(
+                        active, e + 1, sl_flat[:, slot + 1]
+                    )
 
             result.append(skip_list)
 
