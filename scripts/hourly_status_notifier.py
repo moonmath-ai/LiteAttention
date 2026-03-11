@@ -8,7 +8,6 @@ import fcntl
 import hashlib
 import html as html_lib
 import json
-import math
 import os
 import re
 import subprocess
@@ -568,13 +567,8 @@ def read_last_valid_email_sent(path: Path, now: datetime, max_clock_skew_seconds
     return candidate
 
 
-def hour_gap_since_last_sent(last_sent: datetime, now: datetime) -> int:
-    gap_seconds = (utc_hour_start(now) - utc_hour_start(last_sent)).total_seconds()
-    return max(0, int(gap_seconds // 3600))
-
-
-def required_hour_gap(min_send_interval_seconds: int) -> int:
-    return max(1, int(math.ceil(max(0, min_send_interval_seconds) / 3600)))
+def elapsed_seconds_since_last_sent(last_sent: datetime, now: datetime) -> int:
+    return max(0, int((now - last_sent).total_seconds()))
 
 
 def load_proton_env() -> dict[str, str]:
@@ -674,16 +668,14 @@ def main() -> int:
     state = load_state(args.state_file)
     last_email_sent = read_last_valid_email_sent(args.lastcheck_file, now, args.max_clock_skew_seconds)
     if not args.force and not args.dry_run and last_email_sent is not None:
-        observed_hour_gap = hour_gap_since_last_sent(last_email_sent, now)
-        needed_hour_gap = required_hour_gap(args.min_send_interval_seconds)
-        if observed_hour_gap < needed_hour_gap:
+        observed_elapsed_seconds = elapsed_seconds_since_last_sent(last_email_sent, now)
+        required_elapsed_seconds = max(0, args.min_send_interval_seconds)
+        if observed_elapsed_seconds < required_elapsed_seconds:
             log_event(
-                "skip_hour_gate",
+                "skip_interval_gate",
                 last_sent_at=utc_iso(last_email_sent),
-                last_sent_hour=hour_bucket(last_email_sent),
-                now_hour=now_hour,
-                observed_hour_gap=observed_hour_gap,
-                required_hour_gap=needed_hour_gap,
+                observed_elapsed_seconds=observed_elapsed_seconds,
+                required_elapsed_seconds=required_elapsed_seconds,
                 source="lastcheck.txt",
             )
             return 0
