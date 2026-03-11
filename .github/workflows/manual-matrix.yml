@@ -74,6 +74,15 @@ on:
         required: false
         default: "manual-matrix"
         type: string
+      ccache-restore-mode:
+        description: "ccache restore strictness: compatible (cross-python), python, exact"
+        required: false
+        default: "compatible"
+        type: choice
+        options:
+          - compatible
+          - python
+          - exact
       seed-ccache-before-matrix:
         description: "Run one seed build first and import its ccache bundle into all matrix jobs"
         required: false
@@ -262,14 +271,34 @@ jobs:
           seed_enabled = os.environ.get("SEED_ENABLED", "").lower() == "true"
           host_shards_raw = os.environ.get("HOST_SHARDS_JSON_INPUT", "").strip()
 
+          def row_sort_key(row):
+              abi_values = row.get("cxx11_abi_list")
+              if abi_values is None:
+                  abi_values = [row.get("cxx11_abi", "")]
+              abi_key = ",".join(str(abi) for abi in abi_values)
+              return (
+                  str(row.get("os-version", "")),
+                  str(row.get("cuda-version", "")),
+                  str(row.get("torch-version", "")),
+                  str(row.get("python-version", "")),
+                  abi_key,
+              )
+
+          entries.sort(key=row_sort_key)
+
           host_shards = []
           if host_shards_raw:
               parsed = json.loads(host_shards_raw)
               if not isinstance(parsed, list) or not parsed:
                   raise SystemExit("host-shards-json must decode to a non-empty JSON array")
+              seen_shard_names = set()
               for idx, shard in enumerate(parsed):
                   if not isinstance(shard, dict):
                       raise SystemExit(f"host-shards-json entry #{idx} must be an object")
+                  shard_name = str(shard.get("name") or f"host{idx+1}")
+                  if shard_name in seen_shard_names:
+                      raise SystemExit(f"host-shards-json entry #{idx} has duplicate name '{shard_name}'")
+                  seen_shard_names.add(shard_name)
                   runner_labels_json = shard.get("runner_labels_json")
                   if not isinstance(runner_labels_json, str) or not runner_labels_json.strip():
                       raise SystemExit(f"host-shards-json entry #{idx} is missing non-empty runner_labels_json")
@@ -288,7 +317,7 @@ jobs:
                       raise SystemExit(f"host-shards-json entry #{idx} max_parallel must be >= 1")
                   host_shards.append(
                       {
-                          "name": str(shard.get("name") or f"host{idx+1}"),
+                          "name": shard_name,
                           "runner_labels_json": runner_labels_json,
                           "max_parallel": max_parallel,
                       }
@@ -487,6 +516,7 @@ jobs:
       wheel-test-target: ${{ inputs.wheel-test-target }}
       enable-ccache: ${{ inputs.enable-ccache }}
       ccache-namespace: ${{ inputs.ccache-namespace }}
+      ccache-restore-mode: ${{ inputs.ccache-restore-mode }}
       import-ccache-artifact: ${{ inputs.import-ccache-artifact }}
       import-ccache-bundle-path: ${{ inputs.import-ccache-bundle-path }}
       build-profile: ${{ inputs.build-profile }}
@@ -524,6 +554,7 @@ jobs:
       wheel-test-target: ${{ inputs.wheel-test-target }}
       enable-ccache: ${{ inputs.enable-ccache }}
       ccache-namespace: ${{ inputs.ccache-namespace }}
+      ccache-restore-mode: ${{ inputs.ccache-restore-mode }}
       import-ccache-artifact: ${{ (inputs.seed-ccache-before-matrix && inputs.enable-ccache && inputs.import-ccache-bundle-path == '' && needs.seed-ccache.result == 'success') && matrix.seed_ccache_artifact || inputs.import-ccache-artifact }}
       import-ccache-bundle-path: ${{ inputs.import-ccache-bundle-path }}
       build-profile: ${{ inputs.build-profile }}

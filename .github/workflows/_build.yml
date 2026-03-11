@@ -43,6 +43,11 @@ on:
         required: false
         type: string
         default: "default"
+      ccache-restore-mode:
+        description: "Restore strictness for ccache keys: compatible (cross-python), python, exact"
+        required: false
+        type: string
+        default: "compatible"
       import-ccache-artifact:
         description: "Optional artifact name containing ccache-bundle.tar.zst to import before build"
         required: false
@@ -274,6 +279,34 @@ jobs:
             pip-${{ runner.os }}-${{ runner.arch }}-py${{ inputs.python-version }}-cu${{ inputs.cuda-version }}-
             pip-${{ runner.os }}-${{ runner.arch }}-py${{ inputs.python-version }}-
 
+      - name: Resolve ccache restore mode
+        id: ccache_restore_mode
+        if: ${{ !env.ACT && inputs.enable-ccache && inputs.import-ccache-artifact == '' && inputs.import-ccache-bundle-path == '' }}
+        run: |
+          mode_raw='${{ inputs.ccache-restore-mode }}'
+          mode="$(echo "${mode_raw}" | tr '[:upper:]' '[:lower:]')"
+          case "${mode}" in
+            compatible)
+              restore_keys="${{ steps.ccache_key.outputs.prefix }}"$'\n'"${{ steps.ccache_key.outputs.cross_py_prefix }}"
+              ;;
+            python)
+              restore_keys="${{ steps.ccache_key.outputs.prefix }}"
+              ;;
+            exact)
+              restore_keys=""
+              ;;
+            *)
+              echo "::error::Invalid ccache-restore-mode='${mode_raw}'. Expected one of: compatible, python, exact."
+              exit 1
+              ;;
+          esac
+          echo "mode=${mode}" >> "$GITHUB_OUTPUT"
+          {
+            echo "restore_keys<<EOF"
+            printf "%s\n" "${restore_keys}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Restore compatible ccache
         id: restore_ccache
         if: ${{ !env.ACT && inputs.enable-ccache && inputs.import-ccache-artifact == '' && inputs.import-ccache-bundle-path == '' }}
@@ -281,9 +314,7 @@ jobs:
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ${{ steps.ccache_key.outputs.key }}
-          restore-keys: |
-            ${{ steps.ccache_key.outputs.prefix }}
-            ${{ steps.ccache_key.outputs.cross_py_prefix }}
+          restore-keys: ${{ steps.ccache_restore_mode.outputs.restore_keys }}
 
       - name: Initialize ccache
         if: ${{ inputs.enable-ccache }}
@@ -484,7 +515,14 @@ jobs:
             USE_CCACHE_WRAPPERS="${USE_CCACHE_WRAPPERS}" TIME_BIN="${TIME_BIN:-}" TIME_BIN_KIND="${TIME_BIN_KIND:-missing}" python3 -c 'import json, os, shutil; runtime_info = {"use_ccache_wrappers": os.environ["USE_CCACHE_WRAPPERS"], "time_bin": os.environ.get("TIME_BIN", ""), "time_bin_kind": os.environ.get("TIME_BIN_KIND", "missing"), "nvcc_path": shutil.which("nvcc") or "", "cuda_nvcc_executable": os.environ.get("CUDA_NVCC_EXECUTABLE", ""), "pytorch_nvcc": os.environ.get("PYTORCH_NVCC", ""), "max_jobs": os.environ.get("MAX_JOBS", ""), "nvcc_threads": os.environ.get("NVCC_THREADS", ""), "lite_attention_nvcc_time": os.environ.get("LITE_ATTENTION_NVCC_TIME", ""), "lite_attention_nvcc_per_tu_time": os.environ.get("LITE_ATTENTION_NVCC_PER_TU_TIME", ""), "lite_attention_nvcc_fdevice_time_trace": os.environ.get("LITE_ATTENTION_NVCC_FDEVICE_TIME_TRACE", "")}; open("build-profile/runtime_info.json", "w", encoding="utf-8").write(json.dumps(runtime_info, indent=2))'
           fi
 
-          mapfile -t ABI_VALUES < <(ABI_LIST_JSON="$ABI_LIST_JSON" python3 -c 'import json, os; [print(str(abi)) for abi in json.loads(os.environ["ABI_LIST_JSON"])]')
+          ABI_VALUES=()
+          abi_values_file="$(mktemp)"
+          ABI_LIST_JSON="$ABI_LIST_JSON" python3 -c 'import json, os; [print(str(abi)) for abi in json.loads(os.environ["ABI_LIST_JSON"])]' > "$abi_values_file"
+          while IFS= read -r abi_value; do
+            [[ -n "$abi_value" ]] || continue
+            ABI_VALUES+=("$abi_value")
+          done < "$abi_values_file"
+          rm -f "$abi_values_file"
 
           ABI_COUNT=${#ABI_VALUES[@]}
           if (( ABI_COUNT > 1 )); then
@@ -500,7 +538,6 @@ jobs:
 
           mkdir -p dist
           EXIT_CODE=0
-          shopt -s nullglob
           for ABI_VALUE in "${ABI_VALUES[@]}"; do
             echo "::group::Build wheel for ABI ${ABI_VALUE}"
             rm -rf build "dist-${ABI_VALUE}"
@@ -527,28 +564,36 @@ jobs:
               continue
             fi
 
-            built_wheels=("dist-${ABI_VALUE}"/*.whl)
-            if [ ${#built_wheels[@]} -eq 0 ]; then
-              echo "::error::ABI ${ABI_VALUE} build completed without producing a wheel"
-              EXIT_CODE=1
-              echo "::endgroup::"
-              continue
-            fi
-
-            for built_wheel in "${built_wheels[@]}"; do
+            built_wheel_count=0
+            for built_wheel in "dist-${ABI_VALUE}"/*.whl; do
+              if [[ ! -e "$built_wheel" ]]; then
+                continue
+              fi
+              built_wheel_count=$(( built_wheel_count + 1 ))
               base_wheel_name="$(basename "$built_wheel")"
               tmpname="cu${WHEEL_CUDA_VERSION}torch${MATRIX_TORCH_VERSION}cxx11abi${ABI_VALUE}"
               wheel_name="$(echo "$base_wheel_name" | sed "s/-/+$tmpname-/2")"
               mv "$built_wheel" "dist/${wheel_name}"
             done
 
+            if [ "$built_wheel_count" -eq 0 ]; then
+              echo "::error::ABI ${ABI_VALUE} build completed without producing a wheel"
+              EXIT_CODE=1
+              echo "::endgroup::"
+              continue
+            fi
+
             if [[ "${{ inputs.build-profile }}" == "true" ]]; then
               abi_profile_dir="build-profile/abi-${ABI_VALUE}/raw"
               mkdir -p "${abi_profile_dir}"
               if [ -d build ]; then
+                abi_profile_files="$(mktemp)"
+                find build -type f \( -name '*.nvcc_time.csv' -o -name '*.json' -o -name '*.nvcc_walltime.txt' -o -name '.ninja_log' \) > "$abi_profile_files"
                 while IFS= read -r f; do
+                  [[ -n "$f" ]] || continue
                   cp --parents "$f" "${abi_profile_dir}/"
-                done < <(find build -type f \( -name '*.nvcc_time.csv' -o -name '*.json' -o -name '*.nvcc_walltime.txt' -o -name '.ninja_log' \))
+                done < "$abi_profile_files"
+                rm -f "$abi_profile_files"
               fi
             fi
             echo "::endgroup::"

@@ -98,6 +98,15 @@ on:
         required: false
         default: "manual-build"
         type: string
+      ccache-restore-mode:
+        description: "ccache restore strictness: compatible (cross-python), python, exact"
+        required: false
+        default: "compatible"
+        type: choice
+        options:
+          - compatible
+          - python
+          - exact
       import-ccache-artifact:
         description: "Optional artifact name containing ccache-bundle.tar.zst to import before build"
         required: false
@@ -176,6 +185,7 @@ jobs:
       build-profile: ${{ inputs.build-profile }}
       enable-ccache: ${{ inputs.enable-ccache }}
       ccache-namespace: ${{ inputs.ccache-namespace }}
+      ccache-restore-mode: ${{ inputs.ccache-restore-mode }}
       import-ccache-artifact: ${{ inputs.import-ccache-artifact }}
       import-ccache-bundle-path: ${{ inputs.import-ccache-bundle-path }}
       release-version: ${{ needs.prepare.outputs.release_version }}

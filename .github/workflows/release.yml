@@ -386,14 +386,34 @@ jobs:
           entries = [dict(entry) for entry in (matrix.get("include") or [])]
           host_shards_raw = os.environ.get("HOST_SHARDS_JSON_INPUT", "").strip()
 
+          def row_sort_key(row):
+              abi_values = row.get("cxx11_abi_list")
+              if abi_values is None:
+                  abi_values = [row.get("cxx11_abi", "")]
+              abi_key = ",".join(str(abi) for abi in abi_values)
+              return (
+                  str(row.get("os-version", "")),
+                  str(row.get("cuda-version", "")),
+                  str(row.get("torch-version", "")),
+                  str(row.get("python-version", "")),
+                  abi_key,
+              )
+
+          entries.sort(key=row_sort_key)
+
           if host_shards_raw:
               parsed = json.loads(host_shards_raw)
               if not isinstance(parsed, list) or not parsed:
                   raise SystemExit("wheel_host_shards_json must decode to a non-empty JSON array")
               host_shards = []
+              seen_shard_names = set()
               for idx, shard in enumerate(parsed):
                   if not isinstance(shard, dict):
                       raise SystemExit(f"wheel_host_shards_json entry #{idx} must be an object")
+                  shard_name = str(shard.get("name") or f"host{idx+1}")
+                  if shard_name in seen_shard_names:
+                      raise SystemExit(f"wheel_host_shards_json entry #{idx} has duplicate name '{shard_name}'")
+                  seen_shard_names.add(shard_name)
                   runner_labels_json = shard.get("runner_labels_json")
                   if not isinstance(runner_labels_json, str) or not runner_labels_json.strip():
                       raise SystemExit(f"wheel_host_shards_json entry #{idx} is missing non-empty runner_labels_json")
@@ -402,7 +422,7 @@ jobs:
                       raise SystemExit(f"wheel_host_shards_json entry #{idx} runner_labels_json must decode to a non-empty string array")
                   host_shards.append(
                       {
-                          "name": str(shard.get("name") or f"host{idx+1}"),
+                          "name": shard_name,
                           "runner_labels_json": runner_labels_json,
                       }
                   )
