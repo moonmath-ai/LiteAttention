@@ -129,6 +129,9 @@ jobs:
     steps:
       - name: Set ref and release version
         id: set
+        env:
+          INPUT_CXX11_ABI: ${{ inputs.cxx11_abi }}
+          INPUT_CXX11_ABI_LIST_JSON: ${{ inputs.cxx11_abi_list_json }}
         run: |
           if [[ "${{ inputs.upload-to-release }}" == "true" && -z "${{ inputs.release-tag }}" ]]; then
             echo "::error::release-tag is required when upload-to-release is true"
@@ -141,11 +144,11 @@ jobs:
             echo "release_version=${{ github.ref }}" >> $GITHUB_OUTPUT
           fi
 
-          if [[ -z "${{ inputs.cxx11_abi_list_json }}" ]]; then
-            echo "resolved_cxx11_abi=${{ inputs.cxx11_abi }}" >> "$GITHUB_OUTPUT"
+          if [[ -z "${INPUT_CXX11_ABI_LIST_JSON}" ]]; then
+            echo "resolved_cxx11_abi=${INPUT_CXX11_ABI}" >> "$GITHUB_OUTPUT"
             echo "resolved_cxx11_abi_list_json=" >> "$GITHUB_OUTPUT"
           else
-            ABI_LIST_JSON='${{ inputs.cxx11_abi_list_json }}' GITHUB_OUTPUT="$GITHUB_OUTPUT" python3 -c 'import json, os; abi_order = {"FALSE": 0, "TRUE": 1}; raw = json.loads(os.environ["ABI_LIST_JSON"]); assert isinstance(raw, list) and raw, "cxx11_abi_list_json must decode to a non-empty JSON array"; seen = []; [seen.append(abi) for abi in map(str, raw) if abi not in seen]; seen.sort(key=lambda abi: (abi_order.get(abi, 99), abi)); payload = ["resolved_cxx11_abi=" + "_".join(seen), "resolved_cxx11_abi_list_json=" + json.dumps(seen, separators=(",", ":"))]; open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8").write("\n".join(payload) + "\n")'
+            python3 -c 'import json, os; abi_order = {"FALSE": 0, "TRUE": 1}; raw = json.loads(os.environ["INPUT_CXX11_ABI_LIST_JSON"]); assert isinstance(raw, list) and raw, "cxx11_abi_list_json must decode to a non-empty JSON array"; seen = []; [seen.append(abi) for abi in map(str, raw) if abi not in seen]; seen.sort(key=lambda abi: (abi_order.get(abi, 99), abi)); payload = ["resolved_cxx11_abi=" + "_".join(seen), "resolved_cxx11_abi_list_json=" + json.dumps(seen, separators=(",", ":"))]; open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8").write("\n".join(payload) + "\n")'
           fi
 
   build-wheel:
