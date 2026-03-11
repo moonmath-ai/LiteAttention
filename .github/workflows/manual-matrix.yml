@@ -266,9 +266,37 @@ jobs:
               # Prefer cp310 seed jobs for broad wheel coverage, then lowest available.
               return (0, 0, ver) if ver == "3.10" else (1, *py_sort_key(ver))
 
+          def normalize_namespace(raw: str) -> str:
+              value = (raw or "").strip()
+              return value or "manual-matrix"
+
+          def image_id_for_row(row: dict) -> str:
+              image = f"nvidia/cuda:{row['cuda-version']}-{row['os-version']}"
+              translated = image.translate(str.maketrans({"/": "-", ":": "-", ".": "-"}))
+              return "".join(ch for ch in translated if (ch.isalnum() or ch in "_-"))
+
+          def row_abi_label(row: dict) -> str:
+              if row.get("cxx11_abi"):
+                  return str(row["cxx11_abi"])
+              abi_values = row.get("cxx11_abi_list")
+              if abi_values is None:
+                  abi_values = [row.get("cxx11_abi", "")]
+              normalized = [str(abi) for abi in abi_values if str(abi)]
+              return "_".join(normalized)
+
+          def ccache_seed_artifact_name(row: dict, namespace: str) -> str:
+              return (
+                  f"ccache-{namespace}-{image_id_for_row(row)}"
+                  f"-py{row['python-version']}"
+                  f"-cu{row['cuda-version']}"
+                  f"-torch{row['torch-version']}"
+                  f"-cxx11abi{row_abi_label(row)}"
+              )
+
           matrix = json.loads(os.environ["GROUPED_MATRIX"])
           entries = [dict(entry) for entry in (matrix.get("include") or [])]
           seed_enabled = os.environ.get("SEED_ENABLED", "").lower() == "true"
+          ccache_namespace = normalize_namespace(os.environ.get("CCACHE_NAMESPACE_INPUT", ""))
           host_shards_raw = os.environ.get("HOST_SHARDS_JSON_INPUT", "").strip()
 
           def row_sort_key(row):
@@ -285,6 +313,8 @@ jobs:
               )
 
           entries.sort(key=row_sort_key)
+          for row in entries:
+              row["ccache_bundle_artifact"] = ccache_seed_artifact_name(row, ccache_namespace)
 
           host_shards = []
           if host_shards_raw:
@@ -323,12 +353,16 @@ jobs:
                       }
                   )
 
+          shard_assignment_pool = []
+          for shard in host_shards:
+              shard_assignment_pool.extend([shard] * int(shard["max_parallel"]))
+
           def assign_host_shards(rows):
               if not host_shards:
                   return [dict(row) for row in rows]
               assigned = []
               for idx, row in enumerate(rows):
-                  shard = host_shards[idx % len(host_shards)]
+                  shard = shard_assignment_pool[idx % len(shard_assignment_pool)]
                   assigned_row = dict(row)
                   assigned_row["host_shard"] = shard["name"]
                   assigned_row["runner_labels_json"] = shard["runner_labels_json"]
@@ -380,14 +414,9 @@ jobs:
                       str(seed_row["cxx11_abi"]),
                   )
                   selected_seed_keys.add(selected_key)
+                  artifact = str(seed_row["ccache_bundle_artifact"])
+                  seed_row["seed_ccache_artifact"] = artifact
                   seed_rows.append(seed_row)
-
-                  artifact = (
-                      f"ccache-{seed_row['python-version']}"
-                      f"-cu{seed_row['cuda-version']}"
-                      f"-torch{seed_row['torch-version']}"
-                      f"-cxx11abi{seed_row['cxx11_abi']}"
-                  )
 
                   for row in cohort_rows:
                       row_key = (
@@ -455,6 +484,7 @@ jobs:
           PRESET: ${{ inputs.preset }}
           MATRIX_JSON_INPUT: ${{ inputs.matrix-json }}
           SEED_ENABLED: ${{ inputs.seed-ccache-before-matrix }}
+          CCACHE_NAMESPACE_INPUT: ${{ inputs.ccache-namespace }}
           HOST_SHARDS_JSON_INPUT: ${{ inputs.host-shards-json || vars.LITE_ATTENTION_WHEEL_HOST_SHARDS_JSON }}
 
   prefetch-images:
@@ -516,6 +546,7 @@ jobs:
       wheel-test-target: ${{ inputs.wheel-test-target }}
       enable-ccache: ${{ inputs.enable-ccache }}
       ccache-namespace: ${{ inputs.ccache-namespace }}
+      ccache-bundle-artifact-name: ${{ matrix.ccache_bundle_artifact || '' }}
       ccache-restore-mode: ${{ inputs.ccache-restore-mode }}
       import-ccache-artifact: ${{ inputs.import-ccache-artifact }}
       import-ccache-bundle-path: ${{ inputs.import-ccache-bundle-path }}
@@ -554,6 +585,7 @@ jobs:
       wheel-test-target: ${{ inputs.wheel-test-target }}
       enable-ccache: ${{ inputs.enable-ccache }}
       ccache-namespace: ${{ inputs.ccache-namespace }}
+      ccache-bundle-artifact-name: ${{ matrix.ccache_bundle_artifact || '' }}
       ccache-restore-mode: ${{ inputs.ccache-restore-mode }}
       import-ccache-artifact: ${{ (inputs.seed-ccache-before-matrix && inputs.enable-ccache && inputs.import-ccache-bundle-path == '' && needs.seed-ccache.result == 'success') && matrix.seed_ccache_artifact || inputs.import-ccache-artifact }}
       import-ccache-bundle-path: ${{ inputs.import-ccache-bundle-path }}

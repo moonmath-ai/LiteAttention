@@ -420,16 +420,28 @@ jobs:
                   labels = json.loads(runner_labels_json)
                   if not isinstance(labels, list) or not all(isinstance(label, str) and label for label in labels):
                       raise SystemExit(f"wheel_host_shards_json entry #{idx} runner_labels_json must decode to a non-empty string array")
+                  max_parallel = shard.get("max_parallel", 1)
+                  try:
+                      max_parallel = int(max_parallel)
+                  except Exception as exc:
+                      raise SystemExit(f"wheel_host_shards_json entry #{idx} has invalid max_parallel: {exc}") from exc
+                  if max_parallel < 1:
+                      raise SystemExit(f"wheel_host_shards_json entry #{idx} max_parallel must be >= 1")
                   host_shards.append(
                       {
                           "name": shard_name,
                           "runner_labels_json": runner_labels_json,
+                          "max_parallel": max_parallel,
                       }
                   )
 
+              shard_assignment_pool = []
+              for shard in host_shards:
+                  shard_assignment_pool.extend([shard] * int(shard["max_parallel"]))
+
               assigned = []
               for idx, entry in enumerate(entries):
-                  shard = host_shards[idx % len(host_shards)]
+                  shard = shard_assignment_pool[idx % len(shard_assignment_pool)]
                   assigned_entry = dict(entry)
                   assigned_entry["host_shard"] = shard["name"]
                   assigned_entry["runner_labels_json"] = shard["runner_labels_json"]

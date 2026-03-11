@@ -43,6 +43,11 @@ on:
         required: false
         type: string
         default: "default"
+      ccache-bundle-artifact-name:
+        description: "Optional explicit artifact name for uploaded ccache bundle"
+        required: false
+        type: string
+        default: ""
       ccache-restore-mode:
         description: "Restore strictness for ccache keys: compatible (cross-python), python, exact"
         required: false
@@ -1140,7 +1145,7 @@ jobs:
         if: ${{ always() && !env.ACT && inputs.enable-ccache && steps.py_compat.outputs.skip_build != 'true' && steps.torch_install.outputs.skip_build != 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: ccache-${{ inputs.python-version }}-cu${{ inputs.cuda-version }}-torch${{ inputs.torch-version }}-cxx11abi${{ inputs.cxx11_abi }}
+          name: ${{ inputs.ccache-bundle-artifact-name != '' && inputs.ccache-bundle-artifact-name || format('ccache-{0}-cu{1}-torch{2}-cxx11abi{3}', inputs.python-version, inputs.cuda-version, inputs.torch-version, inputs.cxx11_abi) }}
           path: /tmp/ccache-bundle.tar.zst
           if-no-files-found: ignore
           retention-days: 14
