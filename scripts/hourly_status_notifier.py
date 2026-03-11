@@ -22,6 +22,10 @@ from typing import Any
 DEFAULT_STATUS_FILE = Path("/tmp/liteattention_status.txt")
 DEFAULT_STATE_FILE = Path("/tmp/liteattention_notify_state.json")
 DEFAULT_LOCK_FILE = Path("/tmp/liteattention_notify_once.lock")
+DEFAULT_LAST_SUBJECT_FILE = Path("/tmp/liteattention_last_mail_subject.txt")
+DEFAULT_LAST_BODY_FILE = Path("/tmp/liteattention_last_mail_body.txt")
+DEFAULT_LASTCHECK_FILE = Path(__file__).resolve().parents[1] / "lastcheck.txt"
+DEFAULT_MIN_SEND_INTERVAL_SECONDS = 3600
 PROTON_DIR = Path("/root/.codex/skills/proton-notify")
 PROTON_SCRIPT = PROTON_DIR / "scripts" / "proton_notify.js"
 PROTON_CREDS = PROTON_DIR / "creds.txt"
@@ -333,6 +337,7 @@ def is_no_change_delta(delta_lines: list[str]) -> bool:
 def build_body(payload: dict[str, Any], delta_lines: list[str], dt: datetime) -> str:
     header = subject_header(payload)
     compact = is_no_change_delta(delta_lines)
+    first_status = delta_lines == ["First hourly status from the repo-owned notifier."]
     lines = [
         "LiteAttention hourly status",
         f"Header: {header}",
@@ -343,11 +348,13 @@ def build_body(payload: dict[str, Any], delta_lines: list[str], dt: datetime) ->
     lines.append("Doing now")
     doing_now = [payload["primary_task"]]
     if not compact:
-        doing_now.extend(payload["secondary_tasks"][:2])
+        secondary_limit = 2 if first_status else 1
+        doing_now.extend(payload["secondary_tasks"][:secondary_limit])
     lines.extend(render_bullets(doing_now))
 
     lines.extend(["", "What changed"])
-    lines.extend(render_bullets(delta_lines[:4]))
+    delta_limit = 4 if first_status else 3
+    lines.extend(render_bullets(delta_lines[:delta_limit]))
 
     lines.extend(
         [
@@ -368,10 +375,11 @@ def build_body(payload: dict[str, Any], delta_lines: list[str], dt: datetime) ->
             "Idea list",
         ]
     )
-    lines.extend(render_dense_ideas(payload["ideas"][: (3 if compact else 4)]))
+    idea_limit = 4 if first_status else 3
+    lines.extend(render_dense_ideas(payload["ideas"][: (2 if compact else idea_limit)]))
 
     branch_head = f"{payload['branch']} @ {payload['head']}"
-    if not compact or not payload["status_exists"]:
+    if first_status or (not compact and not payload["status_exists"]):
         lines.extend(["", "Meta"])
         lines.extend(render_bullets([f"Branch/head: {branch_head}"]))
     return "\n".join(lines).strip() + "\n"
@@ -505,7 +513,31 @@ def load_state(path: Path) -> dict[str, Any]:
 
 
 def save_state(path: Path, state: dict[str, Any]) -> None:
-    path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
+    tmp_path.replace(path)
+
+
+def append_lastcheck(path: Path, dt: datetime, marker: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(f"{utc_iso(dt)} {marker}\n")
+
+
+def read_lastcheck_marker(path: Path, marker: str) -> datetime | None:
+    if not path.exists():
+        return None
+    for raw in reversed(path.read_text(encoding="utf-8").splitlines()):
+        stripped = raw.strip()
+        if not stripped.endswith(f" {marker}"):
+            continue
+        timestamp = stripped[: -len(marker)].strip()
+        try:
+            return datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return None
 
 
 def load_proton_env() -> dict[str, str]:
@@ -573,6 +605,10 @@ def main() -> int:
     parser.add_argument("--status-file", type=Path, default=DEFAULT_STATUS_FILE)
     parser.add_argument("--state-file", type=Path, default=DEFAULT_STATE_FILE)
     parser.add_argument("--lock-file", type=Path, default=DEFAULT_LOCK_FILE)
+    parser.add_argument("--last-subject-file", type=Path, default=DEFAULT_LAST_SUBJECT_FILE)
+    parser.add_argument("--last-body-file", type=Path, default=DEFAULT_LAST_BODY_FILE)
+    parser.add_argument("--lastcheck-file", type=Path, default=DEFAULT_LASTCHECK_FILE)
+    parser.add_argument("--min-send-interval-seconds", type=int, default=DEFAULT_MIN_SEND_INTERVAL_SECONDS)
     parser.add_argument("--timeout-seconds", type=int, default=300)
     parser.add_argument("--html-preview-file", type=Path)
     parser.add_argument("--dry-run", action="store_true")
@@ -585,15 +621,18 @@ def main() -> int:
     now = utc_now()
     now_iso = utc_iso(now)
     now_hour = hour_bucket(now)
+    if not args.dry_run:
+        append_lastcheck(args.lastcheck_file, now, "CHECK")
 
     state = load_state(args.state_file)
+    last_email_sent = read_lastcheck_marker(args.lastcheck_file, "EMAIL_SENT")
     if (
         not args.force
         and not args.dry_run
-        and state.get("last_sent_hour_utc") == now_hour
-        and state.get("last_result") == "success"
+        and last_email_sent is not None
+        and (now - last_email_sent).total_seconds() < args.min_send_interval_seconds
     ):
-        print(f"already sent for {now_hour}")
+        print(f"already sent within {args.min_send_interval_seconds}s of {utc_iso(last_email_sent)}")
         return 0
 
     status_exists = args.status_file.exists()
@@ -615,8 +654,13 @@ def main() -> int:
         print(f"body validation failed: {validation_errors}", file=sys.stderr)
         return 1
 
-    html_preview = build_html_preview(payload, delta_lines, now)
+    args.last_subject_file.parent.mkdir(parents=True, exist_ok=True)
+    args.last_body_file.parent.mkdir(parents=True, exist_ok=True)
+    args.last_subject_file.write_text(subject + "\n")
+    args.last_body_file.write_text(body)
+
     if args.html_preview_file:
+        html_preview = build_html_preview(payload, delta_lines, now)
         args.html_preview_file.write_text(html_preview)
 
     snapshot = {
@@ -651,10 +695,12 @@ def main() -> int:
         if idx < len(backoffs):
             time.sleep(delay)
 
+    sent_at = utc_now() if success else None
+
     new_state = {
         "last_attempted_at_utc": now_iso,
         "last_sent_hour_utc": now_hour if success else state.get("last_sent_hour_utc", ""),
-        "last_sent_at_utc": now_iso if success else state.get("last_sent_at_utc", ""),
+        "last_sent_at_utc": utc_iso(sent_at) if sent_at else state.get("last_sent_at_utc", ""),
         "last_subject": subject,
         "last_body_hash": body_hash if success else state.get("last_body_hash", ""),
         "last_result": "success" if success else "failed",
@@ -667,6 +713,7 @@ def main() -> int:
         print(send_output, file=sys.stderr)
         return 1
 
+    append_lastcheck(args.lastcheck_file, sent_at or utc_now(), "EMAIL_SENT")
     print(send_output)
     return 0
 

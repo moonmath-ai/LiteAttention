@@ -10,6 +10,14 @@ from pathlib import Path
 from typing import Any
 
 
+BUCKETS: list[tuple[str, tuple[str, ...]]] = [
+    ("device/backend", ("cicc", "ptxas")),
+    ("frontend/lowering", ("cudafe++", "gcc preprocessing 1+4")),
+    ("host", ("gcc (compiling)",)),
+    ("driver/overhead", ("fatbinary", "nvcc driver")),
+]
+
+
 def load_json(path: Path) -> Any:
     with path.open("r", encoding="utf-8") as fh:
         return json.load(fh)
@@ -113,6 +121,18 @@ def emit_report(summary: dict[str, Any], summary_path: Path) -> str:
         ]
         lines.append("nvcc phases: " + "  ".join(parts))
 
+    bucket_parts: list[str] = []
+    for bucket_name, stages in BUCKETS:
+        bucket_total = sum(stage_totals.get(stage, 0.0) for stage in stages)
+        if bucket_total <= 0:
+            continue
+        stage_text = ",".join(stage for stage in stages if stage in stage_totals)
+        bucket_parts.append(
+            f"{bucket_name}={fmt_s(bucket_total)} ({fmt_pct(bucket_total, nvcc_total_s)}) [{stage_text}]"
+        )
+    if bucket_parts:
+        lines.append("nvcc buckets: " + "  ".join(bucket_parts))
+
     top_setup = top_pairs(summary.get("setup_py_wall_s", []), 1)
     if top_setup:
         lines.append("top setup.py wall:")
@@ -127,6 +147,31 @@ def emit_report(summary: dict[str, Any], summary_path: Path) -> str:
     if top_stages:
         lines.append("top NVCC stages:")
         lines.extend(f"- {row}" for row in top_stages)
+
+    top_phase_rows = summary.get("top_nvcc_phase_rows_s", []) or []
+    if top_phase_rows:
+        lines.append("top exact NVCC rows:")
+        for row in top_phase_rows[:5]:
+            if not isinstance(row, dict):
+                continue
+            lines.append(
+                "- "
+                f"{fmt_s(row.get('metric_s'))}  "
+                f"{row.get('stage', 'unknown')}  "
+                f"{row.get('source', 'unknown')}"
+            )
+
+    top_tu_stage_totals = summary.get("top_nvcc_tu_stage_totals_s", []) or []
+    if top_tu_stage_totals:
+        lines.append("top NVCC TU totals:")
+        for row in top_tu_stage_totals[:5]:
+            if not isinstance(row, dict):
+                continue
+            lines.append(
+                "- "
+                f"{fmt_s(row.get('total_s'))}  "
+                f"{row.get('source', 'unknown')}"
+            )
 
     top_edges = top_pairs(summary.get("top_ninja_outputs_s", []), 3)
     if top_edges:
