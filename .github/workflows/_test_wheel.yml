@@ -33,6 +33,11 @@ on:
         required: false
         type: string
         default: "hopper/tests/test_lite_attention.py"
+      wheel-artifact-name:
+        description: "Optional explicit wheel artifact name to download (overrides derived per-python name)"
+        required: false
+        type: string
+        default: ""
 
 defaults:
   run:
@@ -65,7 +70,11 @@ jobs:
           echo "MATRIX_CUDA_VERSION=$(echo ${{ inputs.cuda-version }} | awk -F \. {'print $1 $2'})" >> $GITHUB_ENV
           echo "MATRIX_TORCH_VERSION=$(echo ${{ inputs.torch-version }} | awk -F \. {'print $1 "." $2'})" >> $GITHUB_ENV
           echo "MATRIX_PYTHON_VERSION=$(echo ${{ inputs.python-version }} | awk -F \. {'print $1 $2'})" >> $GITHUB_ENV
-          echo "WHEEL_ARTIFACT=wheel-py${{ inputs.python-version }}-cu${{ inputs.cuda-version }}-torch${{ inputs.torch-version }}-cxx11abi${{ inputs.cxx11_abi }}" >> $GITHUB_ENV
+          if [[ -n "${{ inputs.wheel-artifact-name }}" ]]; then
+            echo "WHEEL_ARTIFACT=${{ inputs.wheel-artifact-name }}" >> $GITHUB_ENV
+          else
+            echo "WHEEL_ARTIFACT=wheel-py${{ inputs.python-version }}-cu${{ inputs.cuda-version }}-torch${{ inputs.torch-version }}-cxx11abi${{ inputs.cxx11_abi }}" >> $GITHUB_ENV
+          fi
 
       - name: Check project Python minimum
         id: py_compat

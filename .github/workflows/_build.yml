@@ -202,15 +202,26 @@ jobs:
       - name: Checkout (act)
         if: ${{ env.ACT }}
         run: |
+          src_dir="${GITHUB_WORKSPACE:-$PWD}"
+          dest_dir="${src_dir}/${BUILD_WHEEL_DIR}"
+          repo_url="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-moonmath-ai/LiteAttention}.git"
+          ref_name="${{ inputs.release-version }}"
+          clone_ref="${ref_name}"
+          if [[ "${clone_ref}" == refs/heads/* ]]; then
+            clone_ref="${clone_ref#refs/heads/}"
+          elif [[ "${clone_ref}" == refs/tags/* ]]; then
+            clone_ref="${clone_ref#refs/tags/}"
+          fi
           git config --global --add safe.directory '*' || true
-          git config --global --add safe.directory "${GITHUB_WORKSPACE}" || true
+          git config --global --add safe.directory "${src_dir}" || true
+          cd "${src_dir}"
           if git rev-parse --show-toplevel >/dev/null 2>&1; then
             git submodule sync --recursive
             git submodule update --init --recursive
           else
             echo "::warning::ACT workspace is not a git checkout; skipping submodule sync/update and copying the mounted workspace as-is."
           fi
-          mkdir -p "${BUILD_WHEEL_DIR}"
+          mkdir -p "${dest_dir}"
           rsync -a --delete \
             --exclude '.git' \
             --exclude '.act-cache' \
@@ -218,7 +229,35 @@ jobs:
             --exclude '.artifacts' \
             --exclude 'wheels' \
             --exclude 'build-wheel*' \
-            ./ "${BUILD_WHEEL_DIR}/"
+            "${src_dir}/" "${dest_dir}/"
+          if [[ ! -f "${dest_dir}/setup.py" || ! -f "${dest_dir}/pyproject.toml" ]]; then
+            echo "::warning::ACT mounted workspace did not contain the repo contents; falling back to git clone for ${ref_name}."
+            rm -rf "${dest_dir}"
+            if ! git clone --depth 1 --branch "${clone_ref}" --recurse-submodules "${repo_url}" "${dest_dir}"; then
+              git clone --depth 1 "${repo_url}" "${dest_dir}"
+              git -C "${dest_dir}" fetch --depth 1 origin "${ref_name}" || true
+              git -C "${dest_dir}" checkout FETCH_HEAD || git -C "${dest_dir}" checkout "${clone_ref}"
+              git -C "${dest_dir}" submodule update --init --recursive
+            fi
+          fi
+          echo "BUILD_WHEEL_DIR=${dest_dir}" >> "$GITHUB_ENV"
+
+      - name: Validate staged repo root (act)
+        if: ${{ env.ACT }}
+        run: |
+          set -euo pipefail
+          if [[ ! -d "${BUILD_WHEEL_DIR}" ]]; then
+            echo "::error::BUILD_WHEEL_DIR missing: ${BUILD_WHEEL_DIR}"
+            exit 1
+          fi
+          if [[ ! -f "${BUILD_WHEEL_DIR}/setup.py" || ! -f "${BUILD_WHEEL_DIR}/pyproject.toml" ]]; then
+            echo "::error::ACT staging invalid: setup.py/pyproject.toml not found under ${BUILD_WHEEL_DIR}"
+            echo "GITHUB_WORKSPACE=${GITHUB_WORKSPACE:-}"
+            ls -la "${GITHUB_WORKSPACE:-.}" || true
+            ls -la "${BUILD_WHEEL_DIR}" || true
+            find "${BUILD_WHEEL_DIR}" -maxdepth 2 -type f | head -n 100 || true
+            exit 1
+          fi
 
       - name: Set up Python ${{ inputs.python-version }} (GitHub)
         if: ${{ !env.ACT }}
