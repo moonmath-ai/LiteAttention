@@ -8,6 +8,7 @@ import fcntl
 import hashlib
 import html as html_lib
 import json
+import math
 import os
 import re
 import subprocess
@@ -26,6 +27,7 @@ DEFAULT_LAST_SUBJECT_FILE = Path("/tmp/liteattention_last_mail_subject.txt")
 DEFAULT_LAST_BODY_FILE = Path("/tmp/liteattention_last_mail_body.txt")
 DEFAULT_LASTCHECK_FILE = Path(__file__).resolve().parents[1] / "lastcheck.txt"
 DEFAULT_MIN_SEND_INTERVAL_SECONDS = 3600
+DEFAULT_MAX_CLOCK_SKEW_SECONDS = 300
 PROTON_DIR = Path("/root/.codex/skills/proton-notify")
 PROTON_SCRIPT = PROTON_DIR / "scripts" / "proton_notify.js"
 PROTON_CREDS = PROTON_DIR / "creds.txt"
@@ -38,6 +40,11 @@ def utc_now() -> datetime:
 
 def utc_iso(dt: datetime | None = None) -> str:
     return (dt or utc_now()).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def utc_hour_start(dt: datetime | None = None) -> datetime:
+    value = dt or utc_now()
+    return value.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
 
 
 def hour_bucket(dt: datetime | None = None) -> str:
@@ -503,6 +510,12 @@ def canonical_hash(data: dict[str, Any]) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def log_event(event: str, **fields: Any) -> None:
+    details = " ".join(f"{key}={json.dumps(str(value), ensure_ascii=True)}" for key, value in fields.items())
+    suffix = f" {details}" if details else ""
+    print(f"{utc_iso()} notifier {event}{suffix}", file=sys.stderr, flush=True)
+
+
 def load_state(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
@@ -538,6 +551,30 @@ def read_lastcheck_marker(path: Path, marker: str) -> datetime | None:
         except ValueError:
             continue
     return None
+
+
+def read_last_valid_email_sent(path: Path, now: datetime, max_clock_skew_seconds: int) -> datetime | None:
+    candidate = read_lastcheck_marker(path, "EMAIL_SENT")
+    if candidate is None:
+        return None
+    if (candidate - now).total_seconds() > max_clock_skew_seconds:
+        log_event(
+            "lastcheck_future_timestamp_ignored",
+            candidate=utc_iso(candidate),
+            now=utc_iso(now),
+            max_clock_skew_seconds=max_clock_skew_seconds,
+        )
+        return None
+    return candidate
+
+
+def hour_gap_since_last_sent(last_sent: datetime, now: datetime) -> int:
+    gap_seconds = (utc_hour_start(now) - utc_hour_start(last_sent)).total_seconds()
+    return max(0, int(gap_seconds // 3600))
+
+
+def required_hour_gap(min_send_interval_seconds: int) -> int:
+    return max(1, int(math.ceil(max(0, min_send_interval_seconds) / 3600)))
 
 
 def load_proton_env() -> dict[str, str]:
@@ -609,8 +646,10 @@ def main() -> int:
     parser.add_argument("--last-body-file", type=Path, default=DEFAULT_LAST_BODY_FILE)
     parser.add_argument("--lastcheck-file", type=Path, default=DEFAULT_LASTCHECK_FILE)
     parser.add_argument("--min-send-interval-seconds", type=int, default=DEFAULT_MIN_SEND_INTERVAL_SECONDS)
+    parser.add_argument("--max-clock-skew-seconds", type=int, default=DEFAULT_MAX_CLOCK_SKEW_SECONDS)
     parser.add_argument("--timeout-seconds", type=int, default=300)
     parser.add_argument("--html-preview-file", type=Path)
+    parser.add_argument("--append-check", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
@@ -621,38 +660,68 @@ def main() -> int:
     now = utc_now()
     now_iso = utc_iso(now)
     now_hour = hour_bucket(now)
-    if not args.dry_run:
+    log_event(
+        "start",
+        now=now_iso,
+        now_hour=now_hour,
+        dry_run=args.dry_run,
+        force=args.force,
+        append_check=args.append_check,
+    )
+    if args.append_check and not args.dry_run:
         append_lastcheck(args.lastcheck_file, now, "CHECK")
 
     state = load_state(args.state_file)
-    last_email_sent = read_lastcheck_marker(args.lastcheck_file, "EMAIL_SENT")
-    if (
-        not args.force
-        and not args.dry_run
-        and last_email_sent is not None
-        and (now - last_email_sent).total_seconds() < args.min_send_interval_seconds
-    ):
-        print(f"already sent within {args.min_send_interval_seconds}s of {utc_iso(last_email_sent)}")
-        return 0
+    last_email_sent = read_last_valid_email_sent(args.lastcheck_file, now, args.max_clock_skew_seconds)
+    if not args.force and not args.dry_run and last_email_sent is not None:
+        observed_hour_gap = hour_gap_since_last_sent(last_email_sent, now)
+        needed_hour_gap = required_hour_gap(args.min_send_interval_seconds)
+        if observed_hour_gap < needed_hour_gap:
+            log_event(
+                "skip_hour_gate",
+                last_sent_at=utc_iso(last_email_sent),
+                last_sent_hour=hour_bucket(last_email_sent),
+                now_hour=now_hour,
+                observed_hour_gap=observed_hour_gap,
+                required_hour_gap=needed_hour_gap,
+                source="lastcheck.txt",
+            )
+            return 0
 
     status_exists = args.status_file.exists()
     status_text = args.status_file.read_text() if status_exists else ""
+    if not status_exists:
+        log_event("status_file_missing", path=str(args.status_file))
     payload = build_payload(status_text, status_exists)
     previous_payload = state.get("snapshot")
     delta_lines = build_delta_lines(payload, previous_payload)
     subject = build_subject(payload, now)
     body = build_body(payload, delta_lines, now)
+    if not subject.strip():
+        subject = build_subject(payload, now).strip() or f"eta {payload['eta_short']} | {payload['speedup']} vs unopt | {short_hour_label(now)}"
+    if not body.strip():
+        body = fallback_body(payload, now)
     subject_errors = validate_subject(subject)
     if subject_errors:
+        if not args.dry_run:
+            append_lastcheck(args.lastcheck_file, utc_now(), "SUBJECT_FAIL")
+        log_event("subject_validation_failed", errors="; ".join(subject_errors))
         print(f"subject validation failed: {subject_errors}", file=sys.stderr)
         return 1
     validation_errors = validate_body(body)
     if validation_errors:
+        log_event("body_validation_failed_primary", errors="; ".join(validation_errors))
+        if not args.dry_run:
+            append_lastcheck(args.lastcheck_file, utc_now(), "BODY_FALLBACK")
         body = fallback_body(payload, now)
         validation_errors = validate_body(body)
     if validation_errors:
+        if not args.dry_run:
+            append_lastcheck(args.lastcheck_file, utc_now(), "BODY_FAIL")
+        log_event("body_validation_failed_fallback", errors="; ".join(validation_errors))
         print(f"body validation failed: {validation_errors}", file=sys.stderr)
         return 1
+    log_event("render_ok", subject_len=len(subject.strip()), body_len=len(body.strip()))
 
     args.last_subject_file.parent.mkdir(parents=True, exist_ok=True)
     args.last_body_file.parent.mkdir(parents=True, exist_ok=True)
@@ -680,6 +749,7 @@ def main() -> int:
     body_hash = canonical_hash(snapshot)
 
     if args.dry_run:
+        log_event("dry_run_render_only", subject=subject)
         print(subject)
         print("---")
         print(body, end="")
@@ -689,9 +759,12 @@ def main() -> int:
     send_output = ""
     success = False
     for idx, delay in enumerate(backoffs, start=1):
+        log_event("send_attempt", attempt=idx, timeout_seconds=args.timeout_seconds)
         success, send_output = send_email(subject, body, args.timeout_seconds)
         if success:
+            log_event("send_success", attempt=idx)
             break
+        log_event("send_attempt_failed", attempt=idx, retry_delay_seconds=delay if idx < len(backoffs) else 0)
         if idx < len(backoffs):
             time.sleep(delay)
 
@@ -710,10 +783,13 @@ def main() -> int:
     save_state(args.state_file, new_state)
 
     if not success:
+        append_lastcheck(args.lastcheck_file, utc_now(), "SEND_FAIL")
+        log_event("send_failed", output_tail=send_output[-800:])
         print(send_output, file=sys.stderr)
         return 1
 
     append_lastcheck(args.lastcheck_file, sent_at or utc_now(), "EMAIL_SENT")
+    log_event("email_sent", sent_at=utc_iso(sent_at), subject=subject)
     print(send_output)
     return 0
 
