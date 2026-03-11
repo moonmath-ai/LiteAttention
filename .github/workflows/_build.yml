@@ -489,6 +489,10 @@ jobs:
           fi
           if [[ -n "${{ inputs.skip-nvcc-gen-dependencies }}" ]]; then
             export LITE_ATTENTION_SKIP_NVCC_GEN_DEPENDENCIES="${{ inputs.skip-nvcc-gen-dependencies }}"
+          elif [[ "${{ inputs.enable-ccache }}" == "true" && "${{ inputs.build-profile }}" != "true" ]]; then
+            # CI jobs wipe build/ per ABI, so depfiles mainly add overhead and can
+            # reduce cacheability for nvcc-heavy translation units.
+            export LITE_ATTENTION_SKIP_NVCC_GEN_DEPENDENCIES=TRUE
           fi
           if [[ "${{ inputs.build-profile }}" == "true" ]]; then
             export LITE_ATTENTION_NVCC_TIME=TRUE
