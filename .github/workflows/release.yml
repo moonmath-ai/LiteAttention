@@ -375,6 +375,14 @@ jobs:
           for entry in include:
               entry["cxx11_abi_list"].sort(key=lambda abi: (abi_order.get(abi, 99), abi))
 
+          os_versions = {str(entry.get("os-version", "")) for entry in include}
+          if len(os_versions) > 1:
+              raise SystemExit(
+                  "Release wheel builds currently support only one os-version per run "
+                  "because wheel artifact naming and release upload paths are not yet "
+                  "OS-disambiguated. Resolve the matrix to a single os-version first."
+              )
+
           print(json.dumps({"include": include}, separators=(",", ":")))
           PY
           )"

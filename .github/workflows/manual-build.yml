@@ -26,7 +26,7 @@ on:
         default: "2.8.0"
         type: string
       cxx11_abi:
-        description: "C++11 ABI (TRUE or FALSE)"
+        description: "C++11 ABI for the normal single-ABI build path"
         required: true
         default: "FALSE"
         type: choice
@@ -34,7 +34,7 @@ on:
           - "TRUE"
           - "FALSE"
       cxx11_abi_list_json:
-        description: "Optional JSON array of ABI values to build sequentially in one job"
+        description: "Advanced override: JSON array of ABI values to build sequentially in one job; leave empty for a normal single-ABI build"
         required: false
         default: ""
         type: string
