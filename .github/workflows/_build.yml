@@ -331,6 +331,14 @@ jobs:
           ccache -o base_dir="${CCACHE_BASEDIR}"
           ccache -o compiler_check="${CCACHE_COMPILERCHECK}"
           ccache -o stats_log="${CCACHE_STATSLOG}"
+          if [[ -n "${CCACHE_LOGFILE:-}" ]]; then
+            mkdir -p "$(dirname "${CCACHE_LOGFILE}")"
+            : > "${CCACHE_LOGFILE}"
+            ccache -o log_file="${CCACHE_LOGFILE}"
+          fi
+          if [[ -n "${CCACHE_DEBUGDIR:-}" ]]; then
+            mkdir -p "${CCACHE_DEBUGDIR}"
+          fi
           : > "${CCACHE_STATSLOG}"
           ccache -s || true
           ccache -z || true
@@ -472,6 +480,7 @@ jobs:
           elif [[ "${{ inputs.enable-ccache }}" == "true" ]]; then
             echo "Profiling run: bypassing ccache wrappers for direct nvcc execution."
           fi
+          export USE_CCACHE_WRAPPERS
           if [[ -n "${{ inputs.build-max-jobs }}" ]]; then
             export LITE_ATTENTION_BUILD_MAX_JOBS="${{ inputs.build-max-jobs }}"
           fi
@@ -519,9 +528,54 @@ jobs:
           export MAX_JOBS="${LITE_ATTENTION_BUILD_MAX_JOBS:-${MAX_JOBS:-$default_max_jobs}}"
           export NVCC_THREADS="${LITE_ATTENTION_BUILD_NVCC_THREADS:-${NVCC_THREADS:-2}}"
           echo "Compile settings: MAX_JOBS=${MAX_JOBS} NVCC_THREADS=${NVCC_THREADS}"
+          if [[ "${{ inputs.enable-ccache }}" == "true" ]]; then
+            echo "::group::ccache runtime"
+            python3 - <<'PY'
+            import json
+            import os
+            import shutil
+            import subprocess
+
+            keys = [
+                "USE_CCACHE_WRAPPERS",
+                "CCACHE_DIR",
+                "CCACHE_BASEDIR",
+                "CCACHE_MAXSIZE",
+                "CCACHE_COMPILERCHECK",
+                "CCACHE_NOHASHDIR",
+                "CCACHE_STATSLOG",
+                "CCACHE_LOGFILE",
+                "CCACHE_DEBUG",
+                "CCACHE_DEBUGLEVEL",
+                "CCACHE_DEBUGDIR",
+                "CUDA_NVCC_EXECUTABLE",
+                "PYTORCH_NVCC",
+                "CUDA_HOME",
+                "CC",
+                "CXX",
+                "MAX_JOBS",
+                "NVCC_THREADS",
+                "LITE_ATTENTION_SKIP_NVCC_GEN_DEPENDENCIES",
+                "LITE_ATTENTION_NVCC_RESOURCE_USAGE",
+                "LITE_ATTENTION_NVCC_LINEINFO",
+                "LITE_ATTENTION_NVCC_SPLIT_COMPILE",
+            ]
+            info = {key: os.environ.get(key, "") for key in keys}
+            info["which"] = {tool: shutil.which(tool) or "" for tool in ("ccache", "nvcc", "gcc", "g++")}
+            if info["which"]["ccache"]:
+                try:
+                    version_lines = subprocess.check_output(["ccache", "--version"], text=True).splitlines()
+                    info["ccache_version"] = version_lines[0] if version_lines else ""
+                except Exception as exc:
+                    info["ccache_version_error"] = str(exc)
+            print(json.dumps(info, indent=2, sort_keys=True))
+            PY
+            ccache -p | sed -n 's/^\(base_dir\|cache_dir\|compiler_check\|debug\|debug_dir\|hash_dir\|log_file\|namespace\|sloppiness\|stats_log\|temporary_dir\) = /\1=/p' || true
+            echo "::endgroup::"
+          fi
           export LITE_ATTENTION_FORCE_BUILD="TRUE"
           if [[ "${{ inputs.build-profile }}" == "true" ]]; then
-            USE_CCACHE_WRAPPERS="${USE_CCACHE_WRAPPERS}" TIME_BIN="${TIME_BIN:-}" TIME_BIN_KIND="${TIME_BIN_KIND:-missing}" python3 -c 'import json, os, shutil; runtime_info = {"use_ccache_wrappers": os.environ["USE_CCACHE_WRAPPERS"], "time_bin": os.environ.get("TIME_BIN", ""), "time_bin_kind": os.environ.get("TIME_BIN_KIND", "missing"), "nvcc_path": shutil.which("nvcc") or "", "cuda_nvcc_executable": os.environ.get("CUDA_NVCC_EXECUTABLE", ""), "pytorch_nvcc": os.environ.get("PYTORCH_NVCC", ""), "max_jobs": os.environ.get("MAX_JOBS", ""), "nvcc_threads": os.environ.get("NVCC_THREADS", ""), "lite_attention_nvcc_time": os.environ.get("LITE_ATTENTION_NVCC_TIME", ""), "lite_attention_nvcc_per_tu_time": os.environ.get("LITE_ATTENTION_NVCC_PER_TU_TIME", ""), "lite_attention_nvcc_fdevice_time_trace": os.environ.get("LITE_ATTENTION_NVCC_FDEVICE_TIME_TRACE", "")}; open("build-profile/runtime_info.json", "w", encoding="utf-8").write(json.dumps(runtime_info, indent=2))'
+            USE_CCACHE_WRAPPERS="${USE_CCACHE_WRAPPERS}" TIME_BIN="${TIME_BIN:-}" TIME_BIN_KIND="${TIME_BIN_KIND:-missing}" python3 -c 'import json, os, shutil; runtime_info = {"use_ccache_wrappers": os.environ["USE_CCACHE_WRAPPERS"], "time_bin": os.environ.get("TIME_BIN", ""), "time_bin_kind": os.environ.get("TIME_BIN_KIND", "missing"), "nvcc_path": shutil.which("nvcc") or "", "cuda_nvcc_executable": os.environ.get("CUDA_NVCC_EXECUTABLE", ""), "pytorch_nvcc": os.environ.get("PYTORCH_NVCC", ""), "ccache_logfile": os.environ.get("CCACHE_LOGFILE", ""), "ccache_debugdir": os.environ.get("CCACHE_DEBUGDIR", ""), "max_jobs": os.environ.get("MAX_JOBS", ""), "nvcc_threads": os.environ.get("NVCC_THREADS", ""), "lite_attention_nvcc_time": os.environ.get("LITE_ATTENTION_NVCC_TIME", ""), "lite_attention_nvcc_per_tu_time": os.environ.get("LITE_ATTENTION_NVCC_PER_TU_TIME", ""), "lite_attention_nvcc_fdevice_time_trace": os.environ.get("LITE_ATTENTION_NVCC_FDEVICE_TIME_TRACE", "")}; open("build-profile/runtime_info.json", "w", encoding="utf-8").write(json.dumps(runtime_info, indent=2))'
           fi
 
           ABI_VALUES=()
@@ -616,6 +670,11 @@ jobs:
             if [[ -f "${CCACHE_STATSLOG}" ]]; then
               echo "::group::ccache log stats"
               ccache --show-log-stats || true
+              echo "::endgroup::"
+            fi
+            if [[ -n "${CCACHE_LOGFILE:-}" && -f "${CCACHE_LOGFILE}" ]]; then
+              echo "::group::ccache logfile tail"
+              tail -n 200 "${CCACHE_LOGFILE}" || true
               echo "::endgroup::"
             fi
           fi
