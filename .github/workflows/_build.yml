@@ -53,6 +53,11 @@ on:
         required: false
         type: string
         default: "compatible"
+      ccache-observability:
+        description: "Optional ccache observability mode: off, summary, or debug (debug adds ccache debug logs)"
+        required: false
+        type: string
+        default: "off"
       import-ccache-artifact:
         description: "Optional artifact name containing ccache-bundle.tar.zst to import before build"
         required: false
@@ -276,6 +281,34 @@ jobs:
           echo "cross_py_prefix=${base_prefix}-" >> "$GITHUB_OUTPUT"
           echo "key=${prefix}-${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
 
+      - name: Configure ccache observability
+        if: ${{ inputs.enable-ccache && inputs.ccache-observability != 'off' }}
+        run: |
+          mode_raw='${{ inputs.ccache-observability }}'
+          mode="$(echo "${mode_raw}" | tr '[:upper:]' '[:lower:]')"
+          case "${mode}" in
+            summary|debug)
+              ;;
+            *)
+              echo "::error::Invalid ccache-observability='${mode_raw}'. Expected one of: off, summary, debug."
+              exit 1
+              ;;
+          esac
+
+          obs_dir="${BUILD_WHEEL_DIR}/ccache-observability"
+          mkdir -p "${obs_dir}"
+          echo "CCACHE_OBSERVABILITY_MODE=${mode}" >> "$GITHUB_ENV"
+          echo "CCACHE_OBS_DIR=${obs_dir}" >> "$GITHUB_ENV"
+          echo "CCACHE_LOGFILE=${obs_dir}/ccache.log" >> "$GITHUB_ENV"
+
+          if [[ "${mode}" == "debug" ]]; then
+            debug_dir="${obs_dir}/debug"
+            mkdir -p "${debug_dir}"
+            echo "CCACHE_DEBUG=1" >> "$GITHUB_ENV"
+            echo "CCACHE_DEBUGLEVEL=2" >> "$GITHUB_ENV"
+            echo "CCACHE_DEBUGDIR=${debug_dir}" >> "$GITHUB_ENV"
+          fi
+
       - name: Configure pip cache for GitHub
         if: ${{ !env.ACT }}
         run: |
@@ -376,6 +409,48 @@ jobs:
           tar --use-compress-program="zstd -d -T0" -xf "$bundle_path" -C "${CCACHE_DIR}"
           echo "Imported ccache bundle from $bundle_path"
           ccache -s || true
+
+      - name: Snapshot ccache stats (pre-build)
+        if: ${{ inputs.enable-ccache && inputs.ccache-observability != 'off' }}
+        env:
+          RESTORE_CACHE_HIT: ${{ steps.restore_ccache.outputs.cache-hit || '' }}
+          RESTORE_MODE: ${{ steps.ccache_restore_mode.outputs.mode || '' }}
+          CACHE_KEY: ${{ steps.ccache_key.outputs.key || '' }}
+          CACHE_PREFIX: ${{ steps.ccache_key.outputs.prefix || '' }}
+          CACHE_CROSS_PY_PREFIX: ${{ steps.ccache_key.outputs.cross_py_prefix || '' }}
+        run: |
+          obs_dir="${CCACHE_OBS_DIR:-${BUILD_WHEEL_DIR}/ccache-observability}"
+          mkdir -p "${obs_dir}"
+
+          ccache -s > "${obs_dir}/ccache-pre-s.txt" 2>&1 || true
+          ccache -sv > "${obs_dir}/ccache-pre-sv.txt" 2>&1 || true
+          ccache --show-log-stats > "${obs_dir}/ccache-pre-log-stats.txt" 2>&1 || true
+          ccache -p > "${obs_dir}/ccache-config.txt" 2>&1 || true
+
+          OBS_DIR="${obs_dir}" python3 - <<'PY'
+          import json
+          import os
+
+          obs_dir = os.environ["OBS_DIR"]
+          payload = {
+              "mode": os.environ.get("CCACHE_OBSERVABILITY_MODE", ""),
+              "restore_cache_hit": os.environ.get("RESTORE_CACHE_HIT", ""),
+              "restore_mode": os.environ.get("RESTORE_MODE", ""),
+              "cache_key": os.environ.get("CACHE_KEY", ""),
+              "cache_prefix": os.environ.get("CACHE_PREFIX", ""),
+              "cache_cross_py_prefix": os.environ.get("CACHE_CROSS_PY_PREFIX", ""),
+              "ccache_dir": os.environ.get("CCACHE_DIR", ""),
+              "ccache_basedir": os.environ.get("CCACHE_BASEDIR", ""),
+              "ccache_logfile": os.environ.get("CCACHE_LOGFILE", ""),
+              "ccache_debugdir": os.environ.get("CCACHE_DEBUGDIR", ""),
+              "cuda_nvcc_executable": os.environ.get("CUDA_NVCC_EXECUTABLE", ""),
+              "pytorch_nvcc": os.environ.get("PYTORCH_NVCC", ""),
+              "max_jobs": os.environ.get("MAX_JOBS", ""),
+              "nvcc_threads": os.environ.get("NVCC_THREADS", ""),
+          }
+          with open(os.path.join(obs_dir, "metadata.json"), "w", encoding="utf-8") as fh:
+              json.dump(payload, fh, indent=2, sort_keys=True)
+          PY
 
       - name: Check project Python minimum
         id: py_compat
@@ -1166,6 +1241,140 @@ jobs:
         with:
           name: ccache-statslog-py${{ inputs.python-version }}-cu${{ inputs.cuda-version }}-torch${{ inputs.torch-version }}-cxx11abi${{ inputs.cxx11_abi }}
           path: ${{ env.CCACHE_STATSLOG }}
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Collect ccache miss analysis
+        if: ${{ always() && inputs.enable-ccache && inputs.ccache-observability != 'off' && steps.py_compat.outputs.skip_build != 'true' && steps.torch_install.outputs.skip_build != 'true' }}
+        continue-on-error: true
+        run: |
+          obs_dir="${CCACHE_OBS_DIR:-${BUILD_WHEEL_DIR}/ccache-observability}"
+          mkdir -p "${obs_dir}"
+
+          ccache -s > "${obs_dir}/ccache-post-s.txt" 2>&1 || true
+          ccache -sv > "${obs_dir}/ccache-post-sv.txt" 2>&1 || true
+          ccache --show-log-stats > "${obs_dir}/ccache-post-log-stats.txt" 2>&1 || true
+
+          OBS_DIR="${obs_dir}" python3 - <<'PY'
+          import collections
+          import json
+          import os
+          import pathlib
+          import re
+
+          obs_dir = pathlib.Path(os.environ["OBS_DIR"])
+          log_file = os.environ.get("CCACHE_LOGFILE", "")
+          debug_dir = os.environ.get("CCACHE_DEBUGDIR", "")
+
+          source_re = re.compile(r'([A-Za-z0-9_./+-]+\.(?:cu|cuh|cpp|cc|cxx))')
+          reason_counter = collections.Counter()
+          missed_files = collections.Counter()
+          cicc_context = collections.Counter()
+
+          def ingest_line(line: str):
+              low = line.lower()
+              if "miss" in low:
+                  if "result:" in low:
+                      marker = low.find("result:")
+                      if marker >= 0:
+                          reason = low[marker + len("result:"):].strip() or "result_unspecified"
+                      else:
+                          reason = "result_unknown"
+                  elif "cache miss" in low:
+                      reason = "cache_miss"
+                  else:
+                      reason = "miss_other"
+                  reason_counter[reason] += 1
+
+                  sources = source_re.findall(line)
+                  if sources:
+                      for src in sources:
+                          missed_files[src] += 1
+                  else:
+                      missed_files["<unknown>"] += 1
+
+              if ("cicc" in low or "nvcc" in low or ".cu" in low) and ("miss" in low or "result:" in low):
+                  cicc_context["lines"] += 1
+                  if "cicc" in low:
+                      cicc_context["mentions_cicc"] += 1
+                  if "nvcc" in low:
+                      cicc_context["mentions_nvcc"] += 1
+
+          scanned_files = []
+          if log_file and pathlib.Path(log_file).is_file():
+              scanned_files.append(log_file)
+              with open(log_file, "r", encoding="utf-8", errors="replace") as fh:
+                  for line in fh:
+                      ingest_line(line)
+
+          if debug_dir and pathlib.Path(debug_dir).is_dir():
+              debug_files_scanned = 0
+              for path in sorted(pathlib.Path(debug_dir).rglob("*")):
+                  if not path.is_file():
+                      continue
+                  if debug_files_scanned >= 250:
+                      break
+                  try:
+                      if path.stat().st_size > 5 * 1024 * 1024:
+                          continue
+                  except OSError:
+                      continue
+                  debug_files_scanned += 1
+                  scanned_files.append(str(path))
+                  with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                      for line_idx, line in enumerate(fh):
+                          if line_idx >= 10000:
+                              break
+                          ingest_line(line)
+
+          summary = {
+              "mode": os.environ.get("CCACHE_OBSERVABILITY_MODE", ""),
+              "scanned_file_count": len(scanned_files),
+              "scanned_files_sample": scanned_files[:40],
+              "top_miss_reasons": reason_counter.most_common(20),
+              "top_missed_files": missed_files.most_common(30),
+              "cicc_context": dict(cicc_context),
+          }
+
+          with open(obs_dir / "ccache-miss-summary.json", "w", encoding="utf-8") as fh:
+              json.dump(summary, fh, indent=2, sort_keys=True)
+
+          lines = [
+              "# ccache miss summary",
+              "",
+              f"- mode: {summary['mode']}",
+              f"- scanned_file_count: {summary['scanned_file_count']}",
+              "",
+              "## Top miss reasons",
+          ]
+          if summary["top_miss_reasons"]:
+              for reason, count in summary["top_miss_reasons"][:10]:
+                  lines.append(f"- {count}  {reason}")
+          else:
+              lines.append("- none")
+          lines.extend(["", "## Top missed files"])
+          if summary["top_missed_files"]:
+              for src, count in summary["top_missed_files"][:15]:
+                  lines.append(f"- {count}  {src}")
+          else:
+              lines.append("- none")
+          lines.extend(["", "## cicc/nvcc context"])
+          if summary["cicc_context"]:
+              for key, value in sorted(summary["cicc_context"].items()):
+                  lines.append(f"- {key}: {value}")
+          else:
+              lines.append("- none")
+
+          with open(obs_dir / "ccache-miss-summary.md", "w", encoding="utf-8") as fh:
+              fh.write("\n".join(lines) + "\n")
+          PY
+
+      - name: Upload ccache observability artifact
+        if: ${{ always() && !env.ACT && inputs.enable-ccache && inputs.ccache-observability != 'off' && steps.py_compat.outputs.skip_build != 'true' && steps.torch_install.outputs.skip_build != 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ccache-observability-py${{ inputs.python-version }}-cu${{ inputs.cuda-version }}-torch${{ inputs.torch-version }}-cxx11abi${{ inputs.cxx11_abi }}
+          path: ${{ env.BUILD_WHEEL_DIR }}/ccache-observability
           if-no-files-found: warn
           retention-days: 14
 
