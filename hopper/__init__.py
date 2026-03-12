@@ -7,6 +7,7 @@ from .lite_attention import (
     LiteAttentionCalibConfig,
     LiteAttentionDisabledConfig,
     LiteAttentionRegistry,
+    LiteAttentionReplayConfig,
     LiteAttentionRunConfig,
     SeqParallelLiteAttention,
 )
@@ -17,6 +18,7 @@ __all__ = [
     "LiteAttentionRunConfig",
     "LiteAttentionDisabledConfig",
     "LiteAttentionCalibConfig",
+    "LiteAttentionReplayConfig",
     "LiteAttentionRegistry",
     "load_capture",
     "render_skip_images",
