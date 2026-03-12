@@ -129,6 +129,55 @@ class LiteAttentionDisabledConfig(LiteAttentionRunConfig):
 
 
 @dataclass
+class LiteAttentionReplayConfig(CalibratedRunConfig):
+    """Runtime config for replay mode: load pre-computed skip lists from a capture file.
+
+    The capture file is a .pt file produced by ``enable_capture`` + ``save()``.
+
+    Two sub-modes:
+
+    1. **Skip-list replay** (``qk_threshold=None``, default): the stored
+       write-lists are shifted by one timestep and fed back as read-lists,
+       bypassing threshold computation entirely.  Requires the capture to
+       include ``skip_lists`` (i.e. captured with ``qk_block_map=True`` or
+       ``attn_map=True``).
+
+    2. **QK-map replay** (``qk_threshold`` is set): skip lists are *computed*
+       at load time from the captured ``qk_block_map`` and the given threshold.
+       This lets you replay with a different threshold than the original
+       capture without re-running the model.  Requires the capture to include
+       ``qk_block_map``.
+
+    Attributes:
+        skip_list_file: Path to the .pt capture file.
+        write_next: If True (default) the kernel still writes a write-list each
+            step.  Set to False to signal that write is unnecessary.
+            NOTE: the CUDA kernel always writes regardless; this flag is a
+            placeholder for a future C/CUDA optimisation that would skip the
+            write entirely.
+        qk_threshold: If set, compute skip lists from ``qk_block_map`` using
+            this threshold instead of using the captured ``skip_lists``
+            directly.  Values are in log2 scale (must be ≤ 0 in non-debug
+            mode), same semantics as ``LiteAttentionRunConfig.threshold``.
+    """
+
+    skip_list_file: str = ""
+    write_next: bool = True
+    qk_threshold: float | None = None
+
+    def to_dict(self) -> dict[str, typing.Any]:
+        """Serialize to dict, omitting None values (not TOML-serializable)."""
+        d = super().to_dict()
+        return {k: v for k, v in d.items() if v is not None}
+
+    @classmethod
+    def default(cls):
+        raise NotImplementedError(
+            "LiteAttentionReplayConfig requires explicit configuration"
+        )
+
+
+@dataclass
 class LiteAttentionCalibConfig(CalibratedCalibConfig):
     """Calibration configuration for finding optimal threshold."""
 
@@ -233,6 +282,12 @@ class LiteAttention(nn.Module, ConfigurableModule):
         # Public configuration
         self.enable_skipping = enable_skipping
         self.max_batch_size = max_batch_size
+
+        # Replay mode state (set via _hydrate_replay_data on the registry)
+        self._replay_skip_lists = (
+            None  # list[Tensor] | None — one read_list per active step
+        )
+        self._replay_step_counter = 0  # counts active (non-disabled) replay steps
 
         # Debug capture state (set via _enable_capture, cleared via _disable_capture)
         self._capture_enabled = False  # pct for all heads/timesteps
@@ -637,6 +692,43 @@ class LiteAttention(nn.Module, ConfigurableModule):
             value = key
             key = value
 
+        # --- Replay mode: use pre-computed skip lists ---
+        if self._replay_skip_lists is not None:
+            replay_idx = min(
+                self._replay_step_counter, len(self._replay_skip_lists) - 1
+            )
+            read_list = self._replay_skip_lists[replay_idx]
+
+            # Expand batch dimension if needed (capture may have batch=1)
+            batch_size = query.shape[0]
+            if read_list.shape[0] < batch_size:
+                read_list = read_list.expand(batch_size, -1, -1, -1).contiguous()
+            read_list = read_list.to(query.device)
+
+            # Kernel always needs a write buffer even if we discard it
+            write_list = torch.empty_like(read_list)
+
+            # Set phase so forward() passes the correct value to the kernel.
+            # Normal flow: T=0 → phase flips 0→1 → kernel sees True
+            #              T=1 → phase flips 1→0 → kernel sees False
+            # forward() checks (self._phase == 1), so:
+            self._phase = 1 if (replay_idx % 2 == 0) else 0
+
+            self._replay_step_counter += 1
+
+            # Track metadata (needed by _maybe_capture and other downstream code)
+            head_dim = query.shape[-1]
+            v_colmajor = value.shape[-3] == head_dim
+            self._last_seq_len = (int(query.shape[1]), int(key.shape[1]))
+            self._last_head_dim = head_dim
+            self._last_v_colmajor = v_colmajor
+            self._last_dtype = torch.int8 if self.use_int8 else query.dtype
+            self._last_device = query.device
+            self._last_num_heads = query.shape[2]
+            self._last_batch_size = batch_size
+
+            return read_list, write_list
+
         # attributes we check in the decision to REINITIALIZE the skip list
         current_seq_len = (int(query.shape[1]), int(key.shape[1]))
         head_dim = query.shape[-1]
@@ -940,6 +1032,17 @@ class LiteAttention(nn.Module, ConfigurableModule):
 
         if not self.enable_skipping or isinstance(cfg, LiteAttentionDisabledConfig):
             threshold = 0.0  # unused
+        elif isinstance(cfg, LiteAttentionReplayConfig):
+            # read_list already determines what to compute.  The kernel still
+            # performs threshold comparison and writes to write_list.
+            # Pass the replay threshold (if set) so the write_list is populated
+            # with a meaningful result; otherwise use 0.0 (no-op).
+            # TODO: if write_next=False, a C/CUDA optimisation could skip the
+            # threshold comparison and write_list population entirely.
+            if cfg.qk_threshold is not None and self._capture_enabled:
+                threshold = cfg.qk_threshold
+            else:
+                threshold = 0.0
         elif isinstance(cfg, LiteAttentionCalibConfig):
             temp_list = read_list.clone()
 
@@ -1103,6 +1206,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
         self.verbose_reinitialization = False
         self._last_percentage = 0.0
         self._last_num_heads = None
+        self._replay_step_counter = 0
         if self._captured_pct or self._captured_maps:
             warnings.warn(
                 "reset_skip_state() called with unsaved capture data; data will be lost.",
@@ -1301,6 +1405,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
 
         # --- Determine what needs attention computation ---
         capture_stats = self._capture_stats
+        capture_qk_block_map = self._capture_qk_block_map
 
         capture_batch_idxs = (
             [bi for bi in self._capture_map_batches if bi < batch_size]
@@ -1312,8 +1417,6 @@ class LiteAttention(nn.Module, ConfigurableModule):
             if self._capture_map_heads is not None
             else range(num_heads)
         )
-
-        capture_qk_block_map = self._capture_qk_block_map
 
         capture_attn_map = self._capture_attn_map
         capture_attn_map &= (
@@ -1850,25 +1953,28 @@ class LiteAttentionRegistry(ModuleRegistry):
         calib_config: dict | None = None,
         force: bool = False,
         disabled_steps: int = 0,
+        qk_threshold: float | None = None,
     ) -> Self:
         """
         Create a registry from a model and configure all its LiteAttention modules.
 
         Args:
             model: `nn.Module` that contains LiteAttention modules.
-            mode: Configuration mode - 'const', 'load', 'calib', or 'disable'.
+            mode: Configuration mode - 'const', 'load', 'calib', 'replay',
+                or 'disable'.
             threshold: Threshold value for mode='const'.
-            filename: Path to config file for mode='load' (input) or
-                mode='calib' (output via save_if_calib). Cast to Path internally.
+            filename: Path to config file for mode='load' (input),
+                mode='calib' (output via save_if_calib), or mode='replay'
+                (.pt capture file or .toml config). Cast to Path internally.
             calib_config: Dict of calibration params for mode='calib',
                 passed as kwargs to LiteAttentionCalibConfig
                 (e.g. {"target_error": 0.001, "metric": "L1"}).
             force: If True, override instance-level configs on modules.
                 If False (default), warn when a module has an instance config
                 that will take precedence over the registry config.
-            disabled_steps: Number of leading timesteps to run with skipping
-                disabled (regular attention). Prepends LiteAttentionDisabledConfig
-                entries to each module's config list.
+            qk_threshold: For mode='replay' only. If set, compute skip lists
+                from qk_block_map using this threshold instead of using
+                captured skip lists directly.
 
         """
         if filename is not None:
@@ -1916,8 +2022,28 @@ class LiteAttentionRegistry(ModuleRegistry):
                     LiteAttentionRunConfig,
                     LiteAttentionDisabledConfig,
                     LiteAttentionCalibConfig,
+                    LiteAttentionReplayConfig,
                 ],
             )
+        elif mode == "replay":
+            if filename is None:
+                raise ValueError("filename is required for mode='replay'")
+            if filename.suffix == ".toml":
+                registry.load_config(
+                    filename,
+                    config_types=[
+                        LiteAttentionReplayConfig,
+                        LiteAttentionRunConfig,
+                        LiteAttentionDisabledConfig,
+                    ],
+                )
+            else:
+                # .pt capture file — replay all modules from it
+                registry.set_bulk_config(
+                    LiteAttentionReplayConfig(
+                        skip_list_file=str(filename), qk_threshold=qk_threshold
+                    )
+                )
         elif mode == "calib":
             if filename is None:
                 raise ValueError("filename is required for mode='calib'")
@@ -1930,7 +2056,7 @@ class LiteAttentionRegistry(ModuleRegistry):
             registry.set_bulk_config(LiteAttentionCalibConfig(**calib_config))
         else:
             raise ValueError(
-                f"Unknown mode: {mode!r}. Must be 'const', 'load', 'calib', or 'disable'."
+                f"Unknown mode: {mode!r}. Must be 'const', 'load', 'calib', 'replay', or 'disable'."
             )
 
         if disabled_steps > 0 and mode != "disable":
@@ -1945,7 +2071,288 @@ class LiteAttentionRegistry(ModuleRegistry):
                 else:
                     module._registry_config = ConfigList(disabled_prefix + [cfg])
 
+        # Hydrate replay data: load .pt files, convert write→read lists, attach
+        if mode == "replay":
+            registry._hydrate_replay_data()
+
         return registry
+
+    def _hydrate_replay_data(self) -> None:
+        """Load .pt capture files and attach replay skip lists to modules.
+
+        For each module with a ``LiteAttentionReplayConfig``, this method:
+
+        1. Loads the referenced .pt capture file (caching across modules).
+        2. Validates that all heads were captured (replay requires full head coverage).
+        3. Produces read-lists from the capture data:
+
+           - **qk_threshold=None** (skip-list replay): shifts captured
+             write-lists by one timestep.
+           - **qk_threshold is set** (QK-map replay): computes skip lists from
+             ``qk_block_map`` and the given threshold.
+
+           In both cases ``read_list[0]`` = "compute all" initial buffer.
+        4. Stores the result as ``module._replay_skip_lists``.
+        """
+        pt_cache: dict[str, dict] = {}
+
+        for name, module in self.named_modules.items():
+            # Find replay configs for this module
+            cfg = module._registry_config
+            replay_cfg: LiteAttentionReplayConfig | None = None
+            if isinstance(cfg, LiteAttentionReplayConfig):
+                replay_cfg = cfg
+            elif isinstance(cfg, ConfigList):
+                for c in cfg:
+                    if isinstance(c, LiteAttentionReplayConfig):
+                        replay_cfg = c
+                        break
+
+            if replay_cfg is None:
+                module._replay_skip_lists = None
+                continue
+
+            skip_list_file = replay_cfg.skip_list_file
+            if not skip_list_file:
+                raise ValueError(
+                    f"Module '{name}': LiteAttentionReplayConfig has empty skip_list_file"
+                )
+
+            # Load .pt file (with caching)
+            if skip_list_file not in pt_cache:
+                pt_cache[skip_list_file] = torch.load(
+                    skip_list_file, map_location="cpu", weights_only=False
+                )
+            capture_data = pt_cache[skip_list_file]
+
+            if name not in capture_data["modules"]:
+                raise ValueError(
+                    f"Module '{name}' not found in capture file '{skip_list_file}'"
+                )
+            mod_data = capture_data["modules"][name]
+
+            # Validate all heads were captured
+            total_heads = mod_data["pct_per_head"].shape[-1]
+            map_heads = mod_data.get("map_heads", list(range(total_heads)))
+            if len(map_heads) != total_heads:
+                raise ValueError(
+                    f"Module '{name}': replay requires all {total_heads} heads "
+                    f"to be captured, but only {len(map_heads)} were "
+                    f"(map_heads={map_heads}). Re-capture with heads=None."
+                )
+
+            # Validate batch coverage
+            total_batches = mod_data["pct_per_head"].shape[1]
+            map_batches = mod_data.get("map_batches", list(range(total_batches)))
+            if len(map_batches) != total_batches:
+                log.warning(
+                    "Replay: not all batches were captured; will expand at runtime",
+                    module=name,
+                    captured_batches=len(map_batches),
+                    total_batches=total_batches,
+                )
+
+            # Count leading disabled steps in the replay config to determine
+            # which captured entries correspond to active (non-disabled) timesteps.
+            # The capture file includes synthetic "compute all" entries for
+            # disabled timesteps; we skip those.
+            n_disabled = 0
+            if isinstance(cfg, ConfigList):
+                for c in cfg:
+                    if isinstance(c, LiteAttentionDisabledConfig):
+                        n_disabled += 1
+                    else:
+                        break
+
+            use_qk_map = replay_cfg.qk_threshold is not None
+
+            if use_qk_map:
+                # --- QK-map replay: compute skip lists from qk_block_map ---
+                if "qk_block_map" not in mod_data:
+                    raise ValueError(
+                        f"Module '{name}': capture file has no qk_block_map. "
+                        "Re-capture with qk_block_map=True."
+                    )
+                qk_block_map = mod_data[
+                    "qk_block_map"
+                ]  # [T, B_sel, H_sel, qtiles, ktiles]
+                replay_list = self._qk_map_to_replay_skip_lists(
+                    qk_block_map, replay_cfg.qk_threshold, n_disabled
+                )
+            else:
+                # --- Skip-list replay: use captured write-lists directly ---
+                if "skip_lists" not in mod_data:
+                    raise ValueError(
+                        f"Module '{name}': capture file has no skip_lists. "
+                        "Re-capture with qk_block_map=True or attn_map=True."
+                    )
+                skip_lists = mod_data[
+                    "skip_lists"
+                ]  # [T, B_sel, H_sel, qtiles, ktiles+2]
+                B_sel, H_sel, qtiles, ktiles_plus_2 = skip_lists.shape[1:]
+                ktiles = ktiles_plus_2 - 2
+                compute_all = self._make_compute_all(B_sel, H_sel, qtiles, ktiles)
+                active_write_lists = [
+                    skip_lists[t] for t in range(n_disabled, skip_lists.shape[0])
+                ]
+                replay_list = [compute_all] + active_write_lists
+
+            module._replay_skip_lists = replay_list
+            module._replay_step_counter = 0
+
+    @staticmethod
+    def _make_compute_all(B: int, H: int, qtiles: int, ktiles: int) -> torch.Tensor:
+        """Build a "compute all tiles" skip list buffer."""
+        buf = torch.zeros(B, H, qtiles, ktiles + 2, dtype=torch.int16)
+        buf[:, :, :, 0] = 2
+        buf[:, :, :, 1] = ktiles - 1
+        buf[:, :, :, 2] = -1
+        return buf
+
+    @staticmethod
+    def _qk_map_to_replay_skip_lists(
+        qk_block_map: torch.Tensor,
+        threshold: float,
+        n_disabled: int = 0,
+    ) -> list[torch.Tensor]:
+        """Convert ``qk_block_map`` + threshold to replay skip lists.
+
+        For each active timestep, tiles whose block-level QK score (row-max-
+        normalized, ≤ 0) is **≥ threshold** are marked as "compute".
+        Contiguous ranges of compute-tiles are encoded in the skip list format
+        expected by the CUDA kernel (reversed range pairs, phase-aware).
+
+        Args:
+            qk_block_map: Shape ``[T, B, H, qtiles, ktiles]``, float16/32,
+                values ≤ 0.
+            threshold: Tiles with ``qk_block_map >= threshold`` are computed.
+            n_disabled: Number of leading disabled timesteps in the capture
+                (their entries are skipped).
+
+        Returns:
+            List of ``[B, H, qtiles, ktiles+2]`` int16 tensors, starting with
+            a "compute all" initial buffer at index 0.
+        """
+        T_total, B, H, qtiles, ktiles = qk_block_map.shape
+        compute_all = LiteAttentionRegistry._make_compute_all(B, H, qtiles, ktiles)
+        result: list[torch.Tensor] = [compute_all]
+
+        # Boolean mask, flattened: [T, N, ktiles] where N = B*H*qtiles
+        compute_mask = (qk_block_map >= threshold).reshape(T_total, -1, ktiles)
+        N = compute_mask.shape[1]
+
+        # Detect range boundaries: pad with False, diff gives +1 at start, -1 past end
+        padded = torch.nn.functional.pad(compute_mask.to(torch.int8), (1, 1), value=0)
+        diff = padded[:, :, 1:] - padded[:, :, :-1]  # [T, N, ktiles+1]
+
+        # starts_mask[t,n,k]=True where a contiguous range begins at tile k
+        # ends_mask[t,n,k]=True where a contiguous range ends at tile k (inclusive)
+        starts_mask = diff == 1  # [T, N, ktiles+1] — only cols 0..ktiles-1 can be True
+        ends_mask = diff == -1  # [T, N, ktiles+1] — only cols 1..ktiles can be True
+
+        # Number of ranges per row: [T, N]
+        n_ranges = starts_mask.sum(dim=-1)
+
+        # Max ranges across all rows (determines buffer width needed)
+        max_ranges = int(n_ranges.max().item()) if n_ranges.any() else 0
+
+        if max_ranges == 0:
+            # No tiles to compute anywhere — all skip lists are empty
+            for _ in range(n_disabled, T_total):
+                result.append(torch.zeros(B, H, qtiles, ktiles + 2, dtype=torch.int16))
+            return result
+
+        # For each row, gather the start/end positions into dense arrays.
+        # argsort trick: sort the column indices where starts_mask is True,
+        # grouping by row via a stable sort on (row, col).
+        # We process all timesteps at once: flatten T and N.
+        TN = T_total * N
+        starts_flat = starts_mask[:T_total].reshape(TN, ktiles + 1)
+        ends_flat = ends_mask[:T_total].reshape(TN, ktiles + 1)
+        n_ranges_flat = n_ranges[:T_total].reshape(TN)
+
+        # Gather start/end column indices per row into [TN, max_ranges] tensors
+        # For rows with fewer ranges, the extra slots are zero (unused).
+        # Use topk on the mask to get the column indices of True values, sorted.
+        # topk with k=max_ranges on int8 gives the largest values (1s first).
+        if max_ranges > 0:
+            # Positions where starts are True — we want sorted col indices per row
+            # Use cumsum-within-row approach: for each row, the True positions
+            # get sequential indices via cumsum, then we scatter into dense array.
+            starts_cumsum = starts_flat.cumsum(dim=-1) * starts_flat  # [TN, ktiles+1]
+            ends_cumsum = ends_flat.cumsum(dim=-1) * ends_flat
+
+            # Dense arrays: starts_dense[row, range_idx] = col index of that range's start
+            starts_dense = torch.zeros(TN, max_ranges, dtype=torch.int16)
+            ends_dense = torch.zeros(TN, max_ranges, dtype=torch.int16)
+
+            col_indices = (
+                torch.arange(ktiles + 1, dtype=torch.int16).unsqueeze(0).expand(TN, -1)
+            )
+
+            # Where starts_flat is True, scatter col index into position (cumsum-1)
+            s_pos = starts_cumsum.long()  # 1-based positions
+            s_mask = starts_flat.bool()
+            # Linearize: row * max_ranges + (pos - 1)
+            row_offsets = torch.arange(TN, dtype=torch.long).unsqueeze(1) * max_ranges
+            s_linear = (row_offsets + s_pos - 1).masked_select(s_mask)
+            starts_dense.reshape(-1).scatter_(
+                0, s_linear, col_indices.masked_select(s_mask)
+            )
+
+            e_pos = ends_cumsum.long()
+            e_mask = ends_flat.bool()
+            e_linear = (row_offsets + e_pos - 1).masked_select(e_mask)
+            # ends_mask is at col+1, so subtract 1 to get inclusive end
+            ends_dense.reshape(-1).scatter_(
+                0, e_linear, (col_indices - 1).masked_select(e_mask)
+            )
+
+        # Now build skip lists for each timestep
+        for t in range(n_disabled, T_total):
+            replay_idx = t - n_disabled + 1
+            phase_true = replay_idx % 2 == 0
+
+            skip_list = torch.zeros(B, H, qtiles, ktiles + 2, dtype=torch.int16)
+            sl_flat = skip_list.reshape(N, ktiles + 2)
+
+            t_offset = t * N
+            nr = n_ranges_flat[t_offset : t_offset + N]  # [N]
+            sd = starts_dense[t_offset : t_offset + N]  # [N, max_ranges]
+            ed = ends_dense[t_offset : t_offset + N]  # [N, max_ranges]
+
+            # Length field
+            sl_flat[:, 0] = (nr * 2).to(torch.int16)
+
+            # Fill range pairs (reversed: last range first).
+            # For each forward index r, the reversed slot is:
+            #   slot = 1 + (nr - 1 - r) * 2  (per-row, since nr varies)
+            # We iterate r in [0, max_ranges) and scatter into per-row slots.
+            for r in range(max_ranges):
+                active = nr > r  # [N] bool — range r exists for this row
+
+                s = sd[:, r]  # [N] start of forward range r
+                e = ed[:, r]  # [N] end of forward range r
+
+                # Reversed slot position: last range (r=nr-1) → slot 1,
+                # second-to-last (r=nr-2) → slot 3, etc.
+                rev_slot = 1 + (nr - 1 - r) * 2  # [N] per-row slot positions
+
+                # Scatter into per-row positions using advanced indexing
+                row_idx = torch.arange(N)
+                active_rows = active.nonzero(as_tuple=True)[0]
+                slots = rev_slot[active_rows].long()
+
+                if phase_true:
+                    sl_flat[active_rows, slots] = e[active_rows]
+                    sl_flat[active_rows, slots + 1] = s[active_rows] - 1
+                else:
+                    sl_flat[active_rows, slots] = s[active_rows]
+                    sl_flat[active_rows, slots + 1] = e[active_rows] + 1
+
+            result.append(skip_list)
+
+        return result
 
     def enable_capture(
         self,
@@ -1981,9 +2388,6 @@ class LiteAttentionRegistry(ModuleRegistry):
             heads: Head indices for map/stats capture, or None for all.
             batches: Batch indices for map/stats capture, or None for all.
             attn_map_res: Resolution for downsampled attention maps.
-                Set to 0 to disable attention map capture even when attn_map=True
-                (useful if you only want skip_lists and/or qk_block_map from the
-                filtered subset of modules).
             qk_block_map: Enable row-max-normalized block-level QK scores (≤ 0, comparable to threshold).
             stats: Enable running stats accumulation at full resolution.
         """

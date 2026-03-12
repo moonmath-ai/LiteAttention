@@ -584,3 +584,69 @@ def test_creating_second_registry_resets_config():
     # Creating a new registry should clear the config
     registry2 = ModuleRegistry(model.named_modules())
     assert registry2.named_modules[name]._registry_config is None
+
+
+# ===========================================================================
+# LiteAttentionReplayConfig serialization
+# ===========================================================================
+
+
+def test_replay_config_to_dict_from_dict_roundtrip():
+    from lite_attention.lite_attention import LiteAttentionReplayConfig
+
+    cfg = LiteAttentionReplayConfig(skip_list_file="capture.pt", write_next=False)
+    d = cfg.to_dict()
+    assert d["_type"] == "LiteAttentionReplayConfig"
+    assert d["skip_list_file"] == "capture.pt"
+    assert d["write_next"] is False
+
+    type_map = {"LiteAttentionReplayConfig": LiteAttentionReplayConfig}
+    restored = CalibratedConfig.from_dict(dict(d), type_map)
+    assert isinstance(restored, LiteAttentionReplayConfig)
+    assert restored.skip_list_file == "capture.pt"
+    assert restored.write_next is False
+
+
+def test_replay_config_toml_roundtrip(tmp_path):
+    from lite_attention.lite_attention import (
+        LiteAttentionDisabledConfig,
+        LiteAttentionReplayConfig,
+        LiteAttentionRunConfig,
+    )
+
+    # Test TOML save/load with mixed config types (disabled + replay)
+    ccd = CalibratedConfigDict(
+        {
+            "layer0": ConfigList(
+                [
+                    LiteAttentionDisabledConfig(),
+                    LiteAttentionReplayConfig(
+                        skip_list_file="capture.pt", write_next=True
+                    ),
+                ]
+            ),
+            "layer1": LiteAttentionReplayConfig(
+                skip_list_file="other.pt", write_next=False
+            ),
+        }
+    )
+    path = tmp_path / "config.toml"
+    ccd.save(path)
+
+    loaded = CalibratedConfigDict.load(
+        path,
+        [
+            LiteAttentionRunConfig,
+            LiteAttentionDisabledConfig,
+            LiteAttentionReplayConfig,
+        ],
+    )
+    # layer0 is a ConfigList with two entries
+    assert isinstance(loaded["layer0"], ConfigList)
+    assert len(loaded["layer0"]) == 2
+    assert isinstance(loaded["layer0"][0], LiteAttentionDisabledConfig)
+    assert isinstance(loaded["layer0"][1], LiteAttentionReplayConfig)
+    assert loaded["layer0"][1].skip_list_file == "capture.pt"
+    # layer1 is a single config
+    assert isinstance(loaded["layer1"], LiteAttentionReplayConfig)
+    assert loaded["layer1"].write_next is False
