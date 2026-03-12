@@ -147,7 +147,7 @@ class ConfigurableModule:
         """
         cfg = self.config_all
         if isinstance(cfg, ConfigList):
-            return cfg[self._config_index]
+            return cfg[min(self._config_index, len(cfg) - 1)]
         else:
             return cfg
 

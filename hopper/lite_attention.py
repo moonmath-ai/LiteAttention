@@ -100,6 +100,7 @@ from ._internal.flash_attn_interface import flash_attn_func
 from .calibrated_module import (
     CalibratedCalibConfig,
     CalibratedRunConfig,
+    ConfigList,
     ConfigurableModule,
     ModuleRegistry,
 )
@@ -118,6 +119,13 @@ class LiteAttentionRunConfig(CalibratedRunConfig):
     @classmethod
     def default(cls) -> Self:
         return cls(threshold=-10.0)
+
+
+@dataclass
+class LiteAttentionDisabledConfig(LiteAttentionRunConfig):
+    """Runtime config that disables skipping for this timestep (regular attention)."""
+
+    threshold: float = 0.0
 
 
 @dataclass
@@ -852,19 +860,27 @@ class LiteAttention(nn.Module, ConfigurableModule):
         >>> output = lite_attn(q, k, v, must_do_list=[0, 128, 500, 640])
         """
         cfg = self.config if self.enable_skipping else None
+        disabled = isinstance(cfg, LiteAttentionDisabledConfig)
+
+        # if we are disabled, we temporarily disable skipping
+        enable_skipping = self.enable_skipping
+        if disabled:
+            self.enable_skipping = False
 
         # Get read and write lists (internal mask management)
         read_list, write_list = self._get_read_write_lists(
             query, key, value, must_skip_list
         )
 
-        if self.enable_skipping and (must_do_list is not None):
+        if self.enable_skipping and must_do_list is not None:
             # handle must-do list - expand the 1d list to a list per head per batch per qi
             must_do_list_expanded = self._expand_must_do_list(
                 must_do_list, write_list.shape, query, value, self.use_int8
             )
         else:
             must_do_list_expanded = None
+
+        self.enable_skipping = enable_skipping
 
         # softmax_scale: for INT8 use q_scale (1.44269504089 * scale or / sqrt(head_dim)); else use scale as-is
         head_dim = query.shape[-1]
@@ -878,7 +894,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
             else scale
         )
 
-        if not self.enable_skipping:
+        if not self.enable_skipping or isinstance(cfg, LiteAttentionDisabledConfig):
             threshold = 0.0  # unused
         elif isinstance(cfg, LiteAttentionCalibConfig):
             temp_list = read_list.clone()
@@ -963,9 +979,10 @@ class LiteAttention(nn.Module, ConfigurableModule):
                 return curr_th
 
             threshold = find_threshold(low=-20.0, high=0.0)
-        else:
-            assert isinstance(cfg, LiteAttentionRunConfig)
+        elif isinstance(cfg, LiteAttentionRunConfig):
             threshold = cfg.threshold
+        else:
+            raise ValueError(f"Unknown config type: {type(cfg)}")
 
         output = flash_attn_func(
             q=query,
@@ -985,11 +1002,16 @@ class LiteAttention(nn.Module, ConfigurableModule):
 
         # Record calibration results and advance timestep
         if self.enable_skipping:
-            self.add_calibration_results(LiteAttentionRunConfig(threshold=threshold))
+            self.add_calibration_results(
+                LiteAttentionDisabledConfig()
+                if disabled
+                else LiteAttentionRunConfig(threshold=threshold)
+            )
 
         # Calculate and store statistics if enabled
         if (
             self.enable_skipping
+            and not disabled
             and os.getenv("LITE_ATTENTION_VERBOSE", "FALSE") != "FALSE"
         ):
             real_batch_size = query.shape[0]
@@ -1485,13 +1507,14 @@ class LiteAttentionRegistry(ModuleRegistry):
         filename: str | Path | None = None,
         calib_config: dict | None = None,
         force: bool = False,
+        disabled_steps: int = 0,
     ) -> Self:
         """
         Create a registry from a model and configure all its LiteAttention modules.
 
         Args:
             model: `nn.Module` that contains LiteAttention modules.
-            mode: Configuration mode - 'const', 'load', or 'calib'.
+            mode: Configuration mode - 'const', 'load', 'calib', or 'disable'.
             threshold: Threshold value for mode='const'.
             filename: Path to config file for mode='load' (input) or
                 mode='calib' (output via save_if_calib). Cast to Path internally.
@@ -1501,6 +1524,9 @@ class LiteAttentionRegistry(ModuleRegistry):
             force: If True, override instance-level configs on modules.
                 If False (default), warn when a module has an instance config
                 that will take precedence over the registry config.
+            disabled_steps: Number of leading timesteps to run with skipping
+                disabled (regular attention). Prepends LiteAttentionDisabledConfig
+                entries to each module's config list.
 
         """
         if filename is not None:
@@ -1527,7 +1553,9 @@ class LiteAttentionRegistry(ModuleRegistry):
                         module_name=name,
                     )
 
-        if mode == "const":
+        if mode == "disable":
+            registry.set_bulk_config(LiteAttentionDisabledConfig())
+        elif mode == "const":
             if threshold is None:
                 warnings.warn(
                     "no 'threshold' specified for mode 'const'. Using default value",
@@ -1542,7 +1570,11 @@ class LiteAttentionRegistry(ModuleRegistry):
                 raise ValueError("filename is required for mode='load'")
             registry.load_config(
                 filename,
-                config_types=[LiteAttentionRunConfig, LiteAttentionCalibConfig],
+                config_types=[
+                    LiteAttentionRunConfig,
+                    LiteAttentionDisabledConfig,
+                    LiteAttentionCalibConfig,
+                ],
             )
         elif mode == "calib":
             if filename is None:
@@ -1556,8 +1588,20 @@ class LiteAttentionRegistry(ModuleRegistry):
             registry.set_bulk_config(LiteAttentionCalibConfig(**calib_config))
         else:
             raise ValueError(
-                f"Unknown mode: {mode!r}. Must be 'const', 'load', or 'calib'."
+                f"Unknown mode: {mode!r}. Must be 'const', 'load', 'calib', or 'disable'."
             )
+
+        if disabled_steps > 0 and mode != "disable":
+            disabled_prefix = [LiteAttentionDisabledConfig()] * disabled_steps
+            for module in registry.named_modules.values():
+                cfg = module._registry_config
+                if isinstance(cfg, ConfigList):
+                    remainder = list(cfg)[disabled_steps:]
+                    if not remainder:
+                        remainder = [cfg[-1]]
+                    module._registry_config = ConfigList(disabled_prefix + remainder)
+                else:
+                    module._registry_config = ConfigList(disabled_prefix + [cfg])
 
         return registry
 

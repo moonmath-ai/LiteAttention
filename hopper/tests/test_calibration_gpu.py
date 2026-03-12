@@ -10,6 +10,7 @@ from lite_attention.calibrated_module import (
 )
 from lite_attention.lite_attention import (
     LiteAttentionCalibConfig,
+    LiteAttentionDisabledConfig,
     LiteAttentionRegistry,
     LiteAttentionRunConfig,
 )
@@ -361,3 +362,131 @@ def test_calc_error_different_tensors():
     assert errors["Cossim"] > 0
     assert errors["L1"] > 0
     assert errors["RMSE"] > 0
+
+
+# ===========================================================================
+# LiteAttentionDisabledConfig
+# ===========================================================================
+
+
+def test_disabled_config_in_config_list(qkv):
+    """Disabled timesteps run regular attention; skipping timesteps use threshold."""
+    q, k, v = qkv
+    cl = ConfigList(
+        [
+            LiteAttentionRunConfig(threshold=-5.0),
+            LiteAttentionRunConfig(threshold=-5.0),
+            LiteAttentionDisabledConfig(),
+            LiteAttentionRunConfig(threshold=-5.0),
+        ]
+    )
+
+    class _M(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.attn = LiteAttention()
+
+    m = _M()
+    _ = LiteAttentionRegistry.from_model(m, mode="const", threshold=-99.0)
+    attn = m.attn
+    attn._registry_config = cl
+
+    for i in range(4):
+        torch.cuda.synchronize()
+        attn(q, k, v)
+        torch.cuda.synchronize()
+
+    assert len(attn._config_output) == 4
+    # Steps 0, 1, 3 should record LiteAttentionRunConfig with threshold -5.0
+    for i in [0, 1, 3]:
+        assert type(attn._config_output[i]) is LiteAttentionRunConfig
+        assert attn._config_output[i].threshold == -5.0
+    # Step 2 should record LiteAttentionDisabledConfig
+    assert type(attn._config_output[2]) is LiteAttentionDisabledConfig
+
+
+def test_disabled_config_output_matches_no_skipping(qkv):
+    """Output with LiteAttentionDisabledConfig should match enable_skipping=False."""
+    q, k, v = qkv
+
+    # Reference: skipping disabled entirely
+    attn_ref = LiteAttention(enable_skipping=False)
+    torch.cuda.synchronize()
+    out_ref = attn_ref(q, k, v)
+    torch.cuda.synchronize()
+
+    # Test: disabled via config on a specific timestep
+    cl = ConfigList([LiteAttentionDisabledConfig()])
+
+    class _M(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.attn = LiteAttention()
+
+    m = _M()
+    _ = LiteAttentionRegistry.from_model(m, mode="const", threshold=-99.0)
+    m.attn._registry_config = cl
+    torch.cuda.synchronize()
+    out_test = m.attn(q, k, v)
+    torch.cuda.synchronize()
+
+    torch.testing.assert_close(out_test, out_ref)
+
+
+def test_config_list_clamping_gpu(qkv):
+    """ConfigList shorter than timestep count repeats last element."""
+    q, k, v = qkv
+    cl = ConfigList([LiteAttentionRunConfig(threshold=-5.0)])
+
+    class _M(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.attn = LiteAttention()
+
+    m = _M()
+    _ = LiteAttentionRegistry.from_model(m, mode="const", threshold=-99.0)
+    attn = m.attn
+    attn._registry_config = cl
+
+    # Run 3 steps with a 1-element ConfigList — should clamp to last
+    for _ in range(3):
+        torch.cuda.synchronize()
+        attn(q, k, v)
+        torch.cuda.synchronize()
+
+    assert len(attn._config_output) == 3
+    for r in attn._config_output:
+        assert isinstance(r, LiteAttentionRunConfig)
+        assert r.threshold == -5.0
+
+
+def test_disabled_then_clamped_config(qkv):
+    """Short ConfigList ending with DisabledConfig clamps to disabled forever."""
+    q, k, v = qkv
+    cl = ConfigList(
+        [
+            LiteAttentionRunConfig(threshold=-5.0),
+            LiteAttentionDisabledConfig(),
+        ]
+    )
+
+    class _M(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.attn = LiteAttention()
+
+    m = _M()
+    _ = LiteAttentionRegistry.from_model(m, mode="const", threshold=-99.0)
+    attn = m.attn
+    attn._registry_config = cl
+
+    # Run 4 steps: step 0 skips, steps 1-3 should all be disabled (clamped)
+    for _ in range(4):
+        torch.cuda.synchronize()
+        attn(q, k, v)
+        torch.cuda.synchronize()
+
+    assert len(attn._config_output) == 4
+    assert type(attn._config_output[0]) is LiteAttentionRunConfig
+    for i in [1, 2, 3]:
+        assert type(attn._config_output[i]) is LiteAttentionDisabledConfig
