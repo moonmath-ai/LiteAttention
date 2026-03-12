@@ -1,10 +1,10 @@
 # Adapted from https://github.com/pytorch/pytorch/blob/v2.7.0/torch/_library/triton.py
 # The PyTorch implementation simply ignores the schema argument, we simply modify it to use schema.
 
-from typing import Optional, Callable, Iterable, Union
+from typing import Callable, Iterable, Optional, Union
 
-from torch.library import custom_op, CustomOpDef
 from torch._library.triton import set_wrap_triton_enabled
+from torch.library import CustomOpDef, custom_op
 
 
 def triton_op(

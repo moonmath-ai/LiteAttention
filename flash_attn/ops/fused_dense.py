@@ -13,7 +13,6 @@ import torch.nn.functional as F
 from torch import Tensor
 from torch.distributed import ProcessGroup
 
-from flash_attn.utils.torch import custom_fwd, custom_bwd
 from flash_attn.ops.activations import gelu_bwd, relu_bwd, sqrelu_bwd, sqrelu_fwd
 from flash_attn.utils.distributed import (
     all_gather_raw,
@@ -22,6 +21,7 @@ from flash_attn.utils.distributed import (
     reduce_scatter,
     reduce_scatter_raw,
 )
+from flash_attn.utils.torch import custom_bwd, custom_fwd
 
 
 class FusedDenseFunc(torch.autograd.Function):

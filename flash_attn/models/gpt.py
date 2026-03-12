@@ -52,7 +52,7 @@ except ImportError:
     FusedDenseSqreluDense = None
 
 try:
-    from flash_attn.ops.triton.layer_norm import layer_norm_fn, RMSNorm
+    from flash_attn.ops.triton.layer_norm import RMSNorm, layer_norm_fn
 except ImportError:
     layer_norm_fn, RMSNorm = None, None
 
@@ -137,7 +137,7 @@ def create_mlp_cls(config, layer_idx=None, process_group=None, device=None, dtyp
     fused_dense_sqrelu_dense = getattr(config, "fused_dense_sqrelu_dense", False)
     if fused_dense_sqrelu_dense:
         assert config.activation_function == "sqrelu", (
-            "fused_dense_sqrelu_dense only " "supports approximate activation_function sqrelu"
+            "fused_dense_sqrelu_dense only supports approximate activation_function sqrelu"
         )
     assert not (fused_dense_sqrelu_dense and fused_mlp)
     if not fused_mlp and not fused_dense_sqrelu_dense:
@@ -469,7 +469,9 @@ class GPTModel(GPTPreTrainedModel):
             ]
         )
         rotary_emb_fraction = getattr(config, "rotary_emb_fraction", 0.0)
-        if rotary_emb_fraction > 0.0:  # Tie all the RotaryEmbedding modules to share the same cos/sin cache
+        if (
+            rotary_emb_fraction > 0.0
+        ):  # Tie all the RotaryEmbedding modules to share the same cos/sin cache
             for layer in self.layers[1:]:
                 layer.mixer.rotary_emb = self.layers[0].mixer.rotary_emb
 
@@ -569,7 +571,7 @@ class GPTModel(GPTPreTrainedModel):
                     eps=self.ln_f.eps,
                     dropout_p=self.drop_f.p if self.training else 0.0,
                     prenorm=False,
-                    is_rms_norm=isinstance(self.ln_f, RMSNorm)
+                    is_rms_norm=isinstance(self.ln_f, RMSNorm),
                 )
         return hidden_states
 
@@ -639,9 +641,9 @@ class GPTLMHeadModel(GPTPreTrainedModel, GenerationMixin):
         https://github.com/NVIDIA/apex/blob/3ff1a10f72ec07067c4e44759442329804ac5162/apex/transformer/testing/standalone_transformer_lm.py#L470
         num_last_tokens: if > 0, only return the logits for the last n tokens
         """
-        assert (
-            input_ids.ndim == 2
-        ), f"Expected `input_ids` to have shape [b, slen], but got shape {input_ids.shape}"
+        assert input_ids.ndim == 2, (
+            f"Expected `input_ids` to have shape [b, slen], but got shape {input_ids.shape}"
+        )
         b, slen = input_ids.shape
         hidden_states = self.transformer(
             input_ids, position_ids=position_ids, inference_params=inference_params
@@ -774,9 +776,7 @@ def shard_state_dict_tp(state_dict, config, world_size, rank):
                             x[beg_n_head:end_n_head],
                             x[n_head + beg_n_head_kv : n_head + end_n_head_kv],
                             x[
-                                n_head
-                                + n_head_kv
-                                + beg_n_head_kv : n_head
+                                n_head + n_head_kv + beg_n_head_kv : n_head
                                 + n_head_kv
                                 + end_n_head_kv
                             ],

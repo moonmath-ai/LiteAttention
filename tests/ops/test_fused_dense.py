@@ -5,6 +5,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 from einops import rearrange
+
 from flash_attn.ops.fused_dense import FusedDense, FusedMLP
 
 
@@ -24,7 +25,9 @@ def test_fused_linear_bias(in_features, out_features, has_bias, return_residual,
         batch_size, seqlen, in_features, device=device, dtype=dtype, requires_grad=True
     )
     x = x_pt.detach().clone().requires_grad_()
-    model_pt = torch.nn.Linear(in_features, out_features, bias=has_bias, device=device, dtype=dtype)
+    model_pt = torch.nn.Linear(
+        in_features, out_features, bias=has_bias, device=device, dtype=dtype
+    )
     model = FusedDense(
         in_features,
         out_features,
@@ -66,9 +69,13 @@ def test_fused_linear_bias(in_features, out_features, has_bias, return_residual,
     out.backward(g)
     assert torch.allclose(x.grad, x_pt.grad, rtol=rtol, atol=atol)
     # The error for d_weight and d_bias is quite a bit higher
-    assert torch.allclose(model.weight.grad, model_pt.weight.grad, rtol=rtol, atol=atol * 10)
+    assert torch.allclose(
+        model.weight.grad, model_pt.weight.grad, rtol=rtol, atol=atol * 10
+    )
     if has_bias:
-        assert torch.allclose(model.bias.grad, model_pt.bias.grad, rtol=rtol, atol=atol * 5)
+        assert torch.allclose(
+            model.bias.grad, model_pt.bias.grad, rtol=rtol, atol=atol * 5
+        )
 
 
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
@@ -164,9 +171,13 @@ def test_fused_mlp(
         model.fc1.weight.grad, model_pt_fc1.weight.grad, rtol=rtol, atol=atol * 10
     )
     if has_bias1:
-        assert torch.allclose(model.fc1.bias.grad, model_pt_fc1.bias.grad, rtol=rtol, atol=atol * 5)
+        assert torch.allclose(
+            model.fc1.bias.grad, model_pt_fc1.bias.grad, rtol=rtol, atol=atol * 5
+        )
     assert torch.allclose(
         model.fc2.weight.grad, model_pt_fc2.weight.grad, rtol=rtol, atol=atol * 10
     )
     if has_bias2:
-        assert torch.allclose(model.fc2.bias.grad, model_pt_fc2.bias.grad, rtol=rtol, atol=atol * 5)
+        assert torch.allclose(
+            model.fc2.bias.grad, model_pt_fc2.bias.grad, rtol=rtol, atol=atol * 5
+        )

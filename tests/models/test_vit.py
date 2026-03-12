@@ -2,8 +2,9 @@ import re
 
 import pytest
 import torch
-from flash_attn.models.vit import vit_base_patch16_224 as flash_vit_base_patch16_224
 from timm.models.vision_transformer import vit_base_patch16_224
+
+from flash_attn.models.vit import vit_base_patch16_224 as flash_vit_base_patch16_224
 
 
 @pytest.mark.parametrize("fused_mlp", [False, True])
@@ -20,7 +21,9 @@ def test_vit(optimized, fused_mlp):
 
     kwargs = {}
     if optimized:
-        kwargs = dict(use_flash_attn=True, fused_bias_fc=True, fused_dropout_add_ln=True)
+        kwargs = dict(
+            use_flash_attn=True, fused_bias_fc=True, fused_dropout_add_ln=True
+        )
     kwargs["fused_mlp"] = fused_mlp
     model = flash_vit_base_patch16_224(**kwargs).to(device=device, dtype=dtype)
 
@@ -45,4 +48,6 @@ def test_vit(optimized, fused_mlp):
     print(f"timm fp16 max diff: {(out_timm - out_ref).abs().max().item()}")
     print(f"timm fp16 mean diff: {(out_timm - out_ref).abs().mean().item()}")
     rtol = 2 if not fused_mlp else 8
-    assert (out - out_ref).abs().max().item() < rtol * (out_timm - out_ref).abs().max().item()
+    assert (out - out_ref).abs().max().item() < rtol * (
+        out_timm - out_ref
+    ).abs().max().item()

@@ -1,5 +1,5 @@
 # Copyright (c) 2023, Tri Dao.
-""" Useful functions for writing test code. """
+"""Useful functions for writing test code."""
 
 import torch
 import torch.utils.benchmark as benchmark

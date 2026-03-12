@@ -7,11 +7,10 @@ from einops import rearrange, repeat
 
 from flash_attn.ops.triton.layer_norm import (
     layer_norm_fn,
+    layer_norm_linear_fn,
     layer_norm_ref,
     rms_norm_ref,
-    layer_norm_linear_fn,
 )
-
 
 is_sm8x = torch.cuda.get_device_capability("cuda")[0] >= 8
 
@@ -33,13 +32,22 @@ is_sm8x = torch.cuda.get_device_capability("cuda")[0] >= 8
 @pytest.mark.parametrize("has_residual", [True, False])
 # @pytest.mark.parametrize("has_residual", [True])
 @pytest.mark.parametrize(
-    "weight_dtype", [torch.float32, torch.float16] + ([torch.bfloat16] if is_sm8x else [])
+    "weight_dtype",
+    [torch.float32, torch.float16] + ([torch.bfloat16] if is_sm8x else []),
 )
 # @pytest.mark.parametrize("weight_dtype", [torch.float32])
 @pytest.mark.parametrize(
     "input_dtype,residual_dtype",
-    [(torch.float16, torch.float16), (torch.float16, torch.float32), (torch.float32, torch.float32)]
-    + ([(torch.bfloat16, torch.bfloat16), (torch.bfloat16, torch.float32)] if is_sm8x else []),
+    [
+        (torch.float16, torch.float16),
+        (torch.float16, torch.float32),
+        (torch.float32, torch.float32),
+    ]
+    + (
+        [(torch.bfloat16, torch.bfloat16), (torch.bfloat16, torch.float32)]
+        if is_sm8x
+        else []
+    ),
 )
 # @pytest.mark.parametrize("input_dtype,residual_dtype", [(torch.float16, torch.float16)])
 @pytest.mark.parametrize("hidden_size", [192, 2048, 2560, 3000, 4096])
@@ -74,18 +82,27 @@ def test_layer_norm(
     layer_norm_ref_fn = layer_norm_ref if not is_rms_norm else rms_norm_ref
     allclose = (
         # Sometimes x0_pt.grad is NaN
-        lambda x, x_pt, x_ref, atol=atol: (x - x_ref).abs().max()
-        <= 2 * (x_pt[~x_pt.isnan()] - x_ref[~x_pt.isnan()]).abs().max() + atol
-        or (
-            # Sometimes x_pt and x_ref are the same (e.g. bfloat16) so we want to perturb is a bit
-            # by multiply and divide by 0.3
-            (x_pt[~x_pt.isnan()] - x_ref[~x_pt.isnan()]).abs().max() == 0.0
-            and (x - x_ref).abs().max()
-            <= 2 * (x_pt[~x_pt.isnan()] * 0.3 / 0.3 - x_ref[~x_pt.isnan()]).abs().max() + atol
+        lambda x, x_pt, x_ref, atol=atol: (
+            (x - x_ref).abs().max()
+            <= 2 * (x_pt[~x_pt.isnan()] - x_ref[~x_pt.isnan()]).abs().max() + atol
+            or (
+                # Sometimes x_pt and x_ref are the same (e.g. bfloat16) so we want to perturb is a bit
+                # by multiply and divide by 0.3
+                (x_pt[~x_pt.isnan()] - x_ref[~x_pt.isnan()]).abs().max() == 0.0
+                and (x - x_ref).abs().max()
+                <= 2
+                * (x_pt[~x_pt.isnan()] * 0.3 / 0.3 - x_ref[~x_pt.isnan()]).abs().max()
+                + atol
+            )
         )
     )
     x0 = torch.randn(
-        batch_size, seqlen, hidden_size, device=device, dtype=input_dtype, requires_grad=True
+        batch_size,
+        seqlen,
+        hidden_size,
+        device=device,
+        dtype=input_dtype,
+        requires_grad=True,
     )
     x0_pt = x0.detach().clone().requires_grad_()
     x0_ref = x0.detach().clone().requires_grad_()
@@ -95,9 +112,13 @@ def test_layer_norm(
         res_ref = res.detach().clone().requires_grad_()
     else:
         res, res_pt, res_ref = None, None, None
-    weight = torch.randn(hidden_size, device=device, dtype=weight_dtype, requires_grad=True)
+    weight = torch.randn(
+        hidden_size, device=device, dtype=weight_dtype, requires_grad=True
+    )
     if not is_rms_norm:
-        bias = torch.randn(hidden_size, device=device, dtype=weight_dtype, requires_grad=True)
+        bias = torch.randn(
+            hidden_size, device=device, dtype=weight_dtype, requires_grad=True
+        )
     else:
         bias = None
     weight_pt = weight.detach().clone().requires_grad_()
@@ -122,8 +143,12 @@ def test_layer_norm(
             )
         else:
             bias1 = None
-        bias1_pt = bias1.detach().clone().requires_grad_() if bias1 is not None else None
-        bias1_ref = bias1.detach().clone().requires_grad_() if bias1 is not None else None
+        bias1_pt = (
+            bias1.detach().clone().requires_grad_() if bias1 is not None else None
+        )
+        bias1_ref = (
+            bias1.detach().clone().requires_grad_() if bias1 is not None else None
+        )
     else:
         weight1, weight1_pt, weight1_ref = None, None, None
         bias1, bias1_pt, bias1_ref = None, None, None
@@ -255,13 +280,23 @@ def test_layer_norm(
 @pytest.mark.parametrize(
     "input_dtype,residual_dtype",
     [(torch.float16, torch.float16), (torch.float16, torch.float32)]
-    + ([(torch.bfloat16, torch.bfloat16), (torch.bfloat16, torch.float32)] if is_sm8x else []),
+    + (
+        [(torch.bfloat16, torch.bfloat16), (torch.bfloat16, torch.float32)]
+        if is_sm8x
+        else []
+    ),
 )
 # @pytest.mark.parametrize("input_dtype,residual_dtype", [(torch.bfloat16, torch.float32)])
 @pytest.mark.parametrize("hidden_size", [192, 2048, 2560, 3000])
 # @pytest.mark.parametrize("hidden_size", [256])
 def test_layer_norm_linear(
-    hidden_size, input_dtype, residual_dtype, weight_dtype, has_residual, is_rms_norm, prenorm
+    hidden_size,
+    input_dtype,
+    residual_dtype,
+    weight_dtype,
+    has_residual,
+    is_rms_norm,
+    prenorm,
 ):
     device = "cuda"
     if any(x == torch.bfloat16 for x in [input_dtype, residual_dtype, weight_dtype]):
@@ -277,12 +312,16 @@ def test_layer_norm_linear(
     # batch_size = 1
     # seqlen = 1
     layer_norm_ref_fn = layer_norm_ref if not is_rms_norm else rms_norm_ref
-    allclose = (
-        lambda x, x_pt, x_ref, atol=atol: (x - x_ref).abs().max()
-        <= 2 * (x_pt - x_ref).abs().max() + atol
+    allclose = lambda x, x_pt, x_ref, atol=atol: (
+        (x - x_ref).abs().max() <= 2 * (x_pt - x_ref).abs().max() + atol
     )
     x0 = torch.randn(
-        batch_size, seqlen, hidden_size, device=device, dtype=input_dtype, requires_grad=True
+        batch_size,
+        seqlen,
+        hidden_size,
+        device=device,
+        dtype=input_dtype,
+        requires_grad=True,
     )
     x0_pt = x0.detach().clone().requires_grad_()
     x0_ref = x0.detach().clone().requires_grad_()
@@ -292,17 +331,29 @@ def test_layer_norm_linear(
         res_ref = res.detach().clone().requires_grad_()
     else:
         res, res_pt, res_ref = None, None, None
-    norm_weight = torch.randn(hidden_size, device=device, dtype=weight_dtype, requires_grad=True)
+    norm_weight = torch.randn(
+        hidden_size, device=device, dtype=weight_dtype, requires_grad=True
+    )
     if not is_rms_norm:
-        norm_bias = torch.randn(hidden_size, device=device, dtype=weight_dtype, requires_grad=True)
+        norm_bias = torch.randn(
+            hidden_size, device=device, dtype=weight_dtype, requires_grad=True
+        )
     else:
         norm_bias = None
     norm_weight_pt = norm_weight.detach().clone().requires_grad_()
     norm_weight_ref = norm_weight.detach().clone().requires_grad_()
-    norm_bias_pt = norm_bias.detach().clone().requires_grad_() if norm_bias is not None else None
-    norm_bias_ref = norm_bias.detach().clone().requires_grad_() if norm_bias is not None else None
+    norm_bias_pt = (
+        norm_bias.detach().clone().requires_grad_() if norm_bias is not None else None
+    )
+    norm_bias_ref = (
+        norm_bias.detach().clone().requires_grad_() if norm_bias is not None else None
+    )
     linear_weight = torch.empty(
-        2 * hidden_size, hidden_size, device=device, dtype=weight_dtype, requires_grad=True
+        2 * hidden_size,
+        hidden_size,
+        device=device,
+        dtype=weight_dtype,
+        requires_grad=True,
     )
     torch.nn.init.xavier_uniform_(linear_weight)
     if not is_rms_norm:
@@ -314,10 +365,14 @@ def test_layer_norm_linear(
     linear_weight_pt = linear_weight.detach().clone().requires_grad_()
     linear_weight_ref = linear_weight.detach().clone().requires_grad_()
     linear_bias_pt = (
-        linear_bias.detach().clone().requires_grad_() if linear_bias is not None else None
+        linear_bias.detach().clone().requires_grad_()
+        if linear_bias is not None
+        else None
     )
     linear_bias_ref = (
-        linear_bias.detach().clone().requires_grad_() if linear_bias is not None else None
+        linear_bias.detach().clone().requires_grad_()
+        if linear_bias is not None
+        else None
     )
 
     residual_in_fp32 = (not has_residual) and residual_dtype == torch.float32
@@ -348,7 +403,9 @@ def test_layer_norm_linear(
         prenorm=prenorm,
         upcast=True,
     )
-    out_ref = F.linear(out_ref.to(linear_weight_ref.dtype), linear_weight_ref, linear_bias_ref)
+    out_ref = F.linear(
+        out_ref.to(linear_weight_ref.dtype), linear_weight_ref, linear_bias_ref
+    )
     if prenorm:
         residual = rest[0]
         residual_pt = rest_pt[0]
