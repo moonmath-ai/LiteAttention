@@ -5,7 +5,7 @@ All tests are CPU-only — no GPU required.
 
 import pytest
 import torch
-from lite_attention.calibrated_module import LiteAttentionRegistry
+from lite_attention.lite_attention import LiteAttentionRegistry
 
 
 def decoded_compute_tiles(row: torch.Tensor, phase_true: bool) -> set[int]:

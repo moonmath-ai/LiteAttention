@@ -1039,7 +1039,10 @@ class LiteAttention(nn.Module, ConfigurableModule):
             # with a meaningful result; otherwise use 0.0 (no-op).
             # TODO: if write_next=False, a C/CUDA optimisation could skip the
             # threshold comparison and write_list population entirely.
-            threshold = cfg.threshold if cfg.threshold is not None else 0.0
+            if cfg.qk_threshold is not None and self._capture_enabled:
+                threshold = cfg.qk_threshold
+            else:
+                threshold = 0.0
         elif isinstance(cfg, LiteAttentionCalibConfig):
             temp_list = read_list.clone()
 
