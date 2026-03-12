@@ -104,9 +104,7 @@ from .calibrated_module import (
     ModuleRegistry,
 )
 
-# Import the C++ extension to register operators with PyTorch
-import lite_attention._C as _C  # noqa: F401
-_lite_attention_ops = _C
+_lite_attention_ops = torch.ops.lite_attention
 
 log = structlog.get_logger()
 
@@ -463,7 +461,6 @@ class LiteAttention(nn.Module, ConfigurableModule):
         #   [2]: Head dimension
         #   [3]: Query tiles dimension
         #   [4]:  ktiles + 2 (the +1 stores the list length at index 0)
-        # Ensure at least size 3 to hold [length, start, end] for initial full range
         skip_list = torch.empty(
             2, batch, heads, qtiles, ktiles + 2, dtype=torch.int16, device=device
         )

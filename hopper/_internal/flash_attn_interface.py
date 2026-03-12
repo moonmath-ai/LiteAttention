@@ -7,11 +7,13 @@ import torch.nn as nn
 
 # isort: off
 # We need to import the CUDA kernels after importing torch
-mport torch.utils.cpp_extension
+import torch.utils.cpp_extension
+
 is_rocm = torch.version.hip is not None
 
 try:
-    import lite_attention._C as _C # Registers operators with PyTorch
+    import lite_attention._C as _C  # Registers operators with PyTorch
+
     if is_rocm:
         flash_attn_3_cuda = _C
     else:
@@ -19,6 +21,7 @@ try:
 except ImportError as e:
     # Fallback: check if _C is already available in lite_attention module (e.g. injected by test script)
     import sys
+
     _C = sys.modules["lite_attention"]._C
     if is_rocm:
         flash_attn_3_cuda = _C
@@ -29,7 +32,6 @@ flash_attn_3_cuda = torch.ops.lite_attention
 
 # isort: on
 
-# isort: on
 
 def maybe_contiguous(x):
     return x.contiguous() if x is not None and x.stride(-1) != 1 else x

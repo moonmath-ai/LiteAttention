@@ -337,59 +337,6 @@ def get_cuda_bare_metal_version(cuda_dir):
     return raw_output, bare_metal_version
 
 
-def add_cuda_gencodes(cc_flag, archs, bare_metal_version):
-    """
-    Adds -gencode flags based on nvcc capabilities:
-      - sm_80/90 (regular)
-      - sm_100/120 on CUDA >= 12.8
-      - Use 100f on CUDA >= 12.9 (Blackwell family-specific)
-      - Map requested 110 -> 101 if CUDA < 13.0 (Thor rename)
-      - Embed PTX for newest arch for forward compatibility
-    """
-    # Always-regular 80
-    if "80" in archs:
-        cc_flag += ["-gencode", "arch=compute_80,code=sm_80"]
-
-    # Hopper 9.0 needs >= 11.8
-    if bare_metal_version >= Version("11.8") and "90" in archs:
-        cc_flag += ["-gencode", "arch=compute_90,code=sm_90"]
-
-    # Blackwell 10.x requires >= 12.8
-    if bare_metal_version >= Version("12.8"):
-        if "100" in archs:
-            # CUDA 12.9 introduced "family-specific" for Blackwell (100f)
-            if bare_metal_version >= Version("12.9"):
-                cc_flag += ["-gencode", "arch=compute_100f,code=sm_100"]
-            else:
-                cc_flag += ["-gencode", "arch=compute_100,code=sm_100"]
-
-        if "120" in archs:
-            # sm_120 is supported in CUDA 12.8/12.9+ toolkits
-            if bare_metal_version >= Version("12.9"):
-                cc_flag += ["-gencode", "arch=compute_120f,code=sm_120"]
-            else:
-                cc_flag += ["-gencode", "arch=compute_120,code=sm_120"]
-
-
-        # Thor rename: 12.9 uses sm_101; 13.0+ uses sm_110
-        if "110" in archs:
-            if bare_metal_version >= Version("13.0"):
-                cc_flag += ["-gencode", "arch=compute_110f,code=sm_110"]
-            else:
-                # Provide Thor support for CUDA 12.9 via sm_101
-                if bare_metal_version >= Version("12.8"):
-                    cc_flag += ["-gencode", "arch=compute_101,code=sm_101"]
-                # else: no Thor support in older toolkits
-
-    # PTX for newest requested arch (forward-compat)
-    numeric = [a for a in archs if a.isdigit()]
-    if numeric:
-        newest = max(numeric, key=int)
-        cc_flag += ["-gencode", f"arch=compute_{newest},code=compute_{newest}"]
-
-    return cc_flag
-
-
 def check_if_cuda_home_none(global_option: str) -> None:
     if CUDA_HOME is not None:
         return
@@ -402,36 +349,53 @@ def check_if_cuda_home_none(global_option: str) -> None:
     )
 
 
-def check_if_rocm_home_none(global_option: str) -> None:
-    if ROCM_HOME is not None:
-        return
-    # warn instead of error because user could be downloading prebuilt wheels, so hipcc won't be necessary
-    # in that case.
-    warnings.warn(
-        f"{global_option} was requested, but hipcc was not found."
+# Taken from https://github.com/pytorch/pytorch/blob/master/tools/setup_helpers/env.py
+def check_env_flag(name: str, default: str = "") -> bool:
+    return os.getenv(name, default).upper() in ["ON", "1", "YES", "TRUE", "Y"]
+
+
+# Copied from https://github.com/triton-lang/triton/blob/main/python/setup.py
+def is_offline_build() -> bool:
+    """
+    Downstream projects and distributions which bootstrap their own dependencies from scratch
+    and run builds in offline sandboxes
+    may set `LITE_ATTENTION_OFFLINE_BUILD` in the build environment to prevent any attempts at downloading
+    pinned dependencies from the internet or at using dependencies vendored in-tree.
+
+    Dependencies must be defined using respective search paths (cf. `syspath_var_name` in `Package`).
+    Missing dependencies lead to an early abortion.
+    Dependencies' compatibility is not verified.
+
+    Note that this flag isn't tested by the CI and does not provide any guarantees.
+    """
+    return check_env_flag("LITE_ATTENTION_OFFLINE_BUILD", "")
+
+
+# Copied from https://github.com/triton-lang/triton/blob/main/python/setup.py
+def get_lite_attention_cache_path():
+    user_home = os.getenv("LITE_ATTENTION_HOME")
+    if not user_home:
+        user_home = (
+            os.getenv("HOME")
+            or os.getenv("USERPROFILE")
+            or os.getenv("HOMEPATH")
+            or None
+        )
+    if not user_home:
+        raise RuntimeError("Could not find user home directory")
+    return os.path.join(user_home, ".lite_attention")
+
+
+def open_url(url):
+    user_agent = (
+        "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/119.0"
     )
-
-
-def detect_hipify_v2():
-    try:
-        from torch.utils.hipify import __version__
-        from packaging.version import Version
-        if Version(__version__) >= Version("2.0.0"):
-            return True
-    except Exception as e:
-        print("failed to detect pytorch hipify version, defaulting to version 1.0.0 behavior")
-        print(e)
-    return False
-
-
-def append_nvcc_threads(nvcc_extra_args):
-    nvcc_threads = os.getenv("NVCC_THREADS") or "4"
-    return nvcc_extra_args + ["--threads", nvcc_threads]
-
-
-def rename_cpp_to_cu(cpp_files):
-    for entry in cpp_files:
-        shutil.copy(entry, os.path.splitext(entry)[0] + ".cu")
+    headers = {
+        "User-Agent": user_agent,
+    }
+    request = urllib.request.Request(url, None, headers)
+    # Set timeout to 300 seconds to prevent the request from hanging forever.
+    return urllib.request.urlopen(request, timeout=300)
 
 
 def download_and_copy(name, src_func, dst_path, version, url_func):

@@ -77,4 +77,4 @@ jobs:
       - name: Run pytest tests
         run: |
           source .venv/bin/activate
-          pytest hopper/tests -v --tb=short
+          pytest hopper/tests

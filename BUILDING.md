@@ -54,14 +54,9 @@ LITE_ATTENTION_DISABLE_HDIM192=TRUE \
 LITE_ATTENTION_DISABLE_HDIM256=TRUE \
 ```
 
-`NVCC_THREADS` controls nvcc's internal thread parallelism (optional, effective if targeting multiple GPU architectures; default is 2 in `setup.py`):
+To control build parallelism for nvcc/ninja, prepend:
 ```bash
-NVCC_THREADS=4 \
-```
-
-`MAX_JOBS` should be auto-detected by ninja (defaults to nproc+2). Set it to `$(nproc)` if not:
-```bash
-MAX_JOBS=$(nproc) \
+MAX_JOBS=$(nproc) NVCC_THREADS=4 \
 ```
 
 To display build output, append `-v`.
