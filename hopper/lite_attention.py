@@ -136,14 +136,14 @@ class LiteAttentionReplayConfig(CalibratedRunConfig):
 
     Two sub-modes:
 
-    1. **Skip-list replay** (``threshold=None``, default): the stored write-lists
-       are shifted by one timestep and fed back as read-lists, bypassing
-       threshold computation entirely.  Requires the capture to include
-       ``skip_lists`` (i.e. captured with ``qk_block_map=True`` or
+    1. **Skip-list replay** (``qk_threshold=None``, default): the stored
+       write-lists are shifted by one timestep and fed back as read-lists,
+       bypassing threshold computation entirely.  Requires the capture to
+       include ``skip_lists`` (i.e. captured with ``qk_block_map=True`` or
        ``attn_map=True``).
 
-    2. **QK-map replay** (``threshold`` is set): skip lists are *computed* at
-       load time from the captured ``qk_block_map`` and the given threshold.
+    2. **QK-map replay** (``qk_threshold`` is set): skip lists are *computed*
+       at load time from the captured ``qk_block_map`` and the given threshold.
        This lets you replay with a different threshold than the original
        capture without re-running the model.  Requires the capture to include
        ``qk_block_map``.
@@ -155,15 +155,15 @@ class LiteAttentionReplayConfig(CalibratedRunConfig):
             NOTE: the CUDA kernel always writes regardless; this flag is a
             placeholder for a future C/CUDA optimisation that would skip the
             write entirely.
-        threshold: If set, compute skip lists from ``qk_block_map`` using this
-            threshold instead of using the captured ``skip_lists`` directly.
-            Values are in log2 scale (must be ≤ 0 in non-debug mode), same
-            semantics as ``LiteAttentionRunConfig.threshold``.
+        qk_threshold: If set, compute skip lists from ``qk_block_map`` using
+            this threshold instead of using the captured ``skip_lists``
+            directly.  Values are in log2 scale (must be ≤ 0 in non-debug
+            mode), same semantics as ``LiteAttentionRunConfig.threshold``.
     """
 
     skip_list_file: str = ""
     write_next: bool = True
-    threshold: float | None = None
+    qk_threshold: float | None = None
 
     def to_dict(self) -> dict[str, typing.Any]:
         """Serialize to dict, omitting None values (not TOML-serializable)."""
@@ -1950,6 +1950,7 @@ class LiteAttentionRegistry(ModuleRegistry):
         calib_config: dict | None = None,
         force: bool = False,
         disabled_steps: int = 0,
+        qk_threshold: float | None = None,
     ) -> Self:
         """
         Create a registry from a model and configure all its LiteAttention modules.
@@ -1958,9 +1959,7 @@ class LiteAttentionRegistry(ModuleRegistry):
             model: `nn.Module` that contains LiteAttention modules.
             mode: Configuration mode - 'const', 'load', 'calib', 'replay',
                 or 'disable'.
-            threshold: Threshold value for mode='const', or for mode='replay'
-                to compute skip lists from qk_block_map (None = use captured
-                skip lists directly).
+            threshold: Threshold value for mode='const'.
             filename: Path to config file for mode='load' (input),
                 mode='calib' (output via save_if_calib), or mode='replay'
                 (.pt capture file or .toml config). Cast to Path internally.
@@ -1970,6 +1969,9 @@ class LiteAttentionRegistry(ModuleRegistry):
             force: If True, override instance-level configs on modules.
                 If False (default), warn when a module has an instance config
                 that will take precedence over the registry config.
+            qk_threshold: For mode='replay' only. If set, compute skip lists
+                from qk_block_map using this threshold instead of using
+                captured skip lists directly.
 
         """
         if filename is not None:
@@ -2036,7 +2038,7 @@ class LiteAttentionRegistry(ModuleRegistry):
                 # .pt capture file — replay all modules from it
                 registry.set_bulk_config(
                     LiteAttentionReplayConfig(
-                        skip_list_file=str(filename), threshold=threshold
+                        skip_list_file=str(filename), qk_threshold=qk_threshold
                     )
                 )
         elif mode == "calib":
@@ -2081,9 +2083,9 @@ class LiteAttentionRegistry(ModuleRegistry):
         2. Validates that all heads were captured (replay requires full head coverage).
         3. Produces read-lists from the capture data:
 
-           - **threshold=None** (skip-list replay): shifts captured write-lists
-             by one timestep.
-           - **threshold is set** (QK-map replay): computes skip lists from
+           - **qk_threshold=None** (skip-list replay): shifts captured
+             write-lists by one timestep.
+           - **qk_threshold is set** (QK-map replay): computes skip lists from
              ``qk_block_map`` and the given threshold.
 
            In both cases ``read_list[0]`` = "compute all" initial buffer.
@@ -2159,7 +2161,7 @@ class LiteAttentionRegistry(ModuleRegistry):
                     else:
                         break
 
-            use_qk_map = replay_cfg.threshold is not None
+            use_qk_map = replay_cfg.qk_threshold is not None
 
             if use_qk_map:
                 # --- QK-map replay: compute skip lists from qk_block_map ---
@@ -2172,7 +2174,7 @@ class LiteAttentionRegistry(ModuleRegistry):
                     "qk_block_map"
                 ]  # [T, B_sel, H_sel, qtiles, ktiles]
                 replay_list = self._qk_map_to_replay_skip_lists(
-                    qk_block_map, replay_cfg.threshold, n_disabled
+                    qk_block_map, replay_cfg.qk_threshold, n_disabled
                 )
             else:
                 # --- Skip-list replay: use captured write-lists directly ---

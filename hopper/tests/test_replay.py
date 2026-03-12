@@ -302,7 +302,7 @@ def test_qk_map_replay_matches_capture(qkv, tmp_path):
     # Replay from qk_block_map with same threshold
     model2 = SimpleModel()
     registry2 = LiteAttentionRegistry.from_model(
-        model2, mode="replay", filename=capture_path, threshold=threshold
+        model2, mode="replay", filename=capture_path, qk_threshold=threshold
     )
     outputs_replay = run_steps(registry2, q, k, v, n_steps)
 
@@ -330,14 +330,14 @@ def test_qk_map_replay_different_threshold(qkv, tmp_path):
     # Replay with the same mild threshold (should compute most tiles)
     model_mild = SimpleModel()
     registry_mild = LiteAttentionRegistry.from_model(
-        model_mild, mode="replay", filename=capture_path, threshold=-12.0
+        model_mild, mode="replay", filename=capture_path, qk_threshold=-12.0
     )
     outputs_mild = run_steps(registry_mild, q, k, v, n_steps)
 
     # Replay with a more aggressive threshold (should skip more)
     model_aggr = SimpleModel()
     registry_aggr = LiteAttentionRegistry.from_model(
-        model_aggr, mode="replay", filename=capture_path, threshold=-4.0
+        model_aggr, mode="replay", filename=capture_path, qk_threshold=-4.0
     )
     outputs_aggr = run_steps(registry_aggr, q, k, v, n_steps)
 
@@ -363,7 +363,7 @@ def test_qk_map_replay_no_qk_block_map_raises(qkv, tmp_path):
     model2 = SimpleModel()
     with pytest.raises(ValueError, match="no qk_block_map"):
         LiteAttentionRegistry.from_model(
-            model2, mode="replay", filename=capture_path, threshold=-8.0
+            model2, mode="replay", filename=capture_path, qk_threshold=-8.0
         )
 
 
@@ -391,7 +391,7 @@ def test_qk_map_replay_with_disabled_steps(qkv, tmp_path):
         model2,
         mode="replay",
         filename=capture_path,
-        threshold=threshold,
+        qk_threshold=threshold,
         disabled_steps=disabled_steps,
     )
     outputs_replay = run_steps(registry2, q, k, v, n_steps)
