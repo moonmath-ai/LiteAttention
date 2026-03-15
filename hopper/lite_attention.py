@@ -1493,6 +1493,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
                         stride=(kBlockM, kBlockN),
                     )
                     head_qk_block_maps.append(qk_down[0, 0].half().cpu())
+                    del qk_normalized, qk_padded, qk_down
 
                 attn = (
                     torch.softmax(qk, dim=-1)
@@ -1513,6 +1514,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
                         ),
                     )
                     head_attn_maps.append(attn_down[0, 0].half().cpu())
+                    del attn_down
 
                 # Stats accumulation at full resolution
                 if capture_stats:
