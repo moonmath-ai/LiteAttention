@@ -1526,7 +1526,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
         Always: capture pct_per_head for all heads/timesteps/batches.
         Optional: skip_lists — write_list snapshots (cheap, no QK recomputation).
         Optional: capture detailed attn maps + skip_lists for selected subset.
-        Optional: qk_block_map — row-max-normalized pre-softmax QK scores maxpooled to tile granularity (≤ 0, comparable to threshold).
+        Optional: qk_block_map — row-max-normalized pre-softmax QK scores in log2 scale, maxpooled to tile granularity (≤ 0, directly comparable to threshold).
         Optional: running stats (mean/std/max/min) at full resolution across all passes.
         """
         self._capture_enabled = True
@@ -1693,13 +1693,14 @@ class LiteAttention(nn.Module, ConfigurableModule):
                 q_h = query[bi, :, hi, :].unsqueeze(0).unsqueeze(0)
                 k_h = key[bi, :, hi, :].unsqueeze(0).unsqueeze(0)
                 qk = (q_h.float() @ k_h.float().transpose(-2, -1)) * scale
-                # Block-level max of row-max-normalized pre-softmax QK scores.
-                # Subtracting the row max first so values represent how far
-                # each tile's best score is below the row peak — directly
-                # comparable to the kernel's skip threshold.
+                # Block-level max of row-max-normalized pre-softmax QK scores,
+                # scaled by log2(e) to match the kernel's log2-space threshold
+                # comparison: (scores_max - prev) * softmax_scale_log2 > thr
+                # where softmax_scale_log2 = scale * log2(e).
+                # Since qk already includes `scale`, we multiply by log2(e).
                 if capture_qk_block_map:
                     row_max = qk.max(dim=-1, keepdim=True).values
-                    qk_normalized = qk - row_max
+                    qk_normalized = (qk - row_max) * math.log2(math.e)
                     pad_q = (kBlockM - qk_normalized.shape[-2] % kBlockM) % kBlockM
                     pad_k = (kBlockN - qk_normalized.shape[-1] % kBlockN) % kBlockN
                     qk_padded = F.pad(
@@ -1791,7 +1792,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
         if attn_maps:
             captured_map_entry["attn_map"] = torch.stack(attn_maps)
         if qk_block_maps:
-            captured_map_entry["qk_block_map"] = torch.stack(qk_block_maps)
+            captured_map_entry["qk_block_map_log2"] = torch.stack(qk_block_maps)
         if capture_skip_lists:
             captured_map_entry["timestep"] = current_timestep
             captured_map_entry["skip_list"] = captured_skip
@@ -2406,15 +2407,17 @@ class LiteAttentionRegistry(ModuleRegistry):
             use_qk_map = replay_cfg.qk_threshold is not None
 
             if use_qk_map:
-                # --- QK-map replay: compute skip lists from qk_block_map ---
-                if "qk_block_map" not in mod_data:
+                # --- QK-map replay: compute skip lists from qk_block_map_log2 ---
+                if "qk_block_map_log2" in mod_data:
+                    qk_block_map = mod_data["qk_block_map_log2"]
+                elif "qk_block_map" in mod_data:
+                    # Legacy capture without log2 scaling — convert on the fly
+                    qk_block_map = mod_data["qk_block_map"] * math.log2(math.e)
+                else:
                     raise ValueError(
-                        f"Module '{name}': capture file has no qk_block_map. "
+                        f"Module '{name}': capture file has no qk_block_map_log2. "
                         "Re-capture with qk_block_map=True."
                     )
-                qk_block_map = mod_data[
-                    "qk_block_map"
-                ]  # [T, B_sel, H_sel, qtiles, ktiles]
                 replay_list = self._qk_map_to_replay_skip_lists(
                     qk_block_map, replay_cfg.qk_threshold, n_disabled
                 )
@@ -2454,16 +2457,17 @@ class LiteAttentionRegistry(ModuleRegistry):
         threshold: float,
         n_disabled: int = 0,
     ) -> list[torch.Tensor]:
-        """Convert ``qk_block_map`` + threshold to replay skip lists.
+        """Convert ``qk_block_map_log2`` + threshold to replay skip lists.
 
         For each active timestep, tiles whose block-level QK score (row-max-
-        normalized, ≤ 0) is **≥ threshold** are marked as "compute".
-        Contiguous ranges of compute-tiles are encoded in the skip list format
-        expected by the CUDA kernel (reversed range pairs, phase-aware).
+        normalized, in log2 scale, ≤ 0) is **≥ threshold** are marked as
+        "compute". Contiguous ranges of compute-tiles are encoded in the skip
+        list format expected by the CUDA kernel (reversed range pairs,
+        phase-aware).
 
         Args:
             qk_block_map: Shape ``[T, B, H, qtiles, ktiles]``, float16/32,
-                values ≤ 0.
+                values ≤ 0, in log2 scale (directly comparable to threshold).
             threshold: Tiles with ``qk_block_map >= threshold`` are computed.
             n_disabled: Number of leading disabled timesteps in the capture
                 (their entries are skipped).
@@ -2627,7 +2631,7 @@ class LiteAttentionRegistry(ModuleRegistry):
             heads: Head indices for map/stats capture, or None for all.
             batches: Batch indices for map/stats capture, or None for all.
             attn_map_res: Resolution for downsampled attention maps.
-            qk_block_map: Enable row-max-normalized block-level QK scores (≤ 0, comparable to threshold).
+            qk_block_map: Enable row-max-normalized block-level QK scores in log2 scale (≤ 0, directly comparable to threshold).
             stats: Enable running stats accumulation at full resolution.
         """
         self._capture_path = Path(save_path)
@@ -2720,7 +2724,7 @@ class LiteAttentionRegistry(ModuleRegistry):
 
                 has_maps = (
                     "attn_map" in module._captured_maps[0]
-                    or "qk_block_map" in module._captured_maps[0]
+                    or "qk_block_map_log2" in module._captured_maps[0]
                 )
                 if has_maps:
                     if module._capture_map_heads is not None:
@@ -2743,9 +2747,9 @@ class LiteAttentionRegistry(ModuleRegistry):
                     )
                     mod_data["attn_map_res"] = module._capture_attn_map_res
 
-                if "qk_block_map" in module._captured_maps[0]:
-                    mod_data["qk_block_map"] = torch.stack(
-                        [d["qk_block_map"] for d in module._captured_maps]
+                if "qk_block_map_log2" in module._captured_maps[0]:
+                    mod_data["qk_block_map_log2"] = torch.stack(
+                        [d["qk_block_map_log2"] for d in module._captured_maps]
                     )
 
             # --- Running stats (independent of detailed maps) ---
