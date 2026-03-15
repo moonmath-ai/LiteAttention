@@ -401,3 +401,87 @@ def test_qk_map_replay_with_disabled_steps(qkv, tmp_path):
             zip(outputs_capture[step], outputs_replay[step])
         ):
             torch.testing.assert_close(cap_out, rep_out, msg=f"step {step}, module {i}")
+
+
+# ===========================================================================
+# Verify read_list capture: skip-list replay gives bit-exact output
+# ===========================================================================
+
+
+def test_skip_list_replay_bit_exact(qkv, tmp_path):
+    """Skip-list replay must produce bit-exact output as the original run."""
+    q, k, v = qkv
+    n_steps = 8
+    threshold = -5.0
+
+    # Record
+    model = SimpleModel()
+    registry = LiteAttentionRegistry.from_model(
+        model, mode="const", threshold=threshold
+    )
+    capture_path = tmp_path / "capture.pt"
+    registry.enable_capture(save_path=capture_path, skip_lists=True)
+    outputs_record = run_steps(registry, q, k, v, n_steps)
+    registry.save()
+
+    # Replay
+    model2 = SimpleModel()
+    registry2 = LiteAttentionRegistry.from_model(
+        model2, mode="replay", filename=capture_path
+    )
+    outputs_replay = run_steps(registry2, q, k, v, n_steps)
+
+    for step in range(n_steps):
+        for i, (rec_out, rep_out) in enumerate(
+            zip(outputs_record[step], outputs_replay[step])
+        ):
+            assert torch.equal(rec_out, rep_out), (
+                f"step {step}, module {i}: output differs"
+            )
+
+
+# ===========================================================================
+# Verify qk_block_map_log2 replay: skip percentages match original run
+# ===========================================================================
+
+
+def test_qk_map_replay_skip_pct_matches(qkv, tmp_path):
+    """QK-map replay with same threshold should produce same skip percentages."""
+    q, k, v = qkv
+    n_steps = 8
+    threshold = -5.0
+
+    # Record with qk_block_map capture
+    model = SimpleModel()
+    registry = LiteAttentionRegistry.from_model(
+        model, mode="const", threshold=threshold
+    )
+    capture_path = tmp_path / "record.pt"
+    registry.enable_capture(save_path=capture_path, qk_block_map=True)
+    run_steps(registry, q, k, v, n_steps)
+    registry.save()
+
+    record_data = torch.load(capture_path, weights_only=False, map_location="cpu")
+
+    # Replay from qk_block_map with same threshold, capturing pct
+    model2 = SimpleModel()
+    registry2 = LiteAttentionRegistry.from_model(
+        model2, mode="replay", filename=capture_path, qk_threshold=threshold
+    )
+    replay_capture_path = tmp_path / "replay.pt"
+    registry2.enable_capture(save_path=replay_capture_path)
+    run_steps(registry2, q, k, v, n_steps)
+    registry2.save()
+
+    replay_data = torch.load(
+        replay_capture_path, weights_only=False, map_location="cpu"
+    )
+
+    for mod_name in record_data["modules"]:
+        rec_pct = record_data["modules"][mod_name]["pct_per_head"]
+        rep_pct = replay_data["modules"][mod_name]["pct_per_head"]
+        torch.testing.assert_close(
+            rec_pct,
+            rep_pct,
+            msg=f"module {mod_name}: pct_per_head differs",
+        )
