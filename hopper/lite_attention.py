@@ -1351,7 +1351,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
 
         # Capture debug data if enabled (after add_calibration_results so timestep is set)
         if self.enable_skipping:
-            self._maybe_capture(write_list, threshold, query, key, scale)
+            self._maybe_capture(read_list, threshold, query, key, scale)
 
         # Old way to calculate and store statistics (if enabled)
         if (
@@ -1573,12 +1573,12 @@ class LiteAttention(nn.Module, ConfigurableModule):
         self._stats_min = None
 
     @torch.no_grad()
-    def _maybe_capture(self, write_list, threshold, query, key, scale):
+    def _maybe_capture(self, read_list, threshold, query, key, scale):
         """Capture debug data for the current forward pass if capture is enabled.
 
         Always (when capture enabled): compute pct_per_head for ALL heads and
-        ALL batch items. Cheap — no attention map materialization.
-        For disabled timesteps (write_list is None), emits pct=1.0.
+        ALL batch items from the read_list (what was actually used).
+        For disabled timesteps (read_list is None), emits pct=1.0.
 
         Detailed maps (when enabled and timestep/head matches): compute
         downsampled attention maps and save skip_lists for selected subset.
@@ -1590,8 +1590,8 @@ class LiteAttention(nn.Module, ConfigurableModule):
         forward passes. Independent of detailed map capture.
 
         Args:
-            write_list: The write skip list [batch, heads, qtiles, ktiles+2],
-                or None for disabled timesteps.
+            read_list: The read skip list [batch, heads, qtiles, ktiles+2]
+                that was used for this forward pass, or None for disabled timesteps.
             threshold: The threshold used for this forward pass.
             query: Query tensor [batch, seq_len_q, heads, head_dim].
             key: Key tensor [batch, seq_len_k, heads, head_dim].
@@ -1602,14 +1602,14 @@ class LiteAttention(nn.Module, ConfigurableModule):
 
         current_timestep = self._config_index - 1
         batch_size, seq_len, num_heads, head_dim = query.shape
-        lite_attention_disabled = write_list is None
+        lite_attention_disabled = read_list is None
         scale = scale or 1.0 / math.sqrt(head_dim)
 
-        # --- pct for ALL heads, ALL batch items ---
+        # --- pct for ALL heads, ALL batch items (from read_list = what was actually used) ---
         if lite_attention_disabled:
             pct_per_head = torch.ones(batch_size, num_heads)
         else:
-            pct = self.calc_percentage_per_head(write_list[:batch_size])
+            pct = self.calc_percentage_per_head(read_list[:batch_size])
             # pct shape: [batch_size, num_heads, qtiles] -> mean over qtiles
             pct_per_head = pct.mean(dim=-1).float().cpu()
 
@@ -1680,7 +1680,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
                 captured_skip[:, :, :, 2] = -1
             else:
                 captured_skip = (
-                    write_list[:batch_size].clone().to(dtype=torch.int16, device="cpu")
+                    read_list[:batch_size].clone().to(dtype=torch.int16, device="cpu")
                 )
 
         # --- Compute attention maps per head ---
@@ -2431,13 +2431,9 @@ class LiteAttentionRegistry(ModuleRegistry):
                 skip_lists = mod_data[
                     "skip_lists"
                 ]  # [T, B_sel, H_sel, qtiles, ktiles+2]
-                B_sel, H_sel, qtiles, ktiles_plus_2 = skip_lists.shape[1:]
-                ktiles = ktiles_plus_2 - 2
-                compute_all = self._make_compute_all(B_sel, H_sel, qtiles, ktiles)
-                active_write_lists = [
+                replay_list = [
                     skip_lists[t] for t in range(n_disabled, skip_lists.shape[0])
                 ]
-                replay_list = [compute_all] + active_write_lists
 
             module._replay_skip_lists = replay_list
             module._replay_step_counter = 0
@@ -2473,12 +2469,11 @@ class LiteAttentionRegistry(ModuleRegistry):
                 (their entries are skipped).
 
         Returns:
-            List of ``[B, H, qtiles, ktiles+2]`` int16 tensors, starting with
-            a "compute all" initial buffer at index 0.
+            List of ``[B, H, qtiles, ktiles+2]`` int16 tensors, one per
+            active timestep (no leading "compute all" buffer).
         """
         T_total, B, H, qtiles, ktiles = qk_block_map.shape
-        compute_all = LiteAttentionRegistry._make_compute_all(B, H, qtiles, ktiles)
-        result: list[torch.Tensor] = [compute_all]
+        result: list[torch.Tensor] = []
 
         # Boolean mask, flattened: [T, N, ktiles] where N = B*H*qtiles
         compute_mask = (qk_block_map >= threshold).reshape(T_total, -1, ktiles)
@@ -2553,7 +2548,7 @@ class LiteAttentionRegistry(ModuleRegistry):
 
         # Now build skip lists for each timestep
         for t in range(n_disabled, T_total):
-            replay_idx = t - n_disabled + 1
+            replay_idx = t - n_disabled
             phase_true = replay_idx % 2 == 0
 
             skip_list = torch.zeros(B, H, qtiles, ktiles + 2, dtype=torch.int16)
@@ -2613,7 +2608,7 @@ class LiteAttentionRegistry(ModuleRegistry):
         """Enable debug capture on all modules.
 
         All modules always capture pct_per_head for every timestep and head.
-        skip_lists captures write_list snapshots cheaply (no QK recomputation).
+        skip_lists captures read_list snapshots (what was actually used, no QK recomputation).
         Attn maps + skip_lists are also captured for the filtered subset when attn_map or qk_block_map is enabled.
         qk_block_map captures row-max-normalized pre-softmax QK scores maxpooled to tile granularity (≤ 0, directly comparable to threshold).
         Stats (mean/std/max/min) are accumulated at full resolution on the same
@@ -2621,7 +2616,7 @@ class LiteAttentionRegistry(ModuleRegistry):
 
         Args:
             save_path: Path for the .pt capture file (written by save()).
-            skip_lists: Enable cheap skip list capture (write_list snapshots, no QK recomputation).
+            skip_lists: Enable cheap skip list capture (read_list snapshots = what was actually used).
             attn_map: Enable detailed attention map capture.
             attn_map_modules: Which modules capture attn maps and/or stats. Can be:
                 - list[str]: exact module names
