@@ -361,7 +361,7 @@ def test_qk_map_replay_no_qk_block_map_raises(qkv, tmp_path):
     registry.save()
 
     model2 = SimpleModel()
-    with pytest.raises(ValueError, match="no qk_block_map"):
+    with pytest.raises(ValueError, match="no qk_block_map_log2"):
         LiteAttentionRegistry.from_model(
             model2, mode="replay", filename=capture_path, qk_threshold=-8.0
         )
