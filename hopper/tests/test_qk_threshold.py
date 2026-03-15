@@ -49,7 +49,7 @@ def _run(qk_block_map: torch.Tensor, threshold: float, n_disabled: int = 0):
 
 def _phase_for_timestep(t: int, n_disabled: int) -> bool:
     """Return the phase_true value for a given timestep index."""
-    replay_idx = t - n_disabled + 1
+    replay_idx = t - n_disabled
     return replay_idx % 2 == 0
 
 
@@ -61,24 +61,9 @@ class TestAllTilesAboveThreshold:
         qk = torch.zeros(1, 1, 1, 1, 4)
         result = _run(qk, threshold=-1.0)
 
-        # result[0] = compute_all, result[1] = skip list for t=0
-        assert len(result) == 2
-        for phase_true in [True, False]:
-            # Both should give same decode; check with actual phase
-            tiles = decoded_compute_tiles(result[1][0, 0, 0], _phase_for_timestep(0, 0))
-            assert tiles == {0, 1, 2, 3}
-
-    def test_compute_all_buffer(self):
-        """The initial compute_all buffer covers all tiles."""
-        qk = torch.zeros(1, 1, 1, 1, 4)
-        result = _run(qk, threshold=-1.0)
-        buf = result[0]
-        # phase of compute_all is always phase_true (replay_idx=0 → even → True)
-        # Actually compute_all is index 0 which is always used as-is.
-        # It's encoded as: length=2, then (ktiles-1, -1) which is phase_true encoding
-        assert buf[0, 0, 0, 0].item() == 2  # length
-        assert buf[0, 0, 0, 1].item() == 3  # ktiles - 1 = end
-        assert buf[0, 0, 0, 2].item() == -1  # start - 1
+        assert len(result) == 1
+        tiles = decoded_compute_tiles(result[0][0, 0, 0], _phase_for_timestep(0, 0))
+        assert tiles == {0, 1, 2, 3}
 
 
 class TestNoTilesAboveThreshold:
@@ -87,8 +72,8 @@ class TestNoTilesAboveThreshold:
     def test_basic(self):
         qk = torch.full((1, 1, 1, 1, 4), -10.0)
         result = _run(qk, threshold=-5.0)
-        assert len(result) == 2
-        skip_list = result[1]
+        assert len(result) == 1
+        skip_list = result[0]
         # Length should be 0
         assert skip_list[0, 0, 0, 0].item() == 0
         tiles = decoded_compute_tiles(skip_list[0, 0, 0], _phase_for_timestep(0, 0))
@@ -102,7 +87,7 @@ class TestSingleTileAboveThreshold:
         qk = torch.full((1, 1, 1, 1, 4), -10.0)
         qk[0, 0, 0, 0, 2] = 0.0  # tile 2 above threshold
         result = _run(qk, threshold=-5.0)
-        tiles = decoded_compute_tiles(result[1][0, 0, 0], _phase_for_timestep(0, 0))
+        tiles = decoded_compute_tiles(result[0][0, 0, 0], _phase_for_timestep(0, 0))
         assert tiles == {2}
 
 
@@ -118,7 +103,7 @@ class TestTwoSeparateRanges:
         qk[0, 0, 0, 0, 6] = 0.0
         qk[0, 0, 0, 0, 7] = 0.0
         result = _run(qk, threshold=-5.0)
-        skip_list = result[1]
+        skip_list = result[0]
         # Length should be 4 (2 ranges * 2)
         assert skip_list[0, 0, 0, 0].item() == 4
         tiles = decoded_compute_tiles(skip_list[0, 0, 0], _phase_for_timestep(0, 0))
@@ -132,13 +117,13 @@ class TestThresholdExactlyAtBoundary:
         qk = torch.full((1, 1, 1, 1, 4), -5.0)
         # All tiles are exactly at threshold → should be computed
         result = _run(qk, threshold=-5.0)
-        tiles = decoded_compute_tiles(result[1][0, 0, 0], _phase_for_timestep(0, 0))
+        tiles = decoded_compute_tiles(result[0][0, 0, 0], _phase_for_timestep(0, 0))
         assert tiles == {0, 1, 2, 3}
 
     def test_just_below(self):
         qk = torch.tensor([[[[[-5.0, -5.1, -4.9, -5.0]]]]])
         result = _run(qk, threshold=-5.0)
-        tiles = decoded_compute_tiles(result[1][0, 0, 0], _phase_for_timestep(0, 0))
+        tiles = decoded_compute_tiles(result[0][0, 0, 0], _phase_for_timestep(0, 0))
         # tile 1 is -5.1 < -5.0, so skipped; tile 2 is -4.9 >= -5.0, computed
         assert tiles == {0, 2, 3}
 
@@ -155,11 +140,11 @@ class TestPhaseAlternation:
             qk[t, 0, 0, 0, 2] = 0.0
 
         result = _run(qk, threshold=-5.0)
-        assert len(result) == T + 1  # compute_all + T skip lists
+        assert len(result) == T
 
         for t in range(T):
             phase = _phase_for_timestep(t, 0)
-            tiles = decoded_compute_tiles(result[t + 1][0, 0, 0], phase)
+            tiles = decoded_compute_tiles(result[t][0, 0, 0], phase)
             assert tiles == {1, 2}, f"Failed at t={t}, phase_true={phase}"
 
     def test_encoding_differs_by_phase(self):
@@ -171,8 +156,8 @@ class TestPhaseAlternation:
             qk[t, 0, 0, 0, 2] = 0.0
 
         result = _run(qk, threshold=-5.0)
-        row_t0 = result[1][0, 0, 0]
-        row_t1 = result[2][0, 0, 0]
+        row_t0 = result[0][0, 0, 0]
+        row_t1 = result[1][0, 0, 0]
 
         # Both should decode to {1, 2}
         assert decoded_compute_tiles(row_t0, _phase_for_timestep(0, 0)) == {1, 2}
@@ -186,6 +171,34 @@ class TestPhaseAlternation:
             "Raw encoding should differ between phases"
         )
 
+    def test_phase_true_encoding(self):
+        """Phase=True encodes as (end, start-1)."""
+        qk = torch.full((1, 1, 1, 1, 4), -10.0)
+        qk[0, 0, 0, 0, 1] = 0.0
+        qk[0, 0, 0, 0, 2] = 0.0
+        result = _run(qk, threshold=-5.0)
+        row = result[0][0, 0, 0]
+
+        # t=0, n_disabled=0 → replay_idx=0 → phase_true=True
+        assert _phase_for_timestep(0, 0) is True
+        assert row[0].item() == 2  # length = 2 (1 range)
+        assert row[1].item() == 2  # end
+        assert row[2].item() == 0  # start - 1
+
+    def test_phase_false_encoding(self):
+        """Phase=False encodes as (start, end+1)."""
+        qk = torch.full((2, 1, 1, 1, 4), -10.0)
+        qk[1, 0, 0, 0, 1] = 0.0
+        qk[1, 0, 0, 0, 2] = 0.0
+        result = _run(qk, threshold=-5.0)
+        row = result[1][0, 0, 0]
+
+        # t=1, n_disabled=0 → replay_idx=1 → phase_true=False
+        assert _phase_for_timestep(1, 0) is False
+        assert row[0].item() == 2  # length = 2 (1 range)
+        assert row[1].item() == 1  # start
+        assert row[2].item() == 3  # end + 1
+
 
 class TestNDisabledSkipsLeadingTimesteps:
     """n_disabled skips leading timesteps."""
@@ -194,8 +207,8 @@ class TestNDisabledSkipsLeadingTimesteps:
         T = 4
         qk = torch.zeros(T, 1, 1, 1, 4)
         result = _run(qk, threshold=-1.0, n_disabled=2)
-        # compute_all + (T - n_disabled) skip lists = 1 + 2 = 3
-        assert len(result) == 3
+        # T - n_disabled = 2 skip lists
+        assert len(result) == 2
 
     def test_phases_start_from_disabled_offset(self):
         T = 4
@@ -207,7 +220,7 @@ class TestNDisabledSkipsLeadingTimesteps:
         # Skip lists are for t=2, t=3
         for i, t in enumerate([2, 3]):
             phase = _phase_for_timestep(t, 2)
-            tiles = decoded_compute_tiles(result[i + 1][0, 0, 0], phase)
+            tiles = decoded_compute_tiles(result[i][0, 0, 0], phase)
             assert tiles == {0}, f"Failed at t={t}"
 
 
@@ -229,7 +242,7 @@ class TestMultipleBatchHeadsQtiles:
         # etc.
 
         result = _run(qk, threshold=-5.0)
-        sl = result[1]
+        sl = result[0]
         phase = _phase_for_timestep(0, 0)
 
         assert decoded_compute_tiles(sl[0, 0, 0], phase) == {0}
@@ -237,31 +250,6 @@ class TestMultipleBatchHeadsQtiles:
         assert decoded_compute_tiles(sl[1, 1, 0], phase) == {0, 1, 2, 3}
         assert decoded_compute_tiles(sl[0, 1, 0], phase) == set()
         assert decoded_compute_tiles(sl[1, 0, 0], phase) == set()
-
-
-class TestComputeAllInitialBuffer:
-    """First element of result is always the compute_all buffer."""
-
-    def test_shape_and_values(self):
-        ktiles = 6
-        B, H, q = 2, 3, 2
-        qk = torch.zeros(1, B, H, q, ktiles)
-        result = _run(qk, threshold=-1.0)
-        buf = result[0]
-        assert buf.shape == (B, H, q, ktiles + 2)
-        assert buf.dtype == torch.int16
-        # Every row: length=2, end=ktiles-1, start-1=-1
-        assert (buf[:, :, :, 0] == 2).all()
-        assert (buf[:, :, :, 1] == ktiles - 1).all()
-        assert (buf[:, :, :, 2] == -1).all()
-
-    def test_even_when_all_skipped(self):
-        qk = torch.full((1, 1, 1, 1, 4), -10.0)
-        result = _run(qk, threshold=-5.0)
-        buf = result[0]
-        assert buf[0, 0, 0, 0].item() == 2
-        assert buf[0, 0, 0, 1].item() == 3
-        assert buf[0, 0, 0, 2].item() == -1
 
 
 class TestVaryingRangesPerRow:
@@ -281,7 +269,7 @@ class TestVaryingRangesPerRow:
         qk[0, 0, 0, 1, 7] = 0.0
 
         result = _run(qk, threshold=-5.0)
-        sl = result[1]
+        sl = result[0]
         phase = _phase_for_timestep(0, 0)
 
         tiles_q0 = decoded_compute_tiles(sl[0, 0, 0], phase)
