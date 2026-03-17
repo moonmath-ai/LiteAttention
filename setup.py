@@ -544,7 +544,9 @@ if is_rocm:
     )
 
     # Generate APPENDKV kernels (receipt=2 = Flash attention integration: fp16/bf16 row-layout only)
-    print(f"Generating FWD_APPENDKV kernels to {generated_dir} (head_dims={ROCM_HDIMS})...")
+    print(
+        f"Generating FWD_APPENDKV kernels to {generated_dir} (head_dims={ROCM_HDIMS})..."
+    )
     subprocess.run(
         [
             sys.executable,
@@ -565,7 +567,9 @@ if is_rocm:
     # receipt=2 limits to fp16/bf16/row/no-bias, and filter "@*qr_vr*|*qr_vc*" excludes
     # qr_async variants (which reference BlockFmhaFwdSplitKVPipelineQRKSVSAsync that
     # doesn't exist in the current CK headers). The '@' splits combine vs main filters.
-    print(f"Generating FWD_SPLITKV kernels to {generated_dir} (head_dims={ROCM_HDIMS})...")
+    print(
+        f"Generating FWD_SPLITKV kernels to {generated_dir} (head_dims={ROCM_HDIMS})..."
+    )
     subprocess.run(
         [
             sys.executable,
@@ -599,6 +603,7 @@ if is_rocm:
             # On some filesystems (NFS/CIFS) rename can fail transiently; try copy+delete
             try:
                 import shutil as _shutil
+
                 _shutil.copy2(str(p), str(hip_path))
                 p.unlink(missing_ok=True)
             except Exception:
@@ -606,7 +611,9 @@ if is_rocm:
 
     # Copy flash_api.cpp -> flash_api.hip so we only maintain the .cpp (single source of truth)
     flash_attn_ck_dir = repo_root / "csrc" / "flash_attn_ck"
-    shutil.copy(flash_attn_ck_dir / "flash_api.cpp", flash_attn_ck_dir / "flash_api.hip")
+    shutil.copy(
+        flash_attn_ck_dir / "flash_api.cpp", flash_attn_ck_dir / "flash_api.hip"
+    )
 
     # 2. Collect Sources
     def get_rocm_source(path_str):
@@ -636,7 +643,9 @@ if is_rocm:
         str(p)
         for p in generated_dir.glob("*.hip")
         if p.name not in ["fmha_fwd_api.hip", "fmha_bwd_api.hip"]
-        and not p.name.endswith("_hip.hip")  # exclude hipify output files (stale from prior builds)
+        and not p.name.endswith(
+            "_hip.hip"
+        )  # exclude hipify output files (stale from prior builds)
     )
 
     # 3. Include Directories

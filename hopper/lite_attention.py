@@ -115,7 +115,9 @@ else:
 log = structlog.get_logger()
 
 
-def _rocm_lse_fp32_chunked(q: torch.Tensor, k: torch.Tensor, softmax_scale: float, chunk_size: int = 128) -> torch.Tensor:
+def _rocm_lse_fp32_chunked(
+    q: torch.Tensor, k: torch.Tensor, softmax_scale: float, chunk_size: int = 128
+) -> torch.Tensor:
     """Compute LSE in fp32 with chunked K iteration to avoid OOM on long sequences.
 
     Used as a precision fallback on ROCm for non-power-of-2 head dimensions where the CK
@@ -124,14 +126,16 @@ def _rocm_lse_fp32_chunked(q: torch.Tensor, k: torch.Tensor, softmax_scale: floa
                        = logaddexp over all chunks of LSE_chunk
     """
     # q: [batch, q_len, heads, head_dim]
-    q_t = q.float().permute(0, 2, 1, 3)   # [B, H, Lq, D]
-    k_t = k.float().permute(0, 2, 1, 3)   # [B, H, Lk, D]
+    q_t = q.float().permute(0, 2, 1, 3)  # [B, H, Lq, D]
+    k_t = k.float().permute(0, 2, 1, 3)  # [B, H, Lk, D]
     k_len = k_t.shape[2]
 
     lse: Optional[torch.Tensor] = None
     for ki in range(0, k_len, chunk_size):
         k_chunk = k_t[:, :, ki : ki + chunk_size, :]
-        scores = torch.matmul(q_t, k_chunk.transpose(-1, -2)) * softmax_scale  # [B, H, Lq, kchunk]
+        scores = (
+            torch.matmul(q_t, k_chunk.transpose(-1, -2)) * softmax_scale
+        )  # [B, H, Lq, kchunk]
         chunk_lse = torch.logsumexp(scores, dim=-1)  # [B, H, Lq]
         if lse is None:
             lse = chunk_lse
@@ -345,7 +349,9 @@ class LiteAttention(nn.Module, ConfigurableModule):
             not_skipped_per_head, dim=-1, index=skip_list_sizes_clamped.unsqueeze(-1)
         ).squeeze(-1)
         # Zero out entries where length==0 (no tiles computed)
-        real_not_skipped_per_head = real_not_skipped_per_head.masked_fill(lengths == 0, 0)
+        real_not_skipped_per_head = real_not_skipped_per_head.masked_fill(
+            lengths == 0, 0
+        )
 
         # Calculate percentage: (tiles computed) / (total tiles)
         num_of_k_tiles = (
@@ -1069,8 +1075,12 @@ class LiteAttention(nn.Module, ConfigurableModule):
                 num_ranges = n // 2
                 write_list[:real_batch_size, :, :, 0] = n
                 for i in range(num_ranges):
-                    write_list[:real_batch_size, :, :, 2 * i + 1] = must_do_list_expanded[2 * i + 2]
-                    write_list[:real_batch_size, :, :, 2 * i + 2] = must_do_list_expanded[2 * i + 1]
+                    write_list[:real_batch_size, :, :, 2 * i + 1] = (
+                        must_do_list_expanded[2 * i + 2]
+                    )
+                    write_list[:real_batch_size, :, :, 2 * i + 2] = (
+                        must_do_list_expanded[2 * i + 1]
+                    )
             else:
                 # Ensure at least 1 tile is recorded even when threshold skips everything.
                 # The kernel writes length=0 when all tiles are below threshold; enforce a
@@ -1098,7 +1108,12 @@ class LiteAttention(nn.Module, ConfigurableModule):
         # convergence so the user's standard 2 warmup passes are sufficient for stability.
         # Skip when must_do_list_expanded is set: the post-processed write_list already contains
         # the correct must_do ranges and extra passes would overwrite them with the min-tile value.
-        if _IS_ROCM and self.enable_skipping and self._rocm_needs_extra_warmup and must_do_list_expanded is None:
+        if (
+            _IS_ROCM
+            and self.enable_skipping
+            and self._rocm_needs_extra_warmup
+            and must_do_list_expanded is None
+        ):
             self._rocm_needs_extra_warmup = False
             _extra_bs = query.shape[0]
             for _ in range(2):
@@ -1161,7 +1176,9 @@ class LiteAttention(nn.Module, ConfigurableModule):
                 _out_tensor, _ = output
             else:
                 _out_tensor = output
-            _lse_scale = softmax_scale if softmax_scale is not None else head_dim ** (-0.5)
+            _lse_scale = (
+                softmax_scale if softmax_scale is not None else head_dim ** (-0.5)
+            )
             _lse_corrected = _rocm_lse_fp32_chunked(query, key, _lse_scale)
             output = (_out_tensor, _lse_corrected)
 
