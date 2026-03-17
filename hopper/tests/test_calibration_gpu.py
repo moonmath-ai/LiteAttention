@@ -461,11 +461,17 @@ def test_config_list_clamping_gpu(qkv):
     attn = m.attn
     attn._registry_config = cl
 
-    # Run 3 steps with a 1-element ConfigList — should clamp to last
-    for _ in range(3):
-        torch.cuda.synchronize()
-        attn(q, k, v)
-        torch.cuda.synchronize()
+    # Step 0: in bounds
+    torch.cuda.synchronize()
+    attn(q, k, v)
+    torch.cuda.synchronize()
+
+    # Steps 1-2: clamp beyond the 1-element list
+    with pytest.warns(UserWarning, match="clamping to last entry"):
+        for _ in range(2):
+            torch.cuda.synchronize()
+            attn(q, k, v)
+            torch.cuda.synchronize()
 
     assert len(attn._config_output) == 3
     for r in attn._config_output:
@@ -493,11 +499,18 @@ def test_disabled_then_clamped_config(qkv):
     attn = m.attn
     attn._registry_config = cl
 
-    # Run 4 steps: step 0 skips, steps 1-3 should all be disabled (clamped)
-    for _ in range(4):
+    # Steps 0-1: in bounds
+    for _ in range(2):
         torch.cuda.synchronize()
         attn(q, k, v)
         torch.cuda.synchronize()
+
+    # Steps 2-3: clamp beyond the 2-element list
+    with pytest.warns(UserWarning, match="clamping to last entry"):
+        for _ in range(2):
+            torch.cuda.synchronize()
+            attn(q, k, v)
+            torch.cuda.synchronize()
 
     assert len(attn._config_output) == 4
     assert type(attn._config_output[0]) is LiteAttentionRunConfig
@@ -549,7 +562,14 @@ def test_registry_from_model_disabled_steps_with_const(small_qkv):
         model, mode="const", threshold=-5.0, disabled_steps=2
     )
     for mod in registry.named_modules.values():
-        for _ in range(4):
+        # Steps 0-2: in bounds (2 disabled + 1 const)
+        for _ in range(3):
+            torch.cuda.synchronize()
+            mod(q, k, v)
+            torch.cuda.synchronize()
+
+        # Step 3: clamps beyond the 3-element list
+        with pytest.warns(UserWarning, match="clamping to last entry"):
             torch.cuda.synchronize()
             mod(q, k, v)
             torch.cuda.synchronize()
@@ -628,8 +648,16 @@ def test_registry_from_model_disabled_steps_exceeds_list(small_qkv, tmp_toml):
     registry2 = LiteAttentionRegistry.from_model(
         model2, mode="load", filename=tmp_toml, disabled_steps=5
     )
+    # ConfigList is 6 elements (5 disabled + 1 fallback)
     for mod in registry2.named_modules.values():
-        for _ in range(7):
+        # Steps 0-5: in bounds
+        for _ in range(6):
+            torch.cuda.synchronize()
+            mod(q, k, v)
+            torch.cuda.synchronize()
+
+        # Step 6: clamps beyond the 6-element list
+        with pytest.warns(UserWarning, match="clamping to last entry"):
             torch.cuda.synchronize()
             mod(q, k, v)
             torch.cuda.synchronize()
