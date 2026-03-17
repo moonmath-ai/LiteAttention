@@ -65,12 +65,6 @@ class ConfigurableModule:
         self._config_index = 0
         self._warned_messages: set[str] = set()
         self._config_output: ConfigList = ConfigList()
-        if self.run_config_type is None:
-            warnings.warn(
-                f"Module {type(self)} has no run_config_type defined. "
-                "Cannot save calibration results.",
-                stacklevel=2,
-            )
 
     def restart_config(self) -> None:
         if self._config_index == 0:
@@ -166,15 +160,8 @@ class ConfigurableModule:
 
         """
         self._config_index += 1
-        if self.run_config_type is None:
-            return
         if self._registry is None and isinstance(self.config, CalibratedCalibConfig):
             warnings.warn(
                 "Module has no registry. Cannot save calibration results.", stacklevel=2
-            )
-        if not isinstance(results, self.run_config_type):
-            raise TypeError(
-                f"Results type {type(results)} does not match "
-                f"module run_config_type {self.run_config_type}."
             )
         self._config_output.append(results)
