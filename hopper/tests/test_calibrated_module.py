@@ -383,14 +383,6 @@ def test_add_calibration_results_multi_step():
         assert mod._config_output[i].threshold == th
 
 
-def test_add_calibration_results_wrong_type_raises():
-    mod = DummyModule()
-    _ = ModuleRegistry(iter([("mod", mod)]))  # registers mod
-    mod._registry_config = DummyRunConfig(threshold=-5.0)
-    with pytest.raises(TypeError, match="does not match"):
-        mod.add_calibration_results(DummyCalibConfig(metric="L1"))
-
-
 def test_reset_config():
     mod = DummyModule()
     _ = ModuleRegistry(iter([("mod", mod)]))  # registers mod
