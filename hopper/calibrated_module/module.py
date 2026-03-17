@@ -63,7 +63,6 @@ class ConfigurableModule:
         """
         self._registry_config: CalibratedConfig | ConfigList | None = None
         self._config_index = 0
-        self._warned_messages: set[str] = set()
         self._config_output: ConfigList = ConfigList()
 
     def restart_config(self) -> None:
