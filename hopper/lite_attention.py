@@ -560,6 +560,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
         key: torch.Tensor,
         value: Optional[torch.Tensor] = None,
         must_skip_list: list = None,
+        enable_skipping: Optional[bool] = None,
     ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
         """
         Get the current read and write skip lists for this attention forward pass.
@@ -596,7 +597,9 @@ class LiteAttention(nn.Module, ConfigurableModule):
         """
 
         # If skipping disabled, return None (standard Flash Attention)
-        if not self.enable_skipping:
+        if enable_skipping is None:
+            enable_skipping = self.enable_skipping
+        if not enable_skipping:
             return None, None
 
         # Backward-compat: older callers pass (query, value) only.
@@ -862,25 +865,22 @@ class LiteAttention(nn.Module, ConfigurableModule):
         cfg = self.config if self.enable_skipping else None
         disabled = isinstance(cfg, LiteAttentionDisabledConfig)
 
-        # if we are disabled, we temporarily disable skipping
-        enable_skipping = self.enable_skipping
-        if disabled:
-            self.enable_skipping = False
+        # Use a local variable instead of mutating self.enable_skipping
+        # to stay thread-safe and exception-safe.
+        effective_skipping = self.enable_skipping and not disabled
 
         # Get read and write lists (internal mask management)
         read_list, write_list = self._get_read_write_lists(
-            query, key, value, must_skip_list
+            query, key, value, must_skip_list, enable_skipping=effective_skipping
         )
 
-        if self.enable_skipping and must_do_list is not None:
+        if effective_skipping and must_do_list is not None:
             # handle must-do list - expand the 1d list to a list per head per batch per qi
             must_do_list_expanded = self._expand_must_do_list(
                 must_do_list, write_list.shape, query, value, self.use_int8
             )
         else:
             must_do_list_expanded = None
-
-        self.enable_skipping = enable_skipping
 
         # softmax_scale: for INT8 use q_scale (1.44269504089 * scale or / sqrt(head_dim)); else use scale as-is
         head_dim = query.shape[-1]
@@ -894,7 +894,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
             else scale
         )
 
-        if not self.enable_skipping or isinstance(cfg, LiteAttentionDisabledConfig):
+        if not effective_skipping:
             threshold = 0.0  # unused
         elif isinstance(cfg, LiteAttentionCalibConfig):
             temp_list = read_list.clone()
@@ -1010,8 +1010,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
 
         # Calculate and store statistics if enabled
         if (
-            self.enable_skipping
-            and not disabled
+            effective_skipping
             and os.getenv("LITE_ATTENTION_VERBOSE", "FALSE") != "FALSE"
         ):
             real_batch_size = query.shape[0]
