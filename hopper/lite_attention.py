@@ -1524,8 +1524,11 @@ class LiteAttentionRegistry(ModuleRegistry):
                 If False (default), warn when a module has an instance config
                 that will take precedence over the registry config.
             disabled_steps: Number of leading timesteps to run with skipping
-                disabled (regular attention). Prepends LiteAttentionDisabledConfig
-                entries to each module's config list.
+                disabled (regular attention). For a ConfigList, the first
+                ``disabled_steps`` entries are replaced with disabled configs
+                (if the list is shorter, the last entry is kept as a tail).
+                For a scalar config, creates a ConfigList of
+                ``disabled_steps`` disabled entries followed by the original.
 
         """
         if filename is not None:
