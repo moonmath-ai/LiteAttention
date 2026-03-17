@@ -143,6 +143,10 @@ class ConfigurableModule:
         If config_all is a ConfigList, returns the config at _config_index.
         If config_all is a single config, returns it directly (same for all timesteps).
 
+        Out-of-bounds indices are intentionally clamped to the last entry
+        rather than raising IndexError, so configs with fewer entries than
+        timesteps gracefully repeat the final config.
+
         This is the primary way to access config in forward().
         """
         cfg = self.config_all
