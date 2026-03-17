@@ -624,3 +624,10 @@ def test_mixed_config_list_toml_round_trip(tmp_toml):
     assert result[2].threshold == -3.0
     assert type(result[3]) is LiteAttentionRunConfig
     assert result[3].threshold == -7.0
+
+
+def test_registry_from_model_negative_disabled_steps_raises(simple_model):
+    with pytest.raises(ValueError, match="non-negative"):
+        LiteAttentionRegistry.from_model(
+            simple_model, mode="const", threshold=-5.0, disabled_steps=-1
+        )

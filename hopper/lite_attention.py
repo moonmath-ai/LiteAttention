@@ -1593,6 +1593,10 @@ class LiteAttentionRegistry(ModuleRegistry):
                 f"Unknown mode: {mode!r}. Must be 'const', 'load', 'calib', or 'disable'."
             )
 
+        if disabled_steps < 0:
+            raise ValueError(
+                f"disabled_steps must be non-negative, got {disabled_steps}"
+            )
         if disabled_steps > 0 and mode != "disable":
             disabled_prefix = [LiteAttentionDisabledConfig()] * disabled_steps
             for module in registry.named_modules.values():
