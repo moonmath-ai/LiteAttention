@@ -125,8 +125,6 @@ class LiteAttentionRunConfig(CalibratedRunConfig):
 class LiteAttentionDisabledConfig(CalibratedRunConfig):
     """Runtime config that disables skipping for this timestep (regular attention)."""
 
-    pass
-
 
 @dataclass
 class LiteAttentionCalibConfig(CalibratedCalibConfig):
