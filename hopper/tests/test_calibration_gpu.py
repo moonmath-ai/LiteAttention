@@ -490,3 +490,110 @@ def test_disabled_then_clamped_config(qkv):
     assert type(attn._config_output[0]) is LiteAttentionRunConfig
     for i in [1, 2, 3]:
         assert type(attn._config_output[i]) is LiteAttentionDisabledConfig
+
+
+# ===========================================================================
+# from_model: mode="disable" and disabled_steps
+# ===========================================================================
+
+
+def test_registry_from_model_disable(simple_model):
+    """mode='disable' sets a single LiteAttentionDisabledConfig on every module."""
+    registry = LiteAttentionRegistry.from_model(simple_model, mode="disable")
+    for mod in registry.named_modules.values():
+        assert type(mod._registry_config) is LiteAttentionDisabledConfig
+
+
+def test_registry_from_model_disable_ignores_disabled_steps(simple_model):
+    """disabled_steps has no effect when mode='disable' (already fully disabled)."""
+    registry = LiteAttentionRegistry.from_model(
+        simple_model, mode="disable", disabled_steps=3
+    )
+    for mod in registry.named_modules.values():
+        cfg = mod._registry_config
+        # Still a single config, not a ConfigList
+        assert type(cfg) is LiteAttentionDisabledConfig
+        assert not isinstance(cfg, ConfigList)
+
+
+def test_registry_from_model_disabled_steps_with_const(simple_model):
+    """disabled_steps prepends disabled entries to a scalar const config."""
+    registry = LiteAttentionRegistry.from_model(
+        simple_model, mode="const", threshold=-5.0, disabled_steps=2
+    )
+    for mod in registry.named_modules.values():
+        cfg = mod._registry_config
+        assert isinstance(cfg, ConfigList)
+        assert len(cfg) == 3  # 2 disabled + 1 run
+        assert type(cfg[0]) is LiteAttentionDisabledConfig
+        assert type(cfg[1]) is LiteAttentionDisabledConfig
+        assert type(cfg[2]) is LiteAttentionRunConfig
+        assert cfg[2].threshold == -5.0
+
+
+def test_registry_from_model_disabled_steps_with_load(simple_model, tmp_toml):
+    """disabled_steps replaces the first N entries of a loaded ConfigList."""
+    names = list(
+        LiteAttentionRegistry.from_model(
+            simple_model, mode="const", threshold=-1.0
+        ).named_modules.keys()
+    )
+    # Save a 4-step config
+    ccd = CalibratedConfigDict(
+        {
+            name: ConfigList(
+                [LiteAttentionRunConfig(threshold=float(-i)) for i in range(4)]
+            )
+            for name in names
+        }
+    )
+    ccd.save(tmp_toml)
+
+    model2 = SimpleModel()
+    registry2 = LiteAttentionRegistry.from_model(
+        model2, mode="load", filename=tmp_toml, disabled_steps=2
+    )
+    for mod in registry2.named_modules.values():
+        cfg = mod._registry_config
+        assert isinstance(cfg, ConfigList)
+        # 2 disabled + 2 remaining from original (indices 2, 3)
+        assert len(cfg) == 4
+        assert type(cfg[0]) is LiteAttentionDisabledConfig
+        assert type(cfg[1]) is LiteAttentionDisabledConfig
+        assert type(cfg[2]) is LiteAttentionRunConfig
+        assert cfg[2].threshold == -2.0
+        assert type(cfg[3]) is LiteAttentionRunConfig
+        assert cfg[3].threshold == -3.0
+
+
+def test_registry_from_model_disabled_steps_exceeds_list(simple_model, tmp_toml):
+    """When disabled_steps >= list length, last entry is kept as fallback."""
+    names = list(
+        LiteAttentionRegistry.from_model(
+            simple_model, mode="const", threshold=-1.0
+        ).named_modules.keys()
+    )
+    # Save a 2-step config
+    ccd = CalibratedConfigDict(
+        {
+            name: ConfigList(
+                [LiteAttentionRunConfig(threshold=float(-i)) for i in range(2)]
+            )
+            for name in names
+        }
+    )
+    ccd.save(tmp_toml)
+
+    model2 = SimpleModel()
+    registry2 = LiteAttentionRegistry.from_model(
+        model2, mode="load", filename=tmp_toml, disabled_steps=5
+    )
+    for mod in registry2.named_modules.values():
+        cfg = mod._registry_config
+        assert isinstance(cfg, ConfigList)
+        # 5 disabled + 1 fallback (last original entry)
+        assert len(cfg) == 6
+        for i in range(5):
+            assert type(cfg[i]) is LiteAttentionDisabledConfig
+        assert type(cfg[5]) is LiteAttentionRunConfig
+        assert cfg[5].threshold == -1.0
