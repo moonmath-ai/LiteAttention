@@ -13,10 +13,10 @@
 #ifdef __HIP_PLATFORM_AMD__
 #include <ATen/hip/HIPContext.h>
 #include <ATen/hip/impl/HIPGuardImplMasqueradingAsCUDA.h>
-#define HIPGuardMasqueradingAsCUDA HIPGuardMasqueradingAsCUDA
+#define CUDAGuard HIPGuardMasqueradingAsCUDA
 #else
 #include <ATen/hip/HIPContext.h>
-#include <ATen/hip/impl/HIPGuardImplMasqueradingAsCUDA.h>
+#include <c10/hip/HIPGuard.h>
 #endif
 
 #ifdef OLD_GENERATOR_PATH

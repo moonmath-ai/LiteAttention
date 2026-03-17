@@ -28,8 +28,6 @@ except ImportError as e:
     else:
         flash_attn_3_cuda = torch.ops.lite_attention
 
-flash_attn_3_cuda = torch.ops.lite_attention
-
 # isort: on
 
 
