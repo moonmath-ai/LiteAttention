@@ -13,7 +13,7 @@ from flash_attn.modules.mha import MHA
 from flash_attn.modules.mlp import Mlp
 
 try:
-    from flash_attn.ops.triton.layer_norm import layer_norm_fn, RMSNorm
+    from flash_attn.ops.triton.layer_norm import RMSNorm, layer_norm_fn
 except ImportError:
     layer_norm_fn, RMSNorm = None, None
 
@@ -149,7 +149,7 @@ class Block(nn.Module):
                     rowscale=rowscale1,
                     prenorm=True,
                     residual_in_fp32=self.residual_in_fp32,
-                    is_rms_norm=isinstance(self.norm1, RMSNorm)
+                    is_rms_norm=isinstance(self.norm1, RMSNorm),
                 )
             if mixer_kwargs is None:
                 mixer_kwargs = {}
@@ -186,7 +186,7 @@ class Block(nn.Module):
                         rowscale=rowscale2,
                         prenorm=True,
                         residual_in_fp32=self.residual_in_fp32,
-                        is_rms_norm=isinstance(self.norm2, RMSNorm)
+                        is_rms_norm=isinstance(self.norm2, RMSNorm),
                     )
                 hidden_states = self.mlp(hidden_states)
             return hidden_states, residual
@@ -221,7 +221,7 @@ class Block(nn.Module):
                     dropout_p=self.dropout1.p if self.training else 0.0,
                     rowscale=rowscale1,
                     prenorm=False,
-                    is_rms_norm=isinstance(self.norm1, RMSNorm)
+                    is_rms_norm=isinstance(self.norm1, RMSNorm),
                 )
             if not isinstance(self.mlp, nn.Identity):
                 mlp_out = self.mlp(hidden_states)
@@ -251,7 +251,7 @@ class Block(nn.Module):
                         dropout_p=self.dropout2.p if self.training else 0.0,
                         rowscale=rowscale2,
                         prenorm=False,
-                        is_rms_norm=isinstance(self.norm2, RMSNorm)
+                        is_rms_norm=isinstance(self.norm2, RMSNorm),
                     )
             return hidden_states
 
@@ -384,12 +384,12 @@ class ParallelBlock(nn.Module):
                 dropout_p=self.dropout1.p if self.training else 0.0,
                 prenorm=True,
                 residual_in_fp32=self.residual_in_fp32,
-                is_rms_norm=isinstance(self.norm1, RMSNorm)
+                is_rms_norm=isinstance(self.norm1, RMSNorm),
             )
             if self.tied_norm:
                 hidden_states2 = hidden_states1
             else:
-                hidden_states2, = rest
+                (hidden_states2,) = rest
         if mixer_kwargs is None:
             mixer_kwargs = {}
         hidden_states1 = self.mixer(hidden_states1, **mixer_kwargs)

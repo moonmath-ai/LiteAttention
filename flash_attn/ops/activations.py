@@ -9,6 +9,7 @@ import torch.nn.functional as F
 # 1/sqrt(2)   -> 0.70710678
 # sqrt(2/pi)  -> 0.79788456
 
+
 # this function is tanh approximation of gelu
 # actual gelu is:
 # x * 0.5 * (1.0 + torch.erf(x * 0.70710678))
@@ -49,6 +50,7 @@ class GeLUFunction(torch.autograd.Function):
 
 
 bias_gelu_impl = GeLUFunction.apply
+
 
 # this function is tanh approximation of gelu
 # actual gelu is:
@@ -121,7 +123,6 @@ swiglu_bwd = torch.cuda.jiterator._create_multi_output_jit_fn(swiglu_bwd_codestr
 
 
 class SwiGLUFunction(torch.autograd.Function):
-
     @staticmethod
     def forward(ctx, x, y):
         ctx.save_for_backward(x, y)
@@ -131,5 +132,6 @@ class SwiGLUFunction(torch.autograd.Function):
     def backward(ctx, dout):
         x, y = ctx.saved_tensors
         return swiglu_bwd(x, y, dout)
+
 
 swiglu = SwiGLUFunction.apply

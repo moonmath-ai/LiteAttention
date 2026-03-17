@@ -26,7 +26,7 @@ fmha_fwd_traits get_ck_fmha_fwd_traits(const mask_info &mask,
                            has_lse,
                            has_dropout,
                            false, // do_fp8_static_quant
-                           false, // skip_min_seqlen_q
+                           is_lite, // skip_min_seqlen_q: repurposed as lite kernel dispatch flag
                            is_lite};
 }
 
@@ -53,6 +53,9 @@ fmha_fwd_args get_ck_fmha_fwd_args(bool has_lse,
                                    std::pair<uint64_t*, uint64_t*> drop_seed_offset,
                                    const void* attn_read_list_ptr,
                                    void* attn_write_list_ptr,
+                                   ck_tile::index_t attn_list_stride_b,
+                                   ck_tile::index_t attn_list_stride_h,
+                                   ck_tile::index_t attn_list_stride_q,
                                    float threshold,
                                    bool reverse_skip_list)
 {
@@ -149,6 +152,9 @@ fmha_fwd_args get_ck_fmha_fwd_args(bool has_lse,
                          drop_seed_offset,
                          attn_read_list_ptr,
                          attn_write_list_ptr,
+                         attn_list_stride_b,
+                         attn_list_stride_h,
+                         attn_list_stride_q,
                          threshold,
                          reverse_skip_list};
 }
@@ -294,6 +300,13 @@ mha_fwd(at::Tensor &q,                            // batch_size x seqlen_q x num
         const void* attn_read_list_ptr = is_lite ? attn_read_list.value().data_ptr() : nullptr;
         void* attn_write_list_ptr = (is_lite && attn_write_list.has_value()) ? attn_write_list.value().data_ptr() : nullptr;
 
+        // Compute strides for the skip list tensor (shape: [batch, heads, qtiles, ktiles+2])
+        const at::Tensor* list_ref = attn_write_list.has_value() ? &attn_write_list.value()
+                                     : (attn_read_list.has_value() ? &attn_read_list.value() : nullptr);
+        ck_tile::index_t attn_list_stride_b = list_ref ? (ck_tile::index_t)list_ref->stride(0) : 0;
+        ck_tile::index_t attn_list_stride_h = list_ref ? (ck_tile::index_t)list_ref->stride(1) : 0;
+        ck_tile::index_t attn_list_stride_q = list_ref ? (ck_tile::index_t)list_ref->stride(2) : 0;
+
         auto traits =
             get_ck_fmha_fwd_traits(
                 mask,
@@ -327,6 +340,9 @@ mha_fwd(at::Tensor &q,                            // batch_size x seqlen_q x num
                 drop_seed_offset,
                 attn_read_list_ptr,
                 attn_write_list_ptr,
+                attn_list_stride_b,
+                attn_list_stride_h,
+                attn_list_stride_q,
                 threshold,
                 reverse_skip_list);
 

@@ -24,8 +24,11 @@ def fp16_compress_hook(
 
     # Divide first before converting to fp16
     # Use out argument to fuse the division and the conversion.
-    compressed_tensor = torch.div(bucket.buffer(), world_size,
-                                  out=torch.empty_like(bucket.buffer(), dtype=torch.float16))
+    compressed_tensor = torch.div(
+        bucket.buffer(),
+        world_size,
+        out=torch.empty_like(bucket.buffer(), dtype=torch.float16),
+    )
 
     fut = dist.all_reduce(
         compressed_tensor, group=group_to_use, async_op=True

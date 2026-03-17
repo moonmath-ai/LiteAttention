@@ -3,6 +3,7 @@
 import pytest
 import torch
 import torch.nn.functional as F
+
 from flash_attn.losses.cross_entropy import CrossEntropyLoss
 
 is_sm8x = torch.cuda.get_device_capability("cuda")[0] >= 8
@@ -23,7 +24,9 @@ is_sm8x = torch.cuda.get_device_capability("cuda")[0] >= 8
 # @pytest.mark.parametrize("logit_scale", [1.0])
 @pytest.mark.parametrize("smoothing", [0.0, 0.9])
 # @pytest.mark.parametrize("smoothing", [0.0])
-@pytest.mark.parametrize("vocab_size", [50257, 128256])  # test vocab larger than 64k for split
+@pytest.mark.parametrize(
+    "vocab_size", [50257, 128256]
+)  # test vocab larger than 64k for split
 # @pytest.mark.parametrize("vocab_size", [12])
 def test_cross_entropy_loss(
     vocab_size,
@@ -42,12 +45,16 @@ def test_cross_entropy_loss(
     # set seed
     torch.random.manual_seed(0)
     batch_size = 1 if dtype == torch.float32 else 4  # Otherwise OOM
-    seqlen = 4096 if lse_square_scale == 0.0 and logit_scale == 1.0 else 1024  # Otherwise OOM
+    seqlen = (
+        4096 if lse_square_scale == 0.0 and logit_scale == 1.0 else 1024
+    )  # Otherwise OOM
     x_pt = torch.randn(
         batch_size * seqlen, vocab_size, device=device, dtype=dtype, requires_grad=True
     )
     x = x_pt.detach().clone().requires_grad_()
-    y = torch.randint(0, vocab_size, (batch_size * seqlen,), dtype=torch.long, device=device)
+    y = torch.randint(
+        0, vocab_size, (batch_size * seqlen,), dtype=torch.long, device=device
+    )
     if batch_size * seqlen > 10:
         y[torch.randperm(batch_size * seqlen)[:10]] = -100
     model_pt = torch.nn.CrossEntropyLoss(label_smoothing=smoothing)

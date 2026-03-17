@@ -3,10 +3,9 @@
 # from Cutlass C++ to Cute-DSL.
 import math
 import operator
-from typing import Type, Optional
+from typing import Optional, Type
 
 import cuda.bindings.driver as cuda
-
 import cutlass
 import cutlass.cute as cute
 

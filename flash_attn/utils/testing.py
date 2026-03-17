@@ -14,7 +14,10 @@ def generate_random_padding_mask(max_seqlen, batch_size, device, mode="random", 
         lengths = torch.full((batch_size, 1), max_seqlen, device=device, dtype=torch.int32)
     elif mode == "random":
         lengths = torch.randint(
-            max(0 if zero_lengths else 1, max_seqlen - 20), max_seqlen + 1, (batch_size, 1), device=device
+            max(0 if zero_lengths else 1, max_seqlen - 20),
+            max_seqlen + 1,
+            (batch_size, 1),
+            device=device,
         )
     elif mode == "third":
         lengths = torch.randint(max_seqlen // 3, max_seqlen + 1, (batch_size, 1), device=device)
@@ -32,8 +35,16 @@ def generate_random_padding_mask(max_seqlen, batch_size, device, mode="random", 
 
 
 def generate_qkv(
-    q, k, v, query_padding_mask=None, key_padding_mask=None, qv=None, kvpacked=False, qkvpacked=False,
-    query_unused_mask=None, key_unused_mask=None,
+    q,
+    k,
+    v,
+    query_padding_mask=None,
+    key_padding_mask=None,
+    qv=None,
+    kvpacked=False,
+    qkvpacked=False,
+    query_unused_mask=None,
+    key_unused_mask=None,
 ):
     """
     Arguments:
@@ -139,7 +150,7 @@ def generate_qkv(
             q_unpad.detach().requires_grad_(),
             k_unpad.detach().requires_grad_(),
             v_unpad.detach().requires_grad_(),
-            qv_unpad.detach()  if qv is not None else None,
+            qv_unpad.detach() if qv is not None else None,
             cu_seqlens_q,
             cu_seqlens_k,
             seqused_q,
@@ -188,7 +199,9 @@ def construct_local_mask(
         sk = torch.full_like(col_idx, seqlen_k) if key_padding_mask is None else sk
         return torch.logical_or(
             col_idx > torch.minimum(row_idx + sk - sq + window_size[1], sk),
-            torch.logical_and(col_idx < row_idx + sk - sq - window_size[0], col_idx >= sink_token_length),
+            torch.logical_and(
+                col_idx < row_idx + sk - sq - window_size[0], col_idx >= sink_token_length
+            ),
         )
 
 
@@ -237,7 +250,9 @@ def attention_ref(
     dropout_mask=None,
     causal=False,
     qv=None,
-    q_descale=None, k_descale=None, v_descale=None,
+    q_descale=None,
+    k_descale=None,
+    v_descale=None,
     window_size=(None, None),
     attention_chunk=0,
     sink_token_length=0,
@@ -320,7 +335,9 @@ def attention_ref(
             key_leftpad=key_leftpad,
             device=q.device,
         )
-        local_mask = torch.logical_or(local_mask, chunk_mask) if local_mask is not None else chunk_mask
+        local_mask = (
+            torch.logical_or(local_mask, chunk_mask) if local_mask is not None else chunk_mask
+        )
     if local_mask is not None:
         scores.masked_fill_(local_mask, float("-inf"))
     if attn_bias is not None:
@@ -333,7 +350,9 @@ def attention_ref(
         learnable_sink = rearrange(learnable_sink, "h -> h 1 1")
         logits_or_sinks_max = torch.maximum(learnable_sink, logits_max)
         unnormalized_scores = torch.exp(scores_fp32 - logits_or_sinks_max)
-        normalizer = unnormalized_scores.sum(dim=-1, keepdim=True) + torch.exp(learnable_sink - logits_or_sinks_max)
+        normalizer = unnormalized_scores.sum(dim=-1, keepdim=True) + torch.exp(
+            learnable_sink - logits_or_sinks_max
+        )
         attention = (unnormalized_scores / normalizer).to(v.dtype)
     # We want to mask here so that the attention matrix doesn't have any NaNs
     # Otherwise we'll get NaN in dV

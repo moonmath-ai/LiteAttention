@@ -6,6 +6,7 @@ import math
 import pytest
 import torch
 from apex.transformer import parallel_state, tensor_parallel
+
 from flash_attn.losses.cross_entropy import CrossEntropyLoss
 
 is_sm8x = torch.cuda.get_device_capability("cuda")[0] >= 8
@@ -25,7 +26,9 @@ is_sm8x = torch.cuda.get_device_capability("cuda")[0] >= 8
 # @pytest.mark.parametrize("logit_scale", [1.0])
 @pytest.mark.parametrize("smoothing", [0.0, 0.9])
 # @pytest.mark.parametrize("smoothing", [0.0])
-@pytest.mark.parametrize("vocab_size", [50264, 256 * 1024])  # test vocab larger than 64k for split
+@pytest.mark.parametrize(
+    "vocab_size", [50264, 256 * 1024]
+)  # test vocab larger than 64k for split
 # @pytest.mark.parametrize("vocab_size", [50264])  # test vocab larger than 64k for split
 # @pytest.mark.parametrize("world_size", [1, 2])
 @pytest.mark.parametrize("world_size", [2])
@@ -67,7 +70,9 @@ def test_cross_entropy_loss_parallel(
         .clone()
         .requires_grad_()
     )
-    y = torch.randint(0, vocab_size, (batch_size * seqlen,), dtype=torch.long, device=device)
+    y = torch.randint(
+        0, vocab_size, (batch_size * seqlen,), dtype=torch.long, device=device
+    )
     y[torch.randperm(batch_size * seqlen)[:10]] = -100
     model_pt = torch.nn.CrossEntropyLoss(label_smoothing=smoothing, reduction="none")
     model = CrossEntropyLoss(

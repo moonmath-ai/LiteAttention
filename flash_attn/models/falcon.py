@@ -15,6 +15,7 @@ def remap_state_dict_hf_falcon(state_dict, config):
         return re.sub(r"^transformer.h.", "transformer.layers.", key)
 
     state_dict = OrderedDict((key_mapping_layers(k), v) for k, v in state_dict.items())
+
     # Word embedding
     def key_mapping_emb(key):
         return re.sub(

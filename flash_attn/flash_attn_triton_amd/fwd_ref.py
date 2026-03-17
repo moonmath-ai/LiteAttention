@@ -1,11 +1,16 @@
-import torch
 import math
 from typing import Literal, Optional
+
+import torch
+
 from .utils import DEBUG, compute_alibi_tensor_ref
 
 DEBUG_CORE = False
 
-def attention_forward_core_ref_impl(q, k, v, sm_scale, causal, dropout_p, philox_seed, philox_offset, alibi_slopes, use_exp2):
+
+def attention_forward_core_ref_impl(
+    q, k, v, sm_scale, causal, dropout_p, philox_seed, philox_offset, alibi_slopes, use_exp2
+):
     if DEBUG_CORE:
         print()
         print("attention_forward_core_ref_impl")
@@ -23,7 +28,7 @@ def attention_forward_core_ref_impl(q, k, v, sm_scale, causal, dropout_p, philox
     q = q.to(torch.float32)
     k = k.to(torch.float32)
     v = v.to(torch.float32)
-    
+
     # Compute attention scores
     attention_scores = torch.matmul(q, k.transpose(-2, -1))
     if DEBUG_CORE:
@@ -47,24 +52,31 @@ def attention_forward_core_ref_impl(q, k, v, sm_scale, causal, dropout_p, philox
             print("alibi_bias_flat:", alibi_bias, alibi_bias.shape)
         attention_scaled_scores = attention_scaled_scores + alibi_bias
         if DEBUG_CORE:
-            print("attention_scaled_scores after alibi:", attention_scaled_scores, attention_scaled_scores.shape)
-
+            print(
+                "attention_scaled_scores after alibi:",
+                attention_scaled_scores,
+                attention_scaled_scores.shape,
+            )
 
     # Apply causal mask if necessary
     if causal:
         L_q, L_k = q.shape[1], k.shape[1]
         row_idx = torch.arange(L_q, device=q.device).unsqueeze(1)
         col_idx = torch.arange(L_k, device=q.device).unsqueeze(0)
-        col_offset = L_q-L_k
+        col_offset = L_q - L_k
         causal_mask = row_idx >= (col_offset + col_idx)
         if DEBUG_CORE:
             print("causal_mask:", causal_mask)
         # set -inf to places the causal mask is false
         attention_scaled_scores = attention_scaled_scores.masked_fill(
-             torch.logical_not(causal_mask.unsqueeze(0)), float('-inf')
+            torch.logical_not(causal_mask.unsqueeze(0)), float("-inf")
         )
         if DEBUG_CORE:
-            print("attention_scaled_scores after causal:", attention_scaled_scores, attention_scaled_scores.shape)
+            print(
+                "attention_scaled_scores after causal:",
+                attention_scaled_scores,
+                attention_scaled_scores.shape,
+            )
 
     # Compute max for numerical stability
     max_scores = torch.max(attention_scaled_scores, dim=-1, keepdim=True)[0]
@@ -72,16 +84,18 @@ def attention_forward_core_ref_impl(q, k, v, sm_scale, causal, dropout_p, philox
         print("max_scores:", max_scores, max_scores.shape)
     if causal:
         # Replace -inf in max_scores with zeros to avoid NaN in subtraction
-        max_scores = torch.where(
-            torch.isinf(max_scores), torch.zeros_like(max_scores), max_scores
-        )
+        max_scores = torch.where(torch.isinf(max_scores), torch.zeros_like(max_scores), max_scores)
         if DEBUG:
             print("max_scores if causal:", max_scores, max_scores.shape)
 
     # Shift scores
     attention_shifted_scaled_scores = attention_scaled_scores - max_scores
     if DEBUG_CORE:
-            print("attention_shifted_scaled_scores:", attention_shifted_scaled_scores, attention_shifted_scaled_scores.shape)
+        print(
+            "attention_shifted_scaled_scores:",
+            attention_shifted_scaled_scores,
+            attention_shifted_scaled_scores.shape,
+        )
 
     # Exponentiate
     if use_exp2:
@@ -98,11 +112,9 @@ def attention_forward_core_ref_impl(q, k, v, sm_scale, causal, dropout_p, philox
     if DEBUG_CORE:
         print("sum_exp_scores:", sum_exp_scores, sum_exp_scores.shape)
     if causal:
-        # if sum of exp scores is 0.0 it means scores where -inf, we cannot compute softmax and softmax_lse. Setting to 1 deals with -inf case cleanly 
+        # if sum of exp scores is 0.0 it means scores where -inf, we cannot compute softmax and softmax_lse. Setting to 1 deals with -inf case cleanly
         sum_exp_scores = torch.where(
-        sum_exp_scores == 0,
-        torch.ones_like(sum_exp_scores),
-        sum_exp_scores
+            sum_exp_scores == 0, torch.ones_like(sum_exp_scores), sum_exp_scores
         )
     if DEBUG_CORE:
         print("sum_exp_scores:", sum_exp_scores, sum_exp_scores.shape)
@@ -112,24 +124,29 @@ def attention_forward_core_ref_impl(q, k, v, sm_scale, causal, dropout_p, philox
 
     if DEBUG_CORE:
         print("softmax:", p, p.shape)
-        
+
     # apply dropout if specified
     if dropout_p > 0.0:
-        rand_vals = torch.rand(p.shape, generator=torch.Generator(device=p.device).manual_seed(philox_seed), device=p.device, dtype=p.dtype)
-        dropout_mask, dropout_scale = rand_vals > dropout_p,  (1.0 / (1 - dropout_p))
+        rand_vals = torch.rand(
+            p.shape,
+            generator=torch.Generator(device=p.device).manual_seed(philox_seed),
+            device=p.device,
+            dtype=p.dtype,
+        )
+        dropout_mask, dropout_scale = rand_vals > dropout_p, (1.0 / (1 - dropout_p))
         if DEBUG_CORE:
             print("dropout_scale:", dropout_scale)
             print("dropout_mask:", dropout_mask)
         # Apply dropout mask and scale
-        # Set -1 for dropped positions and 1 for kept positions in exp_scores 
+        # Set -1 for dropped positions and 1 for kept positions in exp_scores
         sd_mask = torch.where(dropout_mask, exp_scores, -exp_scores)
-        p = torch.where(dropout_mask, p , torch.zeros_like(p)) * dropout_scale
+        p = torch.where(dropout_mask, p, torch.zeros_like(p)) * dropout_scale
         if DEBUG_CORE:
             print("softmax after dropout:", p)
             print("sd_mask:", sd_mask)
     else:
         sd_mask = exp_scores
-    
+
     # Compute log-sum-exp
     if use_exp2:
         LN2 = math.log(2)
@@ -157,7 +174,10 @@ def attention_forward_core_ref_impl(q, k, v, sm_scale, causal, dropout_p, philox
 
     return o, softmax_lse, sd_mask
 
-def attention_vanilla_forward_pytorch_ref_impl(q, k, v, sm_scale, causal, layout, dropout_p, philox_seed, philox_offset, alibi_slopes, use_exp2):
+
+def attention_vanilla_forward_pytorch_ref_impl(
+    q, k, v, sm_scale, causal, layout, dropout_p, philox_seed, philox_offset, alibi_slopes, use_exp2
+):
     """Compute reference output and softmax_lse using PyTorch's built-in function"""
 
     # Ensure the layout is 'bhsd'
@@ -228,14 +248,14 @@ def attention_varlen_forward_pytorch_ref_impl(
     cu_seqlens_k,
     max_seqlen_q,
     max_seqlen_k,
-    dropout_p, 
-    philox_seed, 
+    dropout_p,
+    philox_seed,
     philox_offset,
     alibi_slopes,
-    use_exp2
+    use_exp2,
 ):
     # Ensure the layout is 'thd'
-    if layout != 'thd':
+    if layout != "thd":
         raise ValueError(f"Unsupported layout {layout}. Expected 'thd'.")
 
     batch_size = cu_seqlens_q.shape[0] - 1
@@ -248,7 +268,9 @@ def attention_varlen_forward_pytorch_ref_impl(
 
     o = torch.zeros((total_L_q, nheads_q, head_dim), dtype=q.dtype, device=q.device)
     softmax_lse = torch.zeros((total_L_q, nheads_q), dtype=torch.float32, device=q.device)
-    sd_mask = torch.zeros((batch_size, nheads_q, max_seqlen_q, max_seqlen_k), dtype=torch.float32, device=q.device)
+    sd_mask = torch.zeros(
+        (batch_size, nheads_q, max_seqlen_q, max_seqlen_k), dtype=torch.float32, device=q.device
+    )
 
     # Compute group_size for MQA/GQA handling
     group_size = nheads_q // nheads_k
@@ -266,7 +288,9 @@ def attention_varlen_forward_pytorch_ref_impl(
         seqlen_k = end_k - start_k
 
         if DEBUG:
-            print(f"Batch {i} with seqlen_q = {seqlen_q}, seqlen_k = {seqlen_k}, Hq= {nheads_q}, Hk = {nheads_k}")
+            print(
+                f"Batch {i} with seqlen_q = {seqlen_q}, seqlen_k = {seqlen_k}, Hq= {nheads_q}, Hk = {nheads_k}"
+            )
 
         # Extract q_i, k_i, v_i
         q_i = q[start_q:end_q, :, :]  # [L_q_i, nheads_q, head_dim]
@@ -301,7 +325,18 @@ def attention_varlen_forward_pytorch_ref_impl(
             alibi_slopes_i = None
 
         # Call the core attention function for this sequence
-        o_i, softmax_lse_i, sd_mask_i = attention_forward_core_ref_impl(q_i, k_i, v_i, sm_scale, causal, dropout_p, philox_seed, philox_offset, alibi_slopes_i, use_exp2)
+        o_i, softmax_lse_i, sd_mask_i = attention_forward_core_ref_impl(
+            q_i,
+            k_i,
+            v_i,
+            sm_scale,
+            causal,
+            dropout_p,
+            philox_seed,
+            philox_offset,
+            alibi_slopes_i,
+            use_exp2,
+        )
 
         # Reshape outputs back to original dimensions
         if group_size != 1:
@@ -319,7 +354,7 @@ def attention_varlen_forward_pytorch_ref_impl(
         # Convert back to 'thd' layout
         o_i = o_i.permute(1, 0, 2)  # [L_q_i, nheads_q, head_dim]
         softmax_lse_i = softmax_lse_i.permute(1, 0)  # [L_q_i, nheads_q]
-        sd_mask_i = sd_mask_i # [nheads_q, L_q_i, L_k_i]
+        sd_mask_i = sd_mask_i  # [nheads_q, L_q_i, L_k_i]
 
         # Place outputs in pre-allocated tensors
         o[start_q:end_q, :, :] = o_i
@@ -327,7 +362,6 @@ def attention_varlen_forward_pytorch_ref_impl(
         sd_mask[i, :, :seqlen_q, :seqlen_k] = sd_mask_i
 
     return o, softmax_lse, sd_mask
-
 
 
 def attention_forward_pytorch_ref_impl(
@@ -346,15 +380,15 @@ def attention_forward_pytorch_ref_impl(
     dropout_p: float,
     philox_seed: Optional[int],
     philox_offset: Optional[int],
-    use_exp2: bool
+    use_exp2: bool,
 ):
     # compute reference
     if layout == "thd":
         o_ref, softmax_lse_ref, sd_mask_ref = attention_varlen_forward_pytorch_ref_impl(
-            q.clone(), 
-            k.clone(), 
-            v.clone(), 
-            sm_scale, 
+            q.clone(),
+            k.clone(),
+            v.clone(),
+            sm_scale,
             causal,
             layout,
             cu_seqlens_q,
@@ -369,19 +403,20 @@ def attention_forward_pytorch_ref_impl(
         )
     else:
         o_ref, softmax_lse_ref, sd_mask_ref = attention_vanilla_forward_pytorch_ref_impl(
-                                                       q.clone(),
-                                                       k.clone(),
-                                                       v.clone(),
-                                                       sm_scale,
-                                                       causal,
-                                                       layout,
-                                                       dropout_p,
-                                                       philox_seed,
-                                                       philox_offset,
-                                                       alibi_slopes,
-                                                       use_exp2)
+            q.clone(),
+            k.clone(),
+            v.clone(),
+            sm_scale,
+            causal,
+            layout,
+            dropout_p,
+            philox_seed,
+            philox_offset,
+            alibi_slopes,
+            use_exp2,
+        )
 
     # copy back to ouput tensor
     out.copy_(o_ref.to(out.dtype))
-    
+
     return softmax_lse_ref, sd_mask_ref

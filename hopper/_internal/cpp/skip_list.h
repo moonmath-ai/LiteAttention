@@ -46,7 +46,7 @@ namespace flash
                 
                 int const num_heads = get<2>(params.shape_Q);
                 uint64_t const num_q_blocks = cute::ceil_div(get<0>(params.shape_Q), kBlockM);
-                uint64_t const num_k_blocks = cute::ceil_div(get<0>(params.shape_K), kBlockN) + 1;
+                uint64_t const num_k_blocks = cute::ceil_div(get<0>(params.shape_K), kBlockN) + 2;
                 const uint32_t q_i = ((uint32_t)m_block);
                 uint64_t mask_offset = (static_cast<uint64_t>(bidb) * num_heads * num_q_blocks * num_k_blocks) + 
                                        (static_cast<uint64_t>(bidh) * num_q_blocks * num_k_blocks) + 
@@ -177,7 +177,7 @@ namespace flash
             
             int const num_heads = get<2>(params.shape_Q);
             uint64_t const num_q_blocks = cute::ceil_div(get<0>(params.shape_Q), kBlockM);
-            uint64_t const num_k_blocks = cute::ceil_div(get<0>(params.shape_K), kBlockN) + 1;
+            uint64_t const num_k_blocks = cute::ceil_div(get<0>(params.shape_K), kBlockN) + 2;
             const uint32_t q_i = ((uint32_t)m_block);
             uint64_t mask_offset = (static_cast<uint64_t>(bidb) * num_heads * num_q_blocks * num_k_blocks) + 
                                    (static_cast<uint64_t>(bidh) * num_q_blocks * num_k_blocks) + 

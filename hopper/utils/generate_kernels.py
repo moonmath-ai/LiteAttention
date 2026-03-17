@@ -80,7 +80,6 @@ void run_mha_bwd_<86, {DTYPE}, {HEAD_DIM}, {SOFTCAP}>(Flash_bwd_params &params, 
 """
 
 
-
 @dataclass
 class Kernel:
     sm: int
@@ -100,28 +99,39 @@ class Kernel:
                 # Always enable PackGQA for PagedKV or Split to reduce compilation
                 packgqa = self.packgqa or self.paged_kv or self.split
                 return KERNEL_IMPL_TEMPLATE_FWD_SM90.format(
-                    ARCH=str(self.sm), DTYPE=DTYPE_MAP[self.dtype],
-                    HEAD_DIM=self.head_dim, HEAD_DIM_V=self.head_dim_v,
-                    SPLIT=str(self.split).lower(), PAGEDKV=str(self.paged_kv).lower(),
-                    SOFTCAP=str(self.softcap).lower(), PACKGQA=str(packgqa).lower()
+                    ARCH=str(self.sm),
+                    DTYPE=DTYPE_MAP[self.dtype],
+                    HEAD_DIM=self.head_dim,
+                    HEAD_DIM_V=self.head_dim_v,
+                    SPLIT=str(self.split).lower(),
+                    PAGEDKV=str(self.paged_kv).lower(),
+                    SOFTCAP=str(self.softcap).lower(),
+                    PACKGQA=str(packgqa).lower(),
                 )
             else:
                 # Always enable PackGQA for Sm8x to reduce compilation
                 return KERNEL_IMPL_TEMPLATE_FWD_SM8x.format(
-                    DTYPE=DTYPE_MAP[self.dtype], HEAD_DIM=self.head_dim, HEAD_DIM_V=self.head_dim_v,
-                    SPLIT=str(self.split).lower(), PAGEDKV=str(self.paged_kv).lower(),
-                    SOFTCAP=str(self.softcap).lower(), PACKGQA=str(True).lower()
+                    DTYPE=DTYPE_MAP[self.dtype],
+                    HEAD_DIM=self.head_dim,
+                    HEAD_DIM_V=self.head_dim_v,
+                    SPLIT=str(self.split).lower(),
+                    PAGEDKV=str(self.paged_kv).lower(),
+                    SOFTCAP=str(self.softcap).lower(),
+                    PACKGQA=str(True).lower(),
                 )
         elif self.direction == "bwd":
             if self.sm == 90:
                 return KERNEL_IMPL_TEMPLATE_BWD_SM90.format(
-                    ARCH=str(self.sm), DTYPE=DTYPE_MAP[self.dtype], HEAD_DIM=self.head_dim,
-                    SOFTCAP=str(self.softcap).lower()
+                    ARCH=str(self.sm),
+                    DTYPE=DTYPE_MAP[self.dtype],
+                    HEAD_DIM=self.head_dim,
+                    SOFTCAP=str(self.softcap).lower(),
                 )
             else:
                 return KERNEL_IMPL_TEMPLATE_BWD_SM8x.format(
-                    DTYPE=DTYPE_MAP[self.dtype], HEAD_DIM=self.head_dim,
-                    SOFTCAP=str(self.softcap).lower()
+                    DTYPE=DTYPE_MAP[self.dtype],
+                    HEAD_DIM=self.head_dim,
+                    SOFTCAP=str(self.softcap).lower(),
                 )
 
     @property
@@ -130,58 +140,155 @@ class Kernel:
 
 
 def get_all_kernels() -> List[Kernel]:
-    for dtype, head_dim, split, paged_kv, softcap, packgqa, sm in itertools.product(DTYPE_MAP.keys(), HEAD_DIMENSIONS, SPLIT, PAGEDKV, SOFTCAP, PACKGQA, SM):
+    for dtype, head_dim, split, paged_kv, softcap, packgqa, sm in itertools.product(
+        DTYPE_MAP.keys(), HEAD_DIMENSIONS, SPLIT, PAGEDKV, SOFTCAP, PACKGQA, SM
+    ):
         # We always enable PackGQA for Sm8x or PagedKV or Split
-         # so we should just pass in packgqa=False to avoid the `_packgqa` in the filename.
+        # so we should just pass in packgqa=False to avoid the `_packgqa` in the filename.
         if packgqa and (sm < 90 or (sm >= 90 and (paged_kv or split))):
             continue
         if sm >= 90 or dtype in DTYPE_MAP_FWD_SM8x:
-            yield Kernel(sm=sm, dtype=dtype, head_dim=head_dim, head_dim_v=head_dim, split=split, paged_kv=paged_kv, softcap=softcap, packgqa=packgqa, direction="fwd")
+            yield Kernel(
+                sm=sm,
+                dtype=dtype,
+                head_dim=head_dim,
+                head_dim_v=head_dim,
+                split=split,
+                paged_kv=paged_kv,
+                softcap=softcap,
+                packgqa=packgqa,
+                direction="fwd",
+            )
         if sm == 90 and head_dim == 192:
-            yield Kernel(sm=sm, dtype=dtype, head_dim=head_dim, head_dim_v=128, split=split, paged_kv=paged_kv, softcap=softcap, packgqa=packgqa, direction="fwd")
+            yield Kernel(
+                sm=sm,
+                dtype=dtype,
+                head_dim=head_dim,
+                head_dim_v=128,
+                split=split,
+                paged_kv=paged_kv,
+                softcap=softcap,
+                packgqa=packgqa,
+                direction="fwd",
+            )
         if sm == 90 and head_dim == 64 and dtype in ["bf16", "fp16"]:
-            yield Kernel(sm=sm, dtype=dtype, head_dim=head_dim, head_dim_v=256, split=split, paged_kv=paged_kv, softcap=softcap, packgqa=packgqa, direction="fwd")
-            yield Kernel(sm=sm, dtype=dtype, head_dim=head_dim, head_dim_v=512, split=split, paged_kv=paged_kv, softcap=softcap, packgqa=packgqa, direction="fwd")
-    for dtype, head_dim, softcap, sm in itertools.product(DTYPE_MAP_BWD.keys(), HEAD_DIMENSIONS, SOFTCAP, SM):
-        yield Kernel(sm=sm, dtype=dtype, head_dim=head_dim, head_dim_v=head_dim, split=False, paged_kv=False, softcap=softcap, packgqa=False, direction="bwd")
+            yield Kernel(
+                sm=sm,
+                dtype=dtype,
+                head_dim=head_dim,
+                head_dim_v=256,
+                split=split,
+                paged_kv=paged_kv,
+                softcap=softcap,
+                packgqa=packgqa,
+                direction="fwd",
+            )
+            yield Kernel(
+                sm=sm,
+                dtype=dtype,
+                head_dim=head_dim,
+                head_dim_v=512,
+                split=split,
+                paged_kv=paged_kv,
+                softcap=softcap,
+                packgqa=packgqa,
+                direction="fwd",
+            )
+    for dtype, head_dim, softcap, sm in itertools.product(
+        DTYPE_MAP_BWD.keys(), HEAD_DIMENSIONS, SOFTCAP, SM
+    ):
+        yield Kernel(
+            sm=sm,
+            dtype=dtype,
+            head_dim=head_dim,
+            head_dim_v=head_dim,
+            split=False,
+            paged_kv=False,
+            softcap=softcap,
+            packgqa=False,
+            direction="bwd",
+        )
 
 
 def batch_hdim(kernels_all) -> List[KERNEL_BATCH]:
-    for dtype, split, paged_kv, softcap, packgqa, sm in itertools.product(DTYPE_MAP.keys(), SPLIT, PAGEDKV, SOFTCAP, PACKGQA, SM):
+    for dtype, split, paged_kv, softcap, packgqa, sm in itertools.product(
+        DTYPE_MAP.keys(), SPLIT, PAGEDKV, SOFTCAP, PACKGQA, SM
+    ):
         if sm < 90:
             continue
         # Same hdim and hdimv
-        kernels = [k for k in kernels_all if k.direction == "fwd" and k.dtype == dtype and k.split == split and k.paged_kv == paged_kv and k.softcap == softcap and k.packgqa == packgqa and k.sm == sm and k.head_dim == k.head_dim_v]
+        kernels = [
+            k
+            for k in kernels_all
+            if k.direction == "fwd"
+            and k.dtype == dtype
+            and k.split == split
+            and k.paged_kv == paged_kv
+            and k.softcap == softcap
+            and k.packgqa == packgqa
+            and k.sm == sm
+            and k.head_dim == k.head_dim_v
+        ]
         if len(kernels) > 0:
             filename = f"flash_fwd_hdimall_{dtype}{'_paged' if paged_kv else ''}{'_split' if split else ''}{'_softcap' if softcap else ''}{'_packgqa' if packgqa else ''}_sm{sm}.cu"
-            template = "\n".join([f"#include \"{k.filename}\"" for k in kernels])
+            template = "\n".join([f'#include "{k.filename}"' for k in kernels])
             yield KERNEL_BATCH(template, filename)
         # Different hdim and hdimv
-        kernels = [k for k in kernels_all if k.direction == "fwd" and k.dtype == dtype and k.split == split and k.paged_kv == paged_kv and k.softcap == softcap and k.packgqa == packgqa and k.sm == sm and k.head_dim != k.head_dim_v]
+        kernels = [
+            k
+            for k in kernels_all
+            if k.direction == "fwd"
+            and k.dtype == dtype
+            and k.split == split
+            and k.paged_kv == paged_kv
+            and k.softcap == softcap
+            and k.packgqa == packgqa
+            and k.sm == sm
+            and k.head_dim != k.head_dim_v
+        ]
         if len(kernels) > 0:
             filename = f"flash_fwd_hdimdiff_{dtype}{'_paged' if paged_kv else ''}{'_split' if split else ''}{'_softcap' if softcap else ''}{'_packgqa' if packgqa else ''}_sm{sm}.cu"
-            template = "\n".join([f"#include \"{k.filename}\"" for k in kernels])
+            template = "\n".join([f'#include "{k.filename}"' for k in kernels])
             yield KERNEL_BATCH(template, filename)
 
 
 def batch_softcap(kernels_all) -> List[KERNEL_BATCH]:
-    for dtype, head_dim, split, paged_kv, packgqa, sm in itertools.product(DTYPE_MAP.keys(), HEAD_DIMENSIONS, SPLIT, PAGEDKV, PACKGQA, SM):
+    for dtype, head_dim, split, paged_kv, packgqa, sm in itertools.product(
+        DTYPE_MAP.keys(), HEAD_DIMENSIONS, SPLIT, PAGEDKV, PACKGQA, SM
+    ):
         if sm >= 90:
             continue
-        kernels = [k for k in kernels_all if k.direction == "fwd" and k.dtype == dtype and k.head_dim == head_dim and k.split == split and k.paged_kv == paged_kv and k.packgqa == packgqa and k.sm == sm]
+        kernels = [
+            k
+            for k in kernels_all
+            if k.direction == "fwd"
+            and k.dtype == dtype
+            and k.head_dim == head_dim
+            and k.split == split
+            and k.paged_kv == paged_kv
+            and k.packgqa == packgqa
+            and k.sm == sm
+        ]
         if len(kernels) > 0:
             filename = f"flash_fwd_hdim{head_dim}_{dtype}{'_paged' if paged_kv else ''}{'_split' if split else ''}_softcapall{'_packgqa' if packgqa else ''}_sm{sm}.cu"
-            template = "\n".join([f"#include \"{k.filename}\"" for k in kernels])
+            template = "\n".join([f'#include "{k.filename}"' for k in kernels])
             yield KERNEL_BATCH(template, filename)
 
     # Bwd
     for dtype, head_dim, sm in itertools.product(DTYPE_MAP.keys(), HEAD_DIMENSIONS, SM):
         if sm < 90:
             continue
-        kernels = [k for k in kernels_all if k.direction == "bwd" and k.dtype == dtype and k.head_dim == head_dim and k.sm == sm]
+        kernels = [
+            k
+            for k in kernels_all
+            if k.direction == "bwd"
+            and k.dtype == dtype
+            and k.head_dim == head_dim
+            and k.sm == sm
+        ]
         if len(kernels) > 0:
             filename = f"flash_bwd_hdim{head_dim}_{dtype}_softcapall_sm{sm}.cu"
-            template = "\n".join([f"#include \"{k.filename}\"" for k in kernels])
+            template = "\n".join([f'#include "{k.filename}"' for k in kernels])
             yield KERNEL_BATCH(template, filename)
 
 
@@ -216,8 +323,7 @@ if __name__ == "__main__":
         "--output_dir",
         default="instantiations",
         required=False,
-        help="Where to generate the kernels "
-        " will default to the current directory ",
+        help="Where to generate the kernels  will default to the current directory ",
     )
     args = parser.parse_args()
     main(args.output_dir)

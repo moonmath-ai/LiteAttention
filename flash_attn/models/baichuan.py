@@ -1,17 +1,15 @@
 # Copyright (c) 2023, GGGGGGXY, Tri Dao.
 
-import math
 import json
+import math
 import re
-from pathlib import Path
-
 from collections import OrderedDict
+from pathlib import Path
 
 import torch
 import torch.nn.functional as F
-
 from einops import rearrange
-from transformers import GPT2Config, AutoConfig, PretrainedConfig
+from transformers import AutoConfig, GPT2Config, PretrainedConfig
 
 
 def remap_state_dict_hf_baichuan(state_dict, config):
@@ -33,16 +31,13 @@ def remap_state_dict_hf_baichuan(state_dict, config):
     # It's possible that vocab_size is padded to be a multiple of 8, for example.
     pad_vocab_size_multiple = getattr(config, "pad_vocab_size_multiple", 1)
     vocab_size = (
-        math.ceil(word_embeddings.shape[0] / pad_vocab_size_multiple)
-        * pad_vocab_size_multiple
+        math.ceil(word_embeddings.shape[0] / pad_vocab_size_multiple) * pad_vocab_size_multiple
     )
     state_dict["transformer.embeddings.word_embeddings.weight"] = F.pad(
         word_embeddings, (0, 0, 0, vocab_size - word_embeddings.shape[0])
     )
     if getattr(config, "tie_word_embeddings"):
-        state_dict["lm_head.weight"] = state_dict[
-            "transformer.embeddings.word_embeddings.weight"
-        ]
+        state_dict["lm_head.weight"] = state_dict["transformer.embeddings.word_embeddings.weight"]
     else:
         output_embeddings = state_dict.pop("lm_head.weight")
         # Need to recompute vocab_size since Baichuan shards the word embeddings and output embeddings
@@ -78,9 +73,7 @@ def remap_state_dict_hf_baichuan(state_dict, config):
         w1 = state_dict.pop(f"transformer.layers.{l}.mlp.gate_proj.weight")
         w3 = state_dict.pop(f"transformer.layers.{l}.mlp.up_proj.weight")
         # Our ordering is different
-        state_dict[f"transformer.layers.{l}.mlp.fc1.weight"] = torch.cat(
-            [w3, w1], dim=0
-        )
+        state_dict[f"transformer.layers.{l}.mlp.fc1.weight"] = torch.cat([w3, w1], dim=0)
 
     def key_mapping_mlp(key):
         return re.sub(

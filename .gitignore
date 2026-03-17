@@ -23,11 +23,14 @@ var/
 .installed.cfg
 *.egg
 .eggs/
+generated_ck/
 
 # IDE-related
 .idea/
+.vscode/
 
 # Dev
 venv
 .venv
 compile_err.txt
+*.log

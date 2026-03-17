@@ -1,21 +1,28 @@
-from functools import partial
 import math
+from functools import partial
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
 from einops import rearrange, repeat
 
-# from flash_attn.utils.benchmark import benchmark_forward, benchmark_backward, benchmark_combined, benchmark_all, benchmark_fwd_bwd, pytorch_profiler
-from flash_attn.utils.benchmark import benchmark_forward, benchmark_backward, benchmark_combined, benchmark_all, benchmark_fwd_bwd, pytorch_profiler
-from flash_attn.flash_attn_interface import flash_attn_varlen_qkvpacked_func
 # # from flash_attn.triton.fused_attention import attention as attention
 # from flash_attn.flash_attn_triton import flash_attn_qkvpacked_func
 # from flash_attn.flash_attn_triton_og import attention as attention_og
-
 # from triton.ops.flash_attention import attention as attention_triton
+from flash_attn import flash_attn_kvpacked_func, flash_attn_qkvpacked_func
+from flash_attn.flash_attn_interface import flash_attn_varlen_qkvpacked_func
 
-from flash_attn import flash_attn_qkvpacked_func, flash_attn_kvpacked_func
+# from flash_attn.utils.benchmark import benchmark_forward, benchmark_backward, benchmark_combined, benchmark_all, benchmark_fwd_bwd, pytorch_profiler
+from flash_attn.utils.benchmark import (
+    benchmark_all,
+    benchmark_backward,
+    benchmark_combined,
+    benchmark_forward,
+    benchmark_fwd_bwd,
+    pytorch_profiler,
+)
+
 
 def attention_pytorch(qkv, dropout_p=0.0, causal=True):
     """
@@ -27,22 +34,29 @@ def attention_pytorch(qkv, dropout_p=0.0, causal=True):
     """
     batch_size, seqlen, _, nheads, d = qkv.shape
     q, k, v = qkv.unbind(dim=2)
-    q = rearrange(q, 'b t h d -> (b h) t d')
-    k = rearrange(k, 'b s h d -> (b h) d s')
+    q = rearrange(q, "b t h d -> (b h) t d")
+    k = rearrange(k, "b s h d -> (b h) d s")
     softmax_scale = 1.0 / math.sqrt(d)
     # Preallocate attn_weights for `baddbmm`
-    scores = torch.empty(batch_size * nheads, seqlen, seqlen, dtype=qkv.dtype, device=qkv.device)
-    scores = rearrange(torch.baddbmm(scores, q, k, beta=0, alpha=softmax_scale),
-                       '(b h) t s -> b h t s', h=nheads)
+    scores = torch.empty(
+        batch_size * nheads, seqlen, seqlen, dtype=qkv.dtype, device=qkv.device
+    )
+    scores = rearrange(
+        torch.baddbmm(scores, q, k, beta=0, alpha=softmax_scale),
+        "(b h) t s -> b h t s",
+        h=nheads,
+    )
     if causal:
         # "triu_tril_cuda_template" not implemented for 'BFloat16'
         # So we have to construct the mask in float
-        causal_mask = torch.triu(torch.full((seqlen, seqlen), -10000.0, device=scores.device), 1)
+        causal_mask = torch.triu(
+            torch.full((seqlen, seqlen), -10000.0, device=scores.device), 1
+        )
         # TD [2022-09-30]: Adding is faster than masked_fill_ (idk why, just better kernel I guess)
         scores = scores + causal_mask.to(dtype=scores.dtype)
     attention = torch.softmax(scores, dim=-1)
     attention_drop = F.dropout(attention, dropout_p)
-    output = torch.einsum('bhts,bshd->bthd', attention_drop , v)
+    output = torch.einsum("bhts,bshd->bthd", attention_drop, v)
     return output.to(dtype=qkv.dtype)
 
 
@@ -61,20 +75,38 @@ headdim = 128
 dropout_p = 0.0
 causal = True
 dtype = torch.float16
-device = 'cuda'
+device = "cuda"
 
-qkv = torch.randn(batch_size, seqlen, 3, nheads, headdim, device=device, dtype=dtype,
-                  requires_grad=True)
-cu_seqlens = torch.arange(0, (batch_size + 1) * seqlen, step=seqlen, dtype=torch.int32,
-                          device=qkv.device)
+qkv = torch.randn(
+    batch_size,
+    seqlen,
+    3,
+    nheads,
+    headdim,
+    device=device,
+    dtype=dtype,
+    requires_grad=True,
+)
+cu_seqlens = torch.arange(
+    0, (batch_size + 1) * seqlen, step=seqlen, dtype=torch.int32, device=qkv.device
+)
 
-qkv_unpad = rearrange(qkv, 'b s ... -> (b s) ...').detach().requires_grad_(True)
+qkv_unpad = rearrange(qkv, "b s ... -> (b s) ...").detach().requires_grad_(True)
 # benchmark_all(flash_attn_varlen_qkvpacked_func, qkv_unpad,
 #               cu_seqlens, seqlen, dropout_p, causal=causal, repeats=repeats, desc='FlashAttention')
 # pytorch_profiler(flash_attn_varlen_qkvpacked_func, qkv_unpad,
 #                  cu_seqlens, seqlen, dropout_p, causal=causal, backward=True)
-benchmark_forward(flash_attn_qkvpacked_func, qkv, dropout_p, causal=causal, repeats=repeats, desc='Fav2')
-pytorch_profiler(flash_attn_qkvpacked_func, qkv, dropout_p, causal=causal, backward=False)
+benchmark_forward(
+    flash_attn_qkvpacked_func,
+    qkv,
+    dropout_p,
+    causal=causal,
+    repeats=repeats,
+    desc="Fav2",
+)
+pytorch_profiler(
+    flash_attn_qkvpacked_func, qkv, dropout_p, causal=causal, backward=False
+)
 
 # for dropout_p in [0.1, 0.0]:
 #     for causal in [False, True]:
@@ -113,15 +145,18 @@ pytorch_profiler(flash_attn_qkvpacked_func, qkv, dropout_p, causal=causal, backw
 # pytorch_profiler(fftconv_func, u, k, D, backward=True)
 # pytorch_profiler(torch.fft.rfft, u.float())
 
-flops = 4 * batch_size * seqlen ** 2 * nheads * headdim
+flops = 4 * batch_size * seqlen**2 * nheads * headdim
 ideal_a100_time = flops / 312 / 1e9
-print(f"Ideal A100 fwd time: {ideal_a100_time:.3f}ms, bwd time: {ideal_a100_time * 2.5:.3f}ms")
+print(
+    f"Ideal A100 fwd time: {ideal_a100_time:.3f}ms, bwd time: {ideal_a100_time * 2.5:.3f}ms"
+)
 exit(0)
 
 
 def time_fwd_bwd(func, *args, **kwargs):
     time_f, time_b = benchmark_fwd_bwd(func, *args, **kwargs)
     return time_f[1].mean, time_b[1].mean
+
 
 bs_seqlen_vals = [(32, 512), (16, 1024), (8, 2048), (4, 4096), (2, 8192), (1, 16384)]
 causal_vals = [False, True]
@@ -135,21 +170,47 @@ for causal in causal_vals:
     for headdim in headdim_vals:
         for batch_size, seqlen in bs_seqlen_vals:
             nheads = dim // headdim
-            qkv = torch.randn(batch_size, seqlen, 3, nheads, headdim, device=device, dtype=dtype,
-                              requires_grad=True)
-            cu_seqlens = torch.arange(0, (batch_size + 1) * seqlen, step=seqlen, dtype=torch.int32,
-                                    device=qkv.device)
-            qkv_unpad = rearrange(qkv, 'b s ... -> (b s) ...').detach().requires_grad_(True)
+            qkv = torch.randn(
+                batch_size,
+                seqlen,
+                3,
+                nheads,
+                headdim,
+                device=device,
+                dtype=dtype,
+                requires_grad=True,
+            )
+            cu_seqlens = torch.arange(
+                0,
+                (batch_size + 1) * seqlen,
+                step=seqlen,
+                dtype=torch.int32,
+                device=qkv.device,
+            )
+            qkv_unpad = (
+                rearrange(qkv, "b s ... -> (b s) ...").detach().requires_grad_(True)
+            )
             f, b = time_fwd_bwd(
-                flash_attn_varlen_qkvpacked_func, qkv_unpad, cu_seqlens, seqlen, dropout_p,
-                causal=causal, repeats=repeats, verbose=False
+                flash_attn_varlen_qkvpacked_func,
+                qkv_unpad,
+                cu_seqlens,
+                seqlen,
+                dropout_p,
+                causal=causal,
+                repeats=repeats,
+                verbose=False,
             )
             time_f[(causal, headdim, batch_size, seqlen), "Flash"] = f
             time_b[(causal, headdim, batch_size, seqlen), "Flash"] = b
 
             qkv = qkv.detach().requires_grad_(True)
             f, b = time_fwd_bwd(
-                fav2_qkvpacked_func, qkv, dropout_p, causal=causal, repeats=repeats, verbose=False
+                fav2_qkvpacked_func,
+                qkv,
+                dropout_p,
+                causal=causal,
+                repeats=repeats,
+                verbose=False,
             )
             time_f[(causal, headdim, batch_size, seqlen), "Flash2"] = f
             time_b[(causal, headdim, batch_size, seqlen), "Flash2"] = b
@@ -171,10 +232,15 @@ for causal in causal_vals:
             if seqlen <= 8 * 1024:
                 qkv = qkv.detach().requires_grad_(True)
                 f, b = time_fwd_bwd(
-                    attention_pytorch, qkv, dropout_p, causal=causal, repeats=repeats, verbose=False
+                    attention_pytorch,
+                    qkv,
+                    dropout_p,
+                    causal=causal,
+                    repeats=repeats,
+                    verbose=False,
                 )
             else:
-                f, b = float('nan'), float('nan')
+                f, b = float("nan"), float("nan")
             time_f[(causal, headdim, batch_size, seqlen), "Pytorch"] = f
             time_b[(causal, headdim, batch_size, seqlen), "Pytorch"] = b
 
@@ -191,5 +257,6 @@ for causal in causal_vals:
 
 
 import pickle
-with open('flash2_attn_time_h100.plk', 'wb') as fp:
+
+with open("flash2_attn_time_h100.plk", "wb") as fp:
     pickle.dump((time_f, time_b), fp, protocol=pickle.HIGHEST_PROTOCOL)

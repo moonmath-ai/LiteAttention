@@ -7,12 +7,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 from apex.transformer import parallel_state
 from einops import rearrange
+
 from flash_attn.modules.embedding import GPT2Embeddings, ParallelGPT2Embeddings
 
 is_sm8x = torch.cuda.get_device_capability("cuda")[0] >= 8
 
 
-@pytest.mark.parametrize("dtype", [torch.float16] + ([torch.bfloat16] if is_sm8x else []))
+@pytest.mark.parametrize(
+    "dtype", [torch.float16] + ([torch.bfloat16] if is_sm8x else [])
+)
 # @pytest.mark.parametrize('dtype', [torch.bfloat16])
 @pytest.mark.parametrize("world_size", [1, 2, 4, 8])
 # @pytest.mark.parametrize('world_size', [2])
@@ -83,7 +86,9 @@ def test_embedding_parallel(dim, has_pos_emb, sequence_parallel, world_size, dty
     g = torch.randn_like(out_pt)
     out_pt.backward(g)
     out.backward(
-        g[rank * partition_batch_dim : (rank + 1) * partition_batch_dim] if sequence_parallel else g
+        g[rank * partition_batch_dim : (rank + 1) * partition_batch_dim]
+        if sequence_parallel
+        else g
     )
     parallel_state.destroy_model_parallel()
 
