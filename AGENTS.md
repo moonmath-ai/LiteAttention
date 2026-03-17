@@ -9,6 +9,10 @@ Key concepts:
 - **Threshold-based skipping**: Tiles are skipped when their max score is too far below the running max (compared in log2 scale). Threshold must be negative in non-debug mode.
 - **Must-do/must-skip lists**: Force computation or skipping of specific sequence ranges (e.g., text tokens vs video tokens).
 
+## Code Style
+
+- Pre-commit hooks enforce `ruff` formatting. Always run `ruff format .` before committing to avoid hook failures.
+
 ## Build Commands
 
 Requires an H100/H200 GPU, CUDA >= 12.3, and a C++20 compiler.
@@ -16,6 +20,7 @@ Requires an H100/H200 GPU, CUDA >= 12.3, and a C++20 compiler.
 ```bash
 git submodule update --init
 MAX_JOBS=$(nproc) NVCC_THREADS=4 \
+NVCC_THREADS=4 \
 LITE_ATTENTION_DISABLE_BACKWARD=TRUE \
 LITE_ATTENTION_DISABLE_FP16=TRUE \
 LITE_ATTENTION_DISABLE_FP8=TRUE \
@@ -60,6 +65,7 @@ On the remote, build and test:
 ```bash
 cd ~/code/LiteAttention
 MAX_JOBS=$(nproc) NVCC_THREADS=4 \
+NVCC_THREADS=4 \
 LITE_ATTENTION_DISABLE_BACKWARD=TRUE \
 LITE_ATTENTION_DISABLE_FP16=TRUE \
 LITE_ATTENTION_DISABLE_FP8=TRUE \
