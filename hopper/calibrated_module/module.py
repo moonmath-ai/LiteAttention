@@ -145,7 +145,15 @@ class ConfigurableModule:
         """
         cfg = self.config_all
         if isinstance(cfg, ConfigList):
-            return cfg[min(self._config_index, len(cfg) - 1)]
+            if self._config_index >= len(cfg):
+                warnings.warn(
+                    f"{type(self).__name__}: config index {self._config_index} "
+                    f"exceeds ConfigList length {len(cfg)}, clamping to last entry. "
+                    f"This may indicate a missing restart_config() call.",
+                    stacklevel=2,
+                )
+                return cfg[-1]
+            return cfg[self._config_index]
         else:
             return cfg
 
