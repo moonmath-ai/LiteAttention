@@ -90,14 +90,28 @@ def _flash_attn_forward(
     ]
     rotary_cos, rotary_sin = [maybe_contiguous(x) for x in (rotary_cos, rotary_sin)]
     seqlens_rotary = maybe_contiguous(seqlens_rotary)
-    if is_rocm or (hasattr(flash_attn_3_cuda, '__name__') and flash_attn_3_cuda.__name__ == 'flash_attn_2_cuda'):
+    if is_rocm or (
+        hasattr(flash_attn_3_cuda, "__name__")
+        and flash_attn_3_cuda.__name__ == "flash_attn_2_cuda"
+    ):
         out, softmax_lse, *rest = flash_attn_3_cuda.fwd(
-            q=q, k=k, v=v, out_=out,
-            alibi_slopes_=None, p_dropout=0.0, softmax_scale=softmax_scale,
-            is_causal=causal, window_size_left=window_size[0], window_size_right=window_size[1],
-            softcap=softcap, return_softmax=return_softmax_lse, gen_=None,
-            attn_read_list=attn_read_list, attn_write_list=attn_write_list,
-            threshold=thr, reverse_skip_list=reverse_skip_list
+            q=q,
+            k=k,
+            v=v,
+            out_=out,
+            alibi_slopes_=None,
+            p_dropout=0.0,
+            softmax_scale=softmax_scale,
+            is_causal=causal,
+            window_size_left=window_size[0],
+            window_size_right=window_size[1],
+            softcap=softcap,
+            return_softmax=return_softmax_lse,
+            gen_=None,
+            attn_read_list=attn_read_list,
+            attn_write_list=attn_write_list,
+            threshold=thr,
+            reverse_skip_list=reverse_skip_list,
         )
         return out, softmax_lse, *rest
     out, softmax_lse, *rest = flash_attn_3_cuda.fwd(
