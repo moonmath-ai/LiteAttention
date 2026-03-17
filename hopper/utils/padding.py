@@ -18,7 +18,9 @@ def unpad_input(hidden_states, attention_mask, unused_mask=None):
         max_seqlen_in_batch: int
         seqused: (batch), returns the number of tokens selected in attention_mask + unused_mask.
     """
-    all_masks = (attention_mask + unused_mask) if unused_mask is not None else attention_mask
+    all_masks = (
+        (attention_mask + unused_mask) if unused_mask is not None else attention_mask
+    )
     seqlens_in_batch = all_masks.sum(dim=-1, dtype=torch.int32)
     used_seqlens_in_batch = attention_mask.sum(dim=-1, dtype=torch.int32)
     indices = torch.nonzero(all_masks.flatten(), as_tuple=False).flatten()
@@ -48,6 +50,8 @@ def pad_input(hidden_states, indices, batch, seqlen):
         hidden_states: (batch, seqlen, ...)
     """
     dim = hidden_states.shape[1:]
-    output = torch.zeros((batch * seqlen), *dim, device=hidden_states.device, dtype=hidden_states.dtype)
+    output = torch.zeros(
+        (batch * seqlen), *dim, device=hidden_states.device, dtype=hidden_states.dtype
+    )
     output[indices] = hidden_states
     return rearrange(output, "(b s) ... -> b s ...", b=batch)

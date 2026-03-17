@@ -67,6 +67,7 @@ def cosh(x):
 # a Triton implementation of the most used activations
 # See for instance http://arxiv.org/abs/1606.08415 for an overview
 
+
 # ReLU
 @triton.jit
 def relu(x):

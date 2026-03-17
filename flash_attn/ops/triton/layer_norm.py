@@ -7,17 +7,16 @@
 # The models we train have hidden dim up to 8k anyway (e.g. Llama 70B), so this is fine.
 
 import math
-from typing import Optional, List
+from typing import List, Optional
 
 import torch
 import torch.nn.functional as F
-from torch import Tensor
-
 import triton
 import triton.language as tl
+from torch import Tensor
 
-from flash_attn.utils.torch import custom_fwd, custom_bwd
 from flash_attn.utils.library import triton_op
+from flash_attn.utils.torch import custom_bwd, custom_fwd
 
 
 def maybe_contiguous_lastdim(x):
@@ -34,10 +33,15 @@ def triton_autotune_configs():
     # Maximum threads per block is architecture-dependent in theory, but in reality all are 1024
     max_threads_per_block = 1024
     # Default to warp size 32 if not defined by device
-    warp_size = getattr(torch.cuda.get_device_properties(torch.cuda.current_device()), "warp_size", 32)
+    warp_size = getattr(
+        torch.cuda.get_device_properties(torch.cuda.current_device()), "warp_size", 32
+    )
     # Autotune for warp counts which are powers of 2 and do not exceed thread per block limit
-    return [triton.Config({}, num_warps=warp_count) for warp_count in [1, 2, 4, 8, 16, 32]
-            if warp_count * warp_size <= max_threads_per_block]
+    return [
+        triton.Config({}, num_warps=warp_count)
+        for warp_count in [1, 2, 4, 8, 16, 32]
+        if warp_count * warp_size <= max_threads_per_block
+    ]
     # return [triton.Config({}, num_warps=8)]
 
 
@@ -162,7 +166,16 @@ def rms_norm_ref(
 
 @triton.autotune(
     configs=triton_autotune_configs(),
-    key=["N", "HAS_RESIDUAL", "STORE_RESIDUAL_OUT", "IS_RMS_NORM", "HAS_BIAS", "HAS_X1", "HAS_W1", "HAS_B1"],
+    key=[
+        "N",
+        "HAS_RESIDUAL",
+        "STORE_RESIDUAL_OUT",
+        "IS_RMS_NORM",
+        "HAS_BIAS",
+        "HAS_X1",
+        "HAS_W1",
+        "HAS_B1",
+    ],
 )
 # torch compile doesn't like triton.heuristics, so we set these manually when calling the kernel
 # @triton.heuristics({"HAS_BIAS": lambda args: args["B"] is not None})
@@ -304,7 +317,7 @@ def _layer_norm_fwd(
     is_rms_norm: bool = False,
     return_dropout_mask: bool = False,
     out: Optional[Tensor] = None,
-    residual_out: Optional[Tensor] = None
+    residual_out: Optional[Tensor] = None,
 ) -> (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor):
     # Need to wrap to handle the case where residual_out is a alias of x, which makes torch.library
     # and torch.compile unhappy. Also allocate memory for out and residual_out if they are None
@@ -350,8 +363,11 @@ def _layer_norm_fwd(
 
 # [2025-04-28] torch.library.triton_op ignores the schema argument, but here we need the schema
 # since we're returning a tuple of tensors
-@triton_op("flash_attn::layer_norm_fwd_impl", mutates_args={"out", "residual_out"},
-           schema="(Tensor x, Tensor weight, Tensor bias, float eps, Tensor(a!) out, Tensor? residual, Tensor? x1, Tensor? weight1, Tensor? bias1, float dropout_p, Tensor? rowscale, bool zero_centered_weight, bool is_rms_norm, bool return_dropout_mask, Tensor(a!)? residual_out) -> (Tensor y1, Tensor mean, Tensor rstd, Tensor seeds, Tensor dropout_mask, Tensor dropout_mask1)")
+@triton_op(
+    "flash_attn::layer_norm_fwd_impl",
+    mutates_args={"out", "residual_out"},
+    schema="(Tensor x, Tensor weight, Tensor bias, float eps, Tensor(a!) out, Tensor? residual, Tensor? x1, Tensor? weight1, Tensor? bias1, float dropout_p, Tensor? rowscale, bool zero_centered_weight, bool is_rms_norm, bool return_dropout_mask, Tensor(a!)? residual_out) -> (Tensor y1, Tensor mean, Tensor rstd, Tensor seeds, Tensor dropout_mask, Tensor dropout_mask1)",
+)
 def _layer_norm_fwd_impl(
     x: Tensor,
     weight: Tensor,
@@ -367,7 +383,7 @@ def _layer_norm_fwd_impl(
     zero_centered_weight: bool = False,
     is_rms_norm: bool = False,
     return_dropout_mask: bool = False,
-    residual_out: Optional[Tensor] = None
+    residual_out: Optional[Tensor] = None,
 ) -> (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor):
     M, N = x.shape
     assert x.stride(-1) == 1
@@ -694,11 +710,12 @@ def _layer_norm_bwd(
     return dx, dw, db, dresidual_in, dx1, dw1, db1, y
 
 
-
-@triton_op("flash_attn::layer_norm_bwd_impl", mutates_args={},
-           schema="(Tensor dy, Tensor x, Tensor weight, Tensor bias, float eps, Tensor mean, Tensor rstd, Tensor? dresidual, Tensor? dy1, Tensor? weight1, Tensor? bias1, Tensor? seeds, float dropout_p, Tensor? rowscale, bool has_residual, bool has_x1, bool zero_centered_weight, bool is_rms_norm, ScalarType? x_dtype, bool recompute_output) -> (Tensor dx, Tensor dw, Tensor db, Tensor dresidual_in, Tensor dx1, Tensor dw1, Tensor db1, Tensor y)",
-           allow_decomposition=False,  # Don't let torch.compile trace inside
-           )
+@triton_op(
+    "flash_attn::layer_norm_bwd_impl",
+    mutates_args={},
+    schema="(Tensor dy, Tensor x, Tensor weight, Tensor bias, float eps, Tensor mean, Tensor rstd, Tensor? dresidual, Tensor? dy1, Tensor? weight1, Tensor? bias1, Tensor? seeds, float dropout_p, Tensor? rowscale, bool has_residual, bool has_x1, bool zero_centered_weight, bool is_rms_norm, ScalarType? x_dtype, bool recompute_output) -> (Tensor dx, Tensor dw, Tensor db, Tensor dresidual_in, Tensor dx1, Tensor dw1, Tensor db1, Tensor y)",
+    allow_decomposition=False,  # Don't let torch.compile trace inside
+)
 def _layer_norm_bwd_impl(
     dy: Tensor,
     x: Tensor,
@@ -844,7 +861,6 @@ def _layer_norm_bwd_impl(
 
 
 class LayerNormFn(torch.autograd.Function):
-
     @staticmethod
     def forward(
         ctx,
@@ -865,7 +881,7 @@ class LayerNormFn(torch.autograd.Function):
         return_dropout_mask=False,
         out_dtype=None,
         out=None,
-        residual_out=None
+        residual_out=None,
     ):
         x_shape_og = x.shape
         # reshape input data into 2D tensor
@@ -1025,7 +1041,7 @@ def layer_norm_fn(
     return_dropout_mask=False,
     out_dtype=None,
     out=None,
-    residual_out=None
+    residual_out=None,
 ):
     return LayerNormFn.apply(
         x,
@@ -1045,7 +1061,7 @@ def layer_norm_fn(
         return_dropout_mask,
         out_dtype,
         out,
-        residual_out
+        residual_out,
     )
 
 
@@ -1066,7 +1082,7 @@ def rms_norm_fn(
     return_dropout_mask=False,
     out_dtype=None,
     out=None,
-    residual_out=None
+    residual_out=None,
 ):
     return LayerNormFn.apply(
         x,
@@ -1086,14 +1102,20 @@ def rms_norm_fn(
         return_dropout_mask,
         out_dtype,
         out,
-        residual_out
+        residual_out,
     )
 
 
 class RMSNorm(torch.nn.Module):
-
-    def __init__(self, hidden_size, eps=1e-5, dropout_p=0.0, zero_centered_weight=False,
-                 device=None, dtype=None):
+    def __init__(
+        self,
+        hidden_size,
+        eps=1e-5,
+        dropout_p=0.0,
+        zero_centered_weight=False,
+        device=None,
+        dtype=None,
+    ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
         self.eps = eps
@@ -1127,7 +1149,6 @@ class RMSNorm(torch.nn.Module):
 
 
 class LayerNormLinearFn(torch.autograd.Function):
-
     @staticmethod
     @custom_fwd
     def forward(

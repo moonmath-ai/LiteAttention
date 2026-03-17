@@ -6,16 +6,17 @@ import re
 import pytest
 import torch
 from einops import rearrange
+from transformers import GPT2Config, GPT2Tokenizer
+from transformers.models.gpt2.modeling_gpt2 import GPT2LMHeadModel as GPT2LMHeadModelHF
+
 from flash_attn.models.gpt import GPTLMHeadModel, remap_state_dict_hf_gpt2
 from flash_attn.utils.distributed import all_gather_raw
 from flash_attn.utils.pretrained import state_dict_from_pretrained
-from transformers import GPT2Config, GPT2Tokenizer
-from transformers.models.gpt2.modeling_gpt2 import GPT2LMHeadModel as GPT2LMHeadModelHF
 
 
 # @pytest.mark.parametrize('world_size', [1, 2, 4, 8])
 @pytest.mark.parametrize("world_size", [2])
-@pytest.mark.parametrize('rotary', [False, True])
+@pytest.mark.parametrize("rotary", [False, True])
 # @pytest.mark.parametrize("rotary", [False])
 @pytest.mark.parametrize("model_name", ["gpt2"])
 def test_tensor_parallel(model_name, rotary, world_size):
@@ -68,15 +69,17 @@ def test_tensor_parallel(model_name, rotary, world_size):
 
     if not rotary:
         model_ref = GPT2LMHeadModelHF.from_pretrained(model_name).to(device=device)
-        model_hf = GPT2LMHeadModelHF.from_pretrained(model_name).to(device=device, dtype=dtype)
+        model_hf = GPT2LMHeadModelHF.from_pretrained(model_name).to(
+            device=device, dtype=dtype
+        )
         model_ref.eval()
         model_hf.eval()
 
     torch.manual_seed(0)
     tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
-    input_ids = tokenizer("Hello, my dog is cute and ", return_tensors="pt").input_ids.to(
-        device=device
-    )
+    input_ids = tokenizer(
+        "Hello, my dog is cute and ", return_tensors="pt"
+    ).input_ids.to(device=device)
     max_length = 30
     # input_ids = torch.randint(0, 100, (1, 10), dtype=torch.long, device='cuda')
     # max_length = input_ids.shape[1] + 40
@@ -93,8 +96,12 @@ def test_tensor_parallel(model_name, rotary, world_size):
         scores.append(logits)
         sequences.append(scores[-1].argmax(dim=-1))
         for _ in range(input_ids.shape[1] + 1, max_length):
-            cur_input_ids = torch.cat([cur_input_ids, rearrange(sequences[-1], "b -> b 1")], dim=-1)
-            logits, _ = all_gather_raw(model(cur_input_ids).logits[:, -1], process_group)
+            cur_input_ids = torch.cat(
+                [cur_input_ids, rearrange(sequences[-1], "b -> b 1")], dim=-1
+            )
+            logits, _ = all_gather_raw(
+                model(cur_input_ids).logits[:, -1], process_group
+            )
             logits = rearrange(logits, "(n b) d -> b (n d)", b=input_ids.shape[0])[
                 ..., : config.vocab_size
             ]
@@ -160,7 +167,9 @@ def test_tensor_parallel(model_name, rotary, world_size):
     assert torch.allclose(
         torch.stack(out.scores, dim=1), torch.stack(scores, dim=1), rtol=rtol, atol=atol
     )
-    assert torch.equal(torch.stack(out.scores, dim=1), torch.stack(out_cg.scores, dim=1))
+    assert torch.equal(
+        torch.stack(out.scores, dim=1), torch.stack(out_cg.scores, dim=1)
+    )
     if not rotary:
         assert torch.all(out.sequences == out_ref.sequences)
         assert torch.all(out.sequences == out_hf.sequences)

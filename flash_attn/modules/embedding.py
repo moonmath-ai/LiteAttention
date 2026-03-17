@@ -207,9 +207,9 @@ class ParallelGPT2Embeddings(nn.Module):
             else:
                 partition_dim = self.position_embeddings.embedding_dim
                 rank = torch.distributed.get_rank(self.process_group)
-                embeddings[
-                    ..., rank * partition_dim : (rank + 1) * partition_dim
-                ] += position_embeddings
+                embeddings[..., rank * partition_dim : (rank + 1) * partition_dim] += (
+                    position_embeddings
+                )
         if combine_batch_seqlen_dim:
             embeddings = rearrange(embeddings, "b s d -> (b s) d")
         reduce_fn = reduce_scatter if self.sequence_parallel else all_reduce

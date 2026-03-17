@@ -8,12 +8,15 @@ import torch
 import torch.nn.functional as F
 from apex.transformer import parallel_state, tensor_parallel
 from einops import rearrange
+
 from flash_attn.modules.mha import MHA, ParallelMHA
 
 is_sm8x = torch.cuda.get_device_capability("cuda")[0] >= 8
 
 
-@pytest.mark.parametrize("dtype", [torch.float16] + ([torch.bfloat16] if is_sm8x else []))
+@pytest.mark.parametrize(
+    "dtype", [torch.float16] + ([torch.bfloat16] if is_sm8x else [])
+)
 # @pytest.mark.parametrize('dtype', [torch.float16])
 @pytest.mark.parametrize("world_size", [1, 2, 4, 8])
 # @pytest.mark.parametrize('world_size', [2])
@@ -94,13 +97,17 @@ def test_mha_parallel(embed_dim, head_dim, sequence_parallel, world_size, dtype)
             )
         )
         model.out_proj.weight.copy_(
-            model_pt.out_proj.weight[:, rank * partition_dim : (rank + 1) * partition_dim]
+            model_pt.out_proj.weight[
+                :, rank * partition_dim : (rank + 1) * partition_dim
+            ]
         )
         if rank == 0:
             model.out_proj.bias.copy_(model_pt.out_proj.bias)
 
     out = model(x, seqlen=seqlen)
-    out_pt = rearrange(model_pt(rearrange(x_pt, "(b s) d -> b s d", s=seqlen)), "b s d -> (b s) d")
+    out_pt = rearrange(
+        model_pt(rearrange(x_pt, "(b s) d -> b s d", s=seqlen)), "b s d -> (b s) d"
+    )
     partition_batch_dim = batch_size * seqlen // world_size
     assert torch.allclose(
         out,
@@ -113,7 +120,9 @@ def test_mha_parallel(embed_dim, head_dim, sequence_parallel, world_size, dtype)
 
     out_pt.backward(g)
     out.backward(
-        g[rank * partition_batch_dim : (rank + 1) * partition_batch_dim] if sequence_parallel else g
+        g[rank * partition_batch_dim : (rank + 1) * partition_batch_dim]
+        if sequence_parallel
+        else g
     )
     parallel_state.destroy_model_parallel()
 
@@ -150,11 +159,16 @@ def test_mha_parallel(embed_dim, head_dim, sequence_parallel, world_size, dtype)
     )
     assert torch.allclose(
         model.out_proj.weight.grad,
-        model_pt.out_proj.weight.grad[:, rank * partition_dim : (rank + 1) * partition_dim],
+        model_pt.out_proj.weight.grad[
+            :, rank * partition_dim : (rank + 1) * partition_dim
+        ],
         rtol=rtol,
         atol=atol * 10,
     )
     if rank == 0:
         assert torch.allclose(
-            model.out_proj.bias.grad, model_pt.out_proj.bias.grad, rtol=rtol, atol=atol * 5
+            model.out_proj.bias.grad,
+            model_pt.out_proj.bias.grad,
+            rtol=rtol,
+            atol=atol * 5,
         )

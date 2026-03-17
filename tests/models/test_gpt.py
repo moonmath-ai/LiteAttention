@@ -3,23 +3,26 @@ import re
 import pytest
 import torch
 from einops import rearrange
+from transformers import GPT2Config, GPT2Tokenizer
+from transformers.models.gpt2.modeling_gpt2 import GPT2LMHeadModel as GPT2LMHeadModelHF
+
 from flash_attn.models.gpt import (
     GPTLMHeadModel,
+    combine_state_dicts_tp,
     remap_state_dict_hf_gpt2,
     shard_state_dict_tp,
-    combine_state_dicts_tp,
 )
 from flash_attn.utils.generation import InferenceParams
 from flash_attn.utils.pretrained import state_dict_from_pretrained
-from transformers import GPT2Config, GPT2Tokenizer
-from transformers.models.gpt2.modeling_gpt2 import GPT2LMHeadModel as GPT2LMHeadModelHF
 
 
 @pytest.mark.parametrize("model_name", ["gpt2", "gpt2-medium"])
 # @pytest.mark.parametrize('model_name', ["gpt2"])
 def test_gpt2_state_dict(model_name):
     config = GPT2Config.from_pretrained(model_name)
-    pretrained_state_dict = remap_state_dict_hf_gpt2(state_dict_from_pretrained(model_name), config)
+    pretrained_state_dict = remap_state_dict_hf_gpt2(
+        state_dict_from_pretrained(model_name), config
+    )
     model = GPTLMHeadModel(config)
     state_dict = model.state_dict()
     assert state_dict.keys() == pretrained_state_dict.keys()
@@ -50,7 +53,9 @@ def test_gpt2_non_optimized(model_name):
     torch.manual_seed(0)
     batch_size = 4
     max_seqlen = 512
-    seqlens = torch.randint(max_seqlen // 2, max_seqlen + 1, (batch_size,), device="cuda")
+    seqlens = torch.randint(
+        max_seqlen // 2, max_seqlen + 1, (batch_size,), device="cuda"
+    )
     input_ids = torch.randint(
         0, config.vocab_size, (batch_size, max_seqlen), dtype=torch.long, device="cuda"
     )
@@ -62,7 +67,9 @@ def test_gpt2_non_optimized(model_name):
     print(f"Output mean diff: {(out - out_ref).abs().mean().item()}")
     print(f"HF fp16 max diff: {(out_hf - out_ref).abs().max().item()}")
     print(f"HF fp16 mean diff: {(out_hf - out_ref).abs().mean().item()}")
-    assert (out - out_ref).abs().max().item() < 3 * (out_hf - out_ref).abs().max().item()
+    assert (out - out_ref).abs().max().item() < 3 * (
+        out_hf - out_ref
+    ).abs().max().item()
 
     logits = model(input_ids).logits
     logits_hf = model_hf(input_ids).logits
@@ -107,7 +114,9 @@ def test_gpt2_optimized(model_name):
     torch.manual_seed(0)
     batch_size = 4
     max_seqlen = 512
-    seqlens = torch.randint(max_seqlen // 2, max_seqlen + 1, (batch_size,), device="cuda")
+    seqlens = torch.randint(
+        max_seqlen // 2, max_seqlen + 1, (batch_size,), device="cuda"
+    )
     input_ids = torch.randint(
         0, vocab_size_og, (batch_size, max_seqlen), dtype=torch.long, device="cuda"
     )
@@ -119,7 +128,9 @@ def test_gpt2_optimized(model_name):
     print(f"Output mean diff: {(out - out_ref).abs().mean().item()}")
     print(f"HF fp16 max diff: {(out_hf - out_ref).abs().max().item()}")
     print(f"HF fp16 mean diff: {(out_hf - out_ref).abs().mean().item()}")
-    assert (out - out_ref).abs().max().item() < 3 * (out_hf - out_ref).abs().max().item()
+    assert (out - out_ref).abs().max().item() < 3 * (
+        out_hf - out_ref
+    ).abs().max().item()
 
     logits = model(input_ids).logits[..., :vocab_size_og]
     logits_hf = model_hf(input_ids).logits
@@ -176,9 +187,9 @@ def test_gpt2_generation(model_name, rotary, optimized):
 
     torch.manual_seed(0)
     tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
-    input_ids = tokenizer("Hello, my dog is cute and he", return_tensors="pt").input_ids.to(
-        device=device
-    )
+    input_ids = tokenizer(
+        "Hello, my dog is cute and he", return_tensors="pt"
+    ).input_ids.to(device=device)
     max_length = 25
     # input_ids = torch.randint(0, 100, (2, 10), dtype=torch.long, device='cuda')
     # max_length = input_ids.shape[1] + 40
@@ -191,7 +202,9 @@ def test_gpt2_generation(model_name, rotary, optimized):
         scores.append(model(cur_input_ids).logits[:, -1])
         sequences.append(scores[-1].argmax(dim=-1))
         for _ in range(input_ids.shape[1] + 1, max_length):
-            cur_input_ids = torch.cat([cur_input_ids, rearrange(sequences[-1], "b -> b 1")], dim=-1)
+            cur_input_ids = torch.cat(
+                [cur_input_ids, rearrange(sequences[-1], "b -> b 1")], dim=-1
+            )
             scores.append(model(cur_input_ids).logits[:, -1])
             sequences.append(scores[-1].argmax(dim=-1))
     sequences = torch.cat([input_ids, torch.stack(sequences, dim=1)], dim=1)
@@ -216,7 +229,9 @@ def test_gpt2_generation(model_name, rotary, optimized):
             enable_timing=True,
         )
         print(out_cg.sequences)
-        assert torch.equal(torch.stack(out.scores, dim=1), torch.stack(out_cg.scores, dim=1))
+        assert torch.equal(
+            torch.stack(out.scores, dim=1), torch.stack(out_cg.scores, dim=1)
+        )
 
     if not rotary:
         out_hf = model_hf.generate(
@@ -274,7 +289,9 @@ def get_logits(model, input_ids, max_length, teacher_outputs=None, **kwargs):
     return torch.stack(out.scores, dim=1)
 
 
-@pytest.mark.parametrize("seqlen,maxlen", [(10, 20), (30, 150), (3000, 3400), (14000, 15000)])
+@pytest.mark.parametrize(
+    "seqlen,maxlen", [(10, 20), (30, 150), (3000, 3400), (14000, 15000)]
+)
 # @pytest.mark.parametrize('seqlen,maxlen', [(10, 20)])
 @pytest.mark.parametrize("rotary", [None, "interleaved", "contiguous"])
 # @pytest.mark.parametrize('rotary', [None])
@@ -310,7 +327,9 @@ def test_gpt2_generation_cg(model_name, rotary, seqlen, maxlen):
     )
 
     logits = get_logits(model, input_ids, maxlen, teacher_outputs=teacher_outputs)
-    logits_cg = get_logits(model, input_ids, maxlen, teacher_outputs=teacher_outputs, cg=True)
+    logits_cg = get_logits(
+        model, input_ids, maxlen, teacher_outputs=teacher_outputs, cg=True
+    )
     assert torch.equal(logits, logits_cg)
 
     # Try increasing batch size and seqlen, then decrease them to see if it's still correct
@@ -323,7 +342,9 @@ def test_gpt2_generation_cg(model_name, rotary, seqlen, maxlen):
         0, config.vocab_size, (batch_size, maxlen), dtype=torch.long, device=device
     )
     logits = get_logits(model, input_ids, maxlen, teacher_outputs=teacher_outputs)
-    logits_cg = get_logits(model, input_ids, maxlen, teacher_outputs=teacher_outputs, cg=True)
+    logits_cg = get_logits(
+        model, input_ids, maxlen, teacher_outputs=teacher_outputs, cg=True
+    )
     assert torch.equal(logits, logits_cg)
 
     batch_size = 2
@@ -335,7 +356,9 @@ def test_gpt2_generation_cg(model_name, rotary, seqlen, maxlen):
         0, config.vocab_size, (batch_size, maxlen), dtype=torch.long, device=device
     )
     logits = get_logits(model, input_ids, maxlen, teacher_outputs=teacher_outputs)
-    logits_cg = get_logits(model, input_ids, maxlen, teacher_outputs=teacher_outputs, cg=True)
+    logits_cg = get_logits(
+        model, input_ids, maxlen, teacher_outputs=teacher_outputs, cg=True
+    )
     assert torch.equal(logits, logits_cg)
 
 
@@ -355,11 +378,15 @@ def test_gpt2_multiple_token_generation(model_name, optimized):
         config.fused_mlp = True
         config.fused_dropout_add_ln = True
 
-    model = GPTLMHeadModel.from_pretrained(model_name, config, device=device, dtype=dtype)
+    model = GPTLMHeadModel.from_pretrained(
+        model_name, config, device=device, dtype=dtype
+    )
     model.eval()
 
     torch.manual_seed(0)
-    input_ids = torch.randint(0, config.vocab_size, (1, 20), dtype=torch.long, device=device)
+    input_ids = torch.randint(
+        0, config.vocab_size, (1, 20), dtype=torch.long, device=device
+    )
     # Reference logits
     logits_ref = model(input_ids).logits
 
@@ -369,12 +396,16 @@ def test_gpt2_multiple_token_generation(model_name, optimized):
     inference_params.seqlen_offset += 10
     position_ids = torch.arange(10, 14, dtype=torch.long, device=device)
     logits_1014 = model(
-        input_ids[:, 10:14], position_ids=position_ids, inference_params=inference_params
+        input_ids[:, 10:14],
+        position_ids=position_ids,
+        inference_params=inference_params,
     ).logits
     inference_params.seqlen_offset += 4
     position_ids = torch.arange(14, 20, dtype=torch.long, device=device)
     logits_1420 = model(
-        input_ids[:, 14:20], position_ids=position_ids, inference_params=inference_params
+        input_ids[:, 14:20],
+        position_ids=position_ids,
+        inference_params=inference_params,
     ).logits
     logits = torch.cat([logits_10, logits_1014, logits_1420], dim=1)
     print(f"Logits max diff: {(logits - logits_ref).abs().max().item()}")
@@ -409,16 +440,20 @@ def test_gpt2_speculative_decoding(model_name, optimized, cg):
         config_draft.fused_mlp = True
         config_draft.fused_dropout_add_ln = True
 
-    model = GPTLMHeadModel.from_pretrained(model_name, config, device=device, dtype=dtype)
+    model = GPTLMHeadModel.from_pretrained(
+        model_name, config, device=device, dtype=dtype
+    )
     model.eval()
-    model_draft = GPTLMHeadModel.from_pretrained("gpt2", config_draft, device=device, dtype=dtype)
+    model_draft = GPTLMHeadModel.from_pretrained(
+        "gpt2", config_draft, device=device, dtype=dtype
+    )
     model_draft.eval()
 
     torch.manual_seed(0)
     tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
-    input_ids = tokenizer("Hello, my dog is cute and he", return_tensors="pt").input_ids.to(
-        device=device
-    )
+    input_ids = tokenizer(
+        "Hello, my dog is cute and he", return_tensors="pt"
+    ).input_ids.to(device=device)
     max_length = 100
 
     from flash_attn.utils.generation import decode_speculative

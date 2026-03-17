@@ -16,7 +16,14 @@ import shutil
 import pytest
 import torch
 from einops import rearrange
-from flash_attn.models.gpt import GPTLMHeadModel, combine_state_dicts_tp, shard_state_dict_tp
+from transformers import AutoConfig, LlamaConfig, LlamaTokenizer
+from transformers.models.llama.modeling_llama import LlamaForCausalLM
+
+from flash_attn.models.gpt import (
+    GPTLMHeadModel,
+    combine_state_dicts_tp,
+    shard_state_dict_tp,
+)
 from flash_attn.models.llama import (
     config_from_checkpoint,
     inv_remap_state_dict_hf_llama,
@@ -28,15 +35,16 @@ from flash_attn.models.llama import (
 from flash_attn.utils.distributed import all_gather_raw
 from flash_attn.utils.generation import update_graph_cache
 from flash_attn.utils.pretrained import state_dict_from_pretrained
-from transformers import LlamaConfig, LlamaTokenizer
-from transformers.models.llama.modeling_llama import LlamaForCausalLM
-from transformers import AutoConfig
 
 
-def _pretrained_state_dict_from_checkpoint(checkpoint_path, model_name, config, checkpoint_format):
+def _pretrained_state_dict_from_checkpoint(
+    checkpoint_path, model_name, config, checkpoint_format
+):
     if checkpoint_format == "meta":
         ckpt_state_dicts = state_dicts_from_checkpoint(checkpoint_path, model_name)
-        pretrained_state_dicts = [remap_state_dict_meta_llama(s, config) for s in ckpt_state_dicts]
+        pretrained_state_dicts = [
+            remap_state_dict_meta_llama(s, config) for s in ckpt_state_dicts
+        ]
         pretrained_state_dict = combine_state_dicts_tp(pretrained_state_dicts, config)
     else:
         pretrained_state_dict = state_dict_from_pretrained(
@@ -49,12 +57,19 @@ def _pretrained_state_dict_from_checkpoint(checkpoint_path, model_name, config, 
 @pytest.mark.parametrize("model_name", ["7B"])
 def test_llama_state_dict(model_name):
     checkpoint_path = (
-        Path(os.environ.get("CHECKPOINT_DIR", current_dir.parent.parent / "checkpoints")) / "llama"
+        Path(
+            os.environ.get("CHECKPOINT_DIR", current_dir.parent.parent / "checkpoints")
+        )
+        / "llama"
     )
-    config = llama_config_to_gpt2_config(config_from_checkpoint(checkpoint_path, model_name))
+    config = llama_config_to_gpt2_config(
+        config_from_checkpoint(checkpoint_path, model_name)
+    )
     ckpt_state_dicts = state_dicts_from_checkpoint(checkpoint_path, model_name)
     pretrained_state_dict = remap_state_dict_meta_llama(ckpt_state_dicts[0], config)
-    model = GPTLMHeadModel(config, device="meta")  # Without device='meta' init is very slow
+    model = GPTLMHeadModel(
+        config, device="meta"
+    )  # Without device='meta' init is very slow
     state_dict = model.state_dict()
     assert state_dict.keys() == pretrained_state_dict.keys()
     for k in state_dict.keys():
@@ -71,7 +86,9 @@ def test_inv_remap_state_dict_hf_llama(model_name):
     )
     state_dict = state_dict_from_pretrained(model_name)
     # inv_remap_state_dict_hf_llama should be the inverse of remap_state_dict_hf_llama
-    state_dict = {key: val for key, val in state_dict.items() if "rotary_emb.inv_freq" not in key}
+    state_dict = {
+        key: val for key, val in state_dict.items() if "rotary_emb.inv_freq" not in key
+    }
     pretrained_state_dict = remap_state_dict_hf_llama(state_dict, config)
     state_dict_recover = inv_remap_state_dict_hf_llama(pretrained_state_dict, config)
     assert set(state_dict_recover.keys()) == set(state_dict.keys())
@@ -98,7 +115,10 @@ def test_llama_optimized(model_name):
     forward pass in fp16, when compared to the HF forward pass in fp32.
     """
     checkpoint_path = (
-        Path(os.environ.get("CHECKPOINT_DIR", current_dir.parent.parent / "checkpoints")) / "llama"
+        Path(
+            os.environ.get("CHECKPOINT_DIR", current_dir.parent.parent / "checkpoints")
+        )
+        / "llama"
     )
 
     dtype = torch.float16
@@ -108,7 +128,9 @@ def test_llama_optimized(model_name):
             AutoConfig.from_pretrained(model_name, trust_remote_code=True)
         )
     else:
-        config = config_from_checkpoint(checkpoint_path, model_name, checkpoint_format="meta")
+        config = config_from_checkpoint(
+            checkpoint_path, model_name, checkpoint_format="meta"
+        )
         config = llama_config_to_gpt2_config(config)
     config.use_flash_attn = True
     config.fused_bias_fc = True
@@ -131,7 +153,9 @@ def test_llama_optimized(model_name):
     torch.manual_seed(0)
     batch_size = 2
     max_seqlen = 256
-    seqlens = torch.randint(max_seqlen // 2, max_seqlen + 1, (batch_size,), device=device)
+    seqlens = torch.randint(
+        max_seqlen // 2, max_seqlen + 1, (batch_size,), device=device
+    )
     input_ids = torch.randint(
         0, config.vocab_size, (batch_size, max_seqlen), dtype=torch.long, device=device
     )
@@ -167,7 +191,9 @@ def test_llama_optimized(model_name):
     print(f"Output mean diff: {(out - out_ref).abs().mean().item()}")
     print(f"HF fp16 max diff: {(out_hf - out_ref).abs().max().item()}")
     print(f"HF fp16 mean diff: {(out_hf - out_ref).abs().mean().item()}")
-    assert (out - out_ref).abs().max().item() < 3 * (out_hf - out_ref).abs().max().item()
+    assert (out - out_ref).abs().max().item() < 3 * (
+        out_hf - out_ref
+    ).abs().max().item()
 
     print(f"Logits max diff: {(logits - logits_ref).abs().max().item()}")
     print(f"Logits mean diff: {(logits - logits_ref).abs().mean().item()}")
@@ -191,7 +217,10 @@ def test_llama_parallel(model_name, world_size):
     from apex.transformer import parallel_state
 
     checkpoint_path = (
-        Path(os.environ.get("CHECKPOINT_DIR", current_dir.parent.parent / "checkpoints")) / "llama"
+        Path(
+            os.environ.get("CHECKPOINT_DIR", current_dir.parent.parent / "checkpoints")
+        )
+        / "llama"
     )
 
     dtype = torch.float16
@@ -200,7 +229,9 @@ def test_llama_parallel(model_name, world_size):
             AutoConfig.from_pretrained(model_name, trust_remote_code=True)
         )
     else:
-        config = config_from_checkpoint(checkpoint_path, model_name, checkpoint_format="meta")
+        config = config_from_checkpoint(
+            checkpoint_path, model_name, checkpoint_format="meta"
+        )
         config = llama_config_to_gpt2_config(config)
     config.use_flash_attn = True
     config.fused_bias_fc = True
@@ -224,14 +255,20 @@ def test_llama_parallel(model_name, world_size):
         pretrained_state_dict = _pretrained_state_dict_from_checkpoint(
             checkpoint_path, model_name, config, checkpoint_format="meta"
         )
-    model = GPTLMHeadModel(config, process_group=process_group, device=device, dtype=dtype)
-    model.load_state_dict(shard_state_dict_tp(pretrained_state_dict, config, world_size, rank))
+    model = GPTLMHeadModel(
+        config, process_group=process_group, device=device, dtype=dtype
+    )
+    model.load_state_dict(
+        shard_state_dict_tp(pretrained_state_dict, config, world_size, rank)
+    )
     model.eval()
 
     torch.manual_seed(0)
     batch_size = 2
     max_seqlen = 256
-    seqlens = torch.randint(max_seqlen // 2, max_seqlen + 1, (batch_size,), device=device)
+    seqlens = torch.randint(
+        max_seqlen // 2, max_seqlen + 1, (batch_size,), device=device
+    )
     input_ids = torch.randint(
         0, config.vocab_size, (batch_size, max_seqlen), dtype=torch.long, device=device
     )
@@ -248,7 +285,9 @@ def test_llama_parallel(model_name, world_size):
     if rank == 0:
         # Without device_map, the model is loaded on the CPU, which is very slow
         model_ref = LlamaForCausalLM.from_pretrained(
-            model_name if "/" in model_name else Path(checkpoint_path) / f"{model_name}-hf",
+            model_name
+            if "/" in model_name
+            else Path(checkpoint_path) / f"{model_name}-hf",
             device_map="auto",
         )
         model_ref.eval()
@@ -258,7 +297,9 @@ def test_llama_parallel(model_name, world_size):
         del model_ref
 
         model_hf = LlamaForCausalLM.from_pretrained(
-            model_name if "/" in model_name else Path(checkpoint_path) / f"{model_name}-hf",
+            model_name
+            if "/" in model_name
+            else Path(checkpoint_path) / f"{model_name}-hf",
             torch_dtype=dtype,
             device_map="auto",
         )
@@ -272,7 +313,9 @@ def test_llama_parallel(model_name, world_size):
         print(f"Output mean diff: {(out - out_ref).abs().mean().item()}")
         print(f"HF fp16 max diff: {(out_hf - out_ref).abs().max().item()}")
         print(f"HF fp16 mean diff: {(out_hf - out_ref).abs().mean().item()}")
-        assert (out - out_ref).abs().max().item() < 2 * (out_hf - out_ref).abs().max().item()
+        assert (out - out_ref).abs().max().item() < 2 * (
+            out_hf - out_ref
+        ).abs().max().item()
 
         print(f"Logits max diff: {(logits - logits_ref).abs().max().item()}")
         print(f"Logits mean diff: {(logits - logits_ref).abs().mean().item()}")
@@ -288,7 +331,10 @@ def test_llama_parallel(model_name, world_size):
 @pytest.mark.parametrize("checkpoint_format", ["meta", "hf"])
 def test_llama_generation(model_name, checkpoint_format):
     checkpoint_path = (
-        Path(os.environ.get("CHECKPOINT_DIR", current_dir.parent.parent / "checkpoints")) / "llama"
+        Path(
+            os.environ.get("CHECKPOINT_DIR", current_dir.parent.parent / "checkpoints")
+        )
+        / "llama"
     )
 
     dtype = torch.float16
@@ -301,7 +347,9 @@ def test_llama_generation(model_name, checkpoint_format):
     config.fused_dropout_add_ln = True
     config.residual_in_fp32 = True
 
-    tokenizer = LlamaTokenizer.from_pretrained(Path(checkpoint_path) / f"{model_name}-hf")
+    tokenizer = LlamaTokenizer.from_pretrained(
+        Path(checkpoint_path) / f"{model_name}-hf"
+    )
     eos_token_id = tokenizer.eos_token_id
 
     torch.manual_seed(0)
@@ -313,14 +361,19 @@ def test_llama_generation(model_name, checkpoint_format):
     )
 
     model_hf = LlamaForCausalLM.from_pretrained(
-        Path(checkpoint_path) / f"{model_name}-hf", torch_dtype=dtype, device_map={"": device}
+        Path(checkpoint_path) / f"{model_name}-hf",
+        torch_dtype=dtype,
+        device_map={"": device},
     )
     model_hf.eval()
     print("HF fp16")
     torch.cuda.synchronize()
     start = time.time()
     out_hf = model_hf.generate(
-        input_ids=input_ids, max_length=max_length, return_dict_in_generate=True, output_scores=True
+        input_ids=input_ids,
+        max_length=max_length,
+        return_dict_in_generate=True,
+        output_scores=True,
     )
     torch.cuda.synchronize()
     print(f"Prompt processing + decoding time: {(time.time() - start) * 1000:.0f}ms")
@@ -332,7 +385,9 @@ def test_llama_generation(model_name, checkpoint_format):
     )
     model_ref.eval()
     with torch.no_grad():
-        logits_ref = model_ref(out_hf.sequences).logits[:, (seqlen - 1) : -1].to(device=device)
+        logits_ref = (
+            model_ref(out_hf.sequences).logits[:, (seqlen - 1) : -1].to(device=device)
+        )
     del model_ref
 
     pretrained_state_dict = _pretrained_state_dict_from_checkpoint(
@@ -359,7 +414,9 @@ def test_llama_generation(model_name, checkpoint_format):
 
     # Capture graph outside the timing loop
     batch_size, seqlen_og = input_ids.shape
-    model._decoding_cache = update_graph_cache(model, None, batch_size, seqlen_og, max_length)
+    model._decoding_cache = update_graph_cache(
+        model, None, batch_size, seqlen_og, max_length
+    )
     print("With CUDA graph")
     torch.cuda.synchronize()
     start = time.time()
@@ -407,7 +464,10 @@ def test_llama_parallel_generation(model_name, world_size):
     from apex.transformer import parallel_state
 
     checkpoint_path = (
-        Path(os.environ.get("CHECKPOINT_DIR", current_dir.parent.parent / "checkpoints")) / "llama"
+        Path(
+            os.environ.get("CHECKPOINT_DIR", current_dir.parent.parent / "checkpoints")
+        )
+        / "llama"
     )
 
     dtype = torch.float16
@@ -416,7 +476,9 @@ def test_llama_parallel_generation(model_name, world_size):
             AutoConfig.from_pretrained(model_name, trust_remote_code=True)
         )
     else:
-        config = config_from_checkpoint(checkpoint_path, model_name, checkpoint_format="meta")
+        config = config_from_checkpoint(
+            checkpoint_path, model_name, checkpoint_format="meta"
+        )
         config = llama_config_to_gpt2_config(config)
     config.use_flash_attn = True
     config.fused_bias_fc = True
@@ -455,8 +517,12 @@ def test_llama_parallel_generation(model_name, world_size):
         pretrained_state_dict = _pretrained_state_dict_from_checkpoint(
             checkpoint_path, model_name, config, checkpoint_format="meta"
         )
-    model = GPTLMHeadModel(config, process_group=process_group, device=device, dtype=dtype)
-    model.load_state_dict(shard_state_dict_tp(pretrained_state_dict, config, world_size, rank))
+    model = GPTLMHeadModel(
+        config, process_group=process_group, device=device, dtype=dtype
+    )
+    model.load_state_dict(
+        shard_state_dict_tp(pretrained_state_dict, config, world_size, rank)
+    )
     model.eval()
 
     print("Without CUDA graph")
@@ -473,7 +539,9 @@ def test_llama_parallel_generation(model_name, world_size):
 
     # Capture graph outside the timing loop
     batch_size, seqlen_og = input_ids.shape
-    model._decoding_cache = update_graph_cache(model, None, batch_size, seqlen_og, max_length)
+    model._decoding_cache = update_graph_cache(
+        model, None, batch_size, seqlen_og, max_length
+    )
     print("With CUDA graph")
     out_cg = model.generate(
         input_ids=input_ids,
@@ -492,7 +560,9 @@ def test_llama_parallel_generation(model_name, world_size):
     if rank == 0:
         # Without device_map, the model is loaded on the CPU, which is very slow
         model_hf = LlamaForCausalLM.from_pretrained(
-            model_name if "/" in model_name else Path(checkpoint_path) / f"{model_name}-hf",
+            model_name
+            if "/" in model_name
+            else Path(checkpoint_path) / f"{model_name}-hf",
             torch_dtype=dtype,
             device_map="auto",
         )
@@ -508,11 +578,15 @@ def test_llama_parallel_generation(model_name, world_size):
                 output_scores=True,
             )
         torch.cuda.synchronize()
-        print(f"Prompt processing + decoding time: {(time.time() - start) * 1000:.0f}ms")
+        print(
+            f"Prompt processing + decoding time: {(time.time() - start) * 1000:.0f}ms"
+        )
         del model_hf
 
         model_ref = LlamaForCausalLM.from_pretrained(
-            model_name if "/" in model_name else Path(checkpoint_path) / f"{model_name}-hf",
+            model_name
+            if "/" in model_name
+            else Path(checkpoint_path) / f"{model_name}-hf",
             device_map="auto",
         )
         model_ref.eval()
@@ -538,7 +612,10 @@ def test_llama_parallel_uneven_num_heads(world_size):
     from apex.transformer import parallel_state
 
     checkpoint_path = (
-        Path(os.environ.get("CHECKPOINT_DIR", current_dir.parent.parent / "checkpoints")) / "llama"
+        Path(
+            os.environ.get("CHECKPOINT_DIR", current_dir.parent.parent / "checkpoints")
+        )
+        / "llama"
     )
     num_attention_heads = world_size + 1
     model_name = f"teeny-{num_attention_heads}-heads"
@@ -570,22 +647,30 @@ def test_llama_parallel_uneven_num_heads(world_size):
     torch.manual_seed(0)
     batch_size = 2
     max_seqlen = 256
-    seqlens = torch.randint(max_seqlen // 2, max_seqlen + 1, (batch_size,), device=device)
+    seqlens = torch.randint(
+        max_seqlen // 2, max_seqlen + 1, (batch_size,), device=device
+    )
     input_ids = torch.randint(
         0, config.vocab_size, (batch_size, max_seqlen), dtype=torch.long, device=device
     )
 
     # Create a shared test model.
     if rank == 0:
-        LlamaForCausalLM(config=llama_config).save_pretrained(checkpoint_path / f"{model_name}-hf")
+        LlamaForCausalLM(config=llama_config).save_pretrained(
+            checkpoint_path / f"{model_name}-hf"
+        )
     torch.distributed.barrier()
 
     # Run the standard forward pass test.
     pretrained_state_dict = _pretrained_state_dict_from_checkpoint(
         checkpoint_path, model_name, config, checkpoint_format="hf"
     )
-    model = GPTLMHeadModel(config, process_group=process_group, device=device, dtype=dtype)
-    model.load_state_dict(shard_state_dict_tp(pretrained_state_dict, config, world_size, rank))
+    model = GPTLMHeadModel(
+        config, process_group=process_group, device=device, dtype=dtype
+    )
+    model.load_state_dict(
+        shard_state_dict_tp(pretrained_state_dict, config, world_size, rank)
+    )
     model.eval()
 
     # TODO: Avoid duplicate code. Modularize the comparison of two forward pass diffs.
@@ -608,7 +693,9 @@ def test_llama_parallel_uneven_num_heads(world_size):
         del model_ref
 
         model_hf = LlamaForCausalLM.from_pretrained(
-            Path(checkpoint_path) / f"{model_name}-hf", torch_dtype=dtype, device_map={"": device}
+            Path(checkpoint_path) / f"{model_name}-hf",
+            torch_dtype=dtype,
+            device_map={"": device},
         )
         model_hf.eval()
         out_hf = model_hf.model(input_ids).last_hidden_state.to(device=device)
@@ -619,7 +706,9 @@ def test_llama_parallel_uneven_num_heads(world_size):
         print(f"Output mean diff: {(out - out_ref).abs().mean().item()}")
         print(f"HF fp16 max diff: {(out_hf - out_ref).abs().max().item()}")
         print(f"HF fp16 mean diff: {(out_hf - out_ref).abs().mean().item()}")
-        assert (out - out_ref).abs().max().item() < 2 * (out_hf - out_ref).abs().max().item()
+        assert (out - out_ref).abs().max().item() < 2 * (
+            out_hf - out_ref
+        ).abs().max().item()
 
         print(f"Logits max diff: {(logits - logits_ref).abs().max().item()}")
         print(f"Logits mean diff: {(logits - logits_ref).abs().mean().item()}")

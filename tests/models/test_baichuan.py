@@ -3,25 +3,23 @@ import os
 import time
 from pathlib import Path
 
-import torch
 import pytest
-
+import torch
 from einops import rearrange
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
-from transformers import AutoConfig, AutoTokenizer, AutoModelForCausalLM
-
+from flash_attn.models.baichuan import (
+    baichuan_config_to_gpt2_config,
+    remap_state_dict_hf_baichuan,
+)
 from flash_attn.models.gpt import (
     GPTLMHeadModel,
     combine_state_dicts_tp,
     shard_state_dict_tp,
 )
-from flash_attn.models.baichuan import (
-    remap_state_dict_hf_baichuan,
-    baichuan_config_to_gpt2_config,
-)
 from flash_attn.utils.distributed import all_gather_raw
-from flash_attn.utils.pretrained import state_dict_from_pretrained
 from flash_attn.utils.generation import update_graph_cache
+from flash_attn.utils.pretrained import state_dict_from_pretrained
 
 
 @pytest.mark.parametrize(
@@ -40,7 +38,9 @@ def test_baichuan_state_dict(model_name):
     pretrained_state_dict = remap_state_dict_hf_baichuan(
         state_dict_from_pretrained(model_name), config
     )
-    model = GPTLMHeadModel(config, device="meta")  # Without device='meta' init is very slow
+    model = GPTLMHeadModel(
+        config, device="meta"
+    )  # Without device='meta' init is very slow
     state_dict = model.state_dict()
     assert len(state_dict.keys()) == len(pretrained_state_dict.keys())
     assert state_dict.keys() == pretrained_state_dict.keys()
@@ -83,7 +83,9 @@ def test_baichuan_optimized(model_name):
     torch.manual_seed(0)
     batch_size = 2
     max_seqlen = 256
-    seqlens = torch.randint(max_seqlen // 2, max_seqlen + 1, (batch_size,), device=device)
+    seqlens = torch.randint(
+        max_seqlen // 2, max_seqlen + 1, (batch_size,), device=device
+    )
     input_ids = torch.randint(
         0, config.vocab_size, (batch_size, max_seqlen), dtype=torch.long, device=device
     )
@@ -119,7 +121,9 @@ def test_baichuan_optimized(model_name):
     print(f"Output mean diff: {(out - out_ref).abs().mean().item()}")
     print(f"HF fp16 max diff: {(out_hf - out_ref).abs().max().item()}")
     print(f"HF fp16 mean diff: {(out_hf - out_ref).abs().mean().item()}")
-    assert (out - out_ref).abs().max().item() < 3 * (out_hf - out_ref).abs().max().item()
+    assert (out - out_ref).abs().max().item() < 3 * (
+        out_hf - out_ref
+    ).abs().max().item()
 
     print(f"Logits max diff: {(logits - logits_ref).abs().max().item()}")
     print(f"Logits mean diff: {(logits - logits_ref).abs().mean().item()}")
@@ -170,14 +174,20 @@ def test_baichuan_parallel_forward(model_name, world_size):
         state_dict_from_pretrained(model_name), config
     )
 
-    model = GPTLMHeadModel(config, process_group=process_group, device=device, dtype=dtype)
-    model.load_state_dict(shard_state_dict_tp(pretrained_state_dict, config, world_size, rank))
+    model = GPTLMHeadModel(
+        config, process_group=process_group, device=device, dtype=dtype
+    )
+    model.load_state_dict(
+        shard_state_dict_tp(pretrained_state_dict, config, world_size, rank)
+    )
     model.eval()
 
     torch.manual_seed(0)
     batch_size = 2
     max_seqlen = 256
-    seqlens = torch.randint(max_seqlen // 2, max_seqlen + 1, (batch_size,), device=device)
+    seqlens = torch.randint(
+        max_seqlen // 2, max_seqlen + 1, (batch_size,), device=device
+    )
     input_ids = torch.randint(
         0, config.vocab_size, (batch_size, max_seqlen), dtype=torch.long, device=device
     )
@@ -216,7 +226,9 @@ def test_baichuan_parallel_forward(model_name, world_size):
         print(f"Output mean diff: {(out - out_ref).abs().mean().item()}")
         print(f"HF fp16 max diff: {(out_hf - out_ref).abs().max().item()}")
         print(f"HF fp16 mean diff: {(out_hf - out_ref).abs().mean().item()}")
-        assert (out - out_ref).abs().max().item() < 2 * (out_hf - out_ref).abs().max().item()
+        assert (out - out_ref).abs().max().item() < 2 * (
+            out_hf - out_ref
+        ).abs().max().item()
 
         print(f"Logits max diff: {(logits - logits_ref).abs().max().item()}")
         print(f"Logits mean diff: {(logits - logits_ref).abs().mean().item()}")
@@ -276,7 +288,9 @@ def test_baichuan_generation(model_name):
     )
     model_ref.eval()
     with torch.no_grad():
-        logits_ref = model_ref(out_hf.sequences).logits[:, (seqlen - 1) : -1].to(device=device)
+        logits_ref = (
+            model_ref(out_hf.sequences).logits[:, (seqlen - 1) : -1].to(device=device)
+        )
     del model_ref
 
     pretrained_state_dict = remap_state_dict_hf_baichuan(
@@ -304,7 +318,9 @@ def test_baichuan_generation(model_name):
 
     # Capture graph outside the timing loop
     batch_size, seqlen_og = input_ids.shape
-    model._decoding_cache = update_graph_cache(model, None, batch_size, seqlen_og, max_length)
+    model._decoding_cache = update_graph_cache(
+        model, None, batch_size, seqlen_og, max_length
+    )
     print("With CUDA graph")
     torch.cuda.synchronize()
     start = time.time()
@@ -331,8 +347,8 @@ def test_baichuan_generation(model_name):
     hf_error = (logits_hf - logits_ref).abs().max().item()
 
     print(f"HF fp16 logits max diff: {hf_error}")
-    print(f"Logits max diff: {(logits - logits_ref).abs().max().item() }")
-    print(f"Logits CG max diff: {(logits_cg - logits_ref).abs().max().item() }")
+    print(f"Logits max diff: {(logits - logits_ref).abs().max().item()}")
+    print(f"Logits CG max diff: {(logits_cg - logits_ref).abs().max().item()}")
 
     assert (logits_parallel - logits_ref).abs().max().item() < 2 * hf_error
     assert (logits - logits_ref).abs().max().item() < 2 * hf_error
@@ -386,8 +402,12 @@ def test_baichuan_parallel_generation(model_name, world_size):
         state_dict_from_pretrained(model_name), config
     )
 
-    model = GPTLMHeadModel(config, process_group=process_group, device=device, dtype=dtype)
-    model.load_state_dict(shard_state_dict_tp(pretrained_state_dict, config, world_size, rank))
+    model = GPTLMHeadModel(
+        config, process_group=process_group, device=device, dtype=dtype
+    )
+    model.load_state_dict(
+        shard_state_dict_tp(pretrained_state_dict, config, world_size, rank)
+    )
     model.eval()
 
     print("Without CUDA graph")
@@ -404,7 +424,9 @@ def test_baichuan_parallel_generation(model_name, world_size):
 
     # Capture graph outside the timing loop
     batch_size, seqlen_og = input_ids.shape
-    model._decoding_cache = update_graph_cache(model, None, batch_size, seqlen_og, max_length)
+    model._decoding_cache = update_graph_cache(
+        model, None, batch_size, seqlen_og, max_length
+    )
     print("With CUDA graph")
     out_cg = model.generate(
         input_ids=input_ids,
@@ -437,7 +459,9 @@ def test_baichuan_parallel_generation(model_name, world_size):
                 output_scores=True,
             )
         torch.cuda.synchronize()
-        print(f"Prompt processing + decoding time: {(time.time() - start) * 1000:.0f}ms")
+        print(
+            f"Prompt processing + decoding time: {(time.time() - start) * 1000:.0f}ms"
+        )
         del model_hf
 
         model_ref = AutoModelForCausalLM.from_pretrained(
@@ -454,7 +478,7 @@ def test_baichuan_parallel_generation(model_name, world_size):
 
         hf_error = (logits_hf - logits_ref).abs().max().item()
         print(f"HF fp16 logits max diff: {hf_error}")
-        print(f"Logits max diff: {(logits - logits_ref).abs().max().item() }")
-        print(f"Logits CG max diff: {(logits_cg - logits_ref).abs().max().item() }")
+        print(f"Logits max diff: {(logits - logits_ref).abs().max().item()}")
+        print(f"Logits CG max diff: {(logits_cg - logits_ref).abs().max().item()}")
         assert (logits - logits_ref).abs().max().item() < 2 * hf_error
         assert torch.equal(logits_cg, logits)

@@ -1,0 +1,9 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.0
+    hooks:
+      - id: ruff-check
+        alias: ruff-isort
+        name: ruff isort
+        args: [--select, I, --fix]
+      - id: ruff-format
