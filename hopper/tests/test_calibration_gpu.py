@@ -597,3 +597,30 @@ def test_registry_from_model_disabled_steps_exceeds_list(simple_model, tmp_toml)
             assert type(cfg[i]) is LiteAttentionDisabledConfig
         assert type(cfg[5]) is LiteAttentionRunConfig
         assert cfg[5].threshold == -1.0
+
+
+def test_mixed_config_list_toml_round_trip(tmp_toml):
+    """A ConfigList mixing disabled and run configs survives TOML save/load."""
+    original = ConfigList(
+        [
+            LiteAttentionDisabledConfig(),
+            LiteAttentionDisabledConfig(),
+            LiteAttentionRunConfig(threshold=-3.0),
+            LiteAttentionRunConfig(threshold=-7.0),
+        ]
+    )
+    ccd = CalibratedConfigDict({"attn0": original})
+    ccd.save(tmp_toml)
+
+    config_types = [LiteAttentionRunConfig, LiteAttentionDisabledConfig]
+    loaded = CalibratedConfigDict.load(tmp_toml, config_types=config_types)
+
+    result = loaded["attn0"]
+    assert isinstance(result, ConfigList)
+    assert len(result) == 4
+    assert type(result[0]) is LiteAttentionDisabledConfig
+    assert type(result[1]) is LiteAttentionDisabledConfig
+    assert type(result[2]) is LiteAttentionRunConfig
+    assert result[2].threshold == -3.0
+    assert type(result[3]) is LiteAttentionRunConfig
+    assert result[3].threshold == -7.0
