@@ -705,3 +705,163 @@ def test_registry_from_model_negative_disabled_steps_raises(simple_model):
         LiteAttentionRegistry.from_model(
             simple_model, mode="const", threshold=-5.0, disabled_steps=-1
         )
+
+
+# ===========================================================================
+# Skip list buffer state across disabled steps
+# ===========================================================================
+
+
+def _make_attn_with_config(config_list):
+    """Create a LiteAttention module with a given ConfigList via a registry."""
+
+    class _M(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.attn = LiteAttention()
+
+    m = _M()
+    _ = LiteAttentionRegistry.from_model(m, mode="const", threshold=-99.0)
+    m.attn._registry_config = config_list
+    return m.attn
+
+
+def _capture_forward(attn, q, k, v, n_steps):
+    """Run n_steps forward passes, capturing (read_list, write_list) each step.
+
+    Returns a list of (read_data_ptr | None, write_data_ptr | None) tuples.
+    """
+    captured = []
+    orig = attn._get_read_write_lists
+
+    def patched(*args, **kwargs):
+        r, w = orig(*args, **kwargs)
+        captured.append(
+            (
+                r.data_ptr() if r is not None else None,
+                w.data_ptr() if w is not None else None,
+            )
+        )
+        return r, w
+
+    attn._get_read_write_lists = patched
+    try:
+        for _ in range(n_steps):
+            torch.cuda.synchronize()
+            attn(q, k, v)
+            torch.cuda.synchronize()
+    finally:
+        attn._get_read_write_lists = orig
+    return captured
+
+
+def test_skip_list_disabled_first_3_steps(small_qkv):
+    """First 3 steps disabled → skip list not allocated; step 4 gets fresh 'compute all'."""
+    q, k, v = small_qkv
+    cl = ConfigList(
+        [
+            LiteAttentionDisabledConfig(),
+            LiteAttentionDisabledConfig(),
+            LiteAttentionDisabledConfig(),
+            LiteAttentionRunConfig(threshold=-5.0),
+        ]
+    )
+    attn = _make_attn_with_config(cl)
+
+    # Run 3 disabled steps — skip list should never be allocated
+    captured = _capture_forward(attn, q, k, v, 3)
+    for r, w in captured:
+        assert r is None and w is None
+    assert attn._skip_list is None
+
+    # Step 4: first enabled step — skip list gets initialized fresh
+    captured = _capture_forward(attn, q, k, v, 1)
+    assert captured[0][0] is not None  # read_list exists
+    assert attn._skip_list is not None
+    # read_list is buf[0] (phase starts at 0 after init), which is "compute all"
+    assert captured[0][0] == attn._skip_list[0].data_ptr()
+
+
+def test_skip_list_disabled_step_5(small_qkv):
+    """Disabled step 5 → step 6 reads the write_list from step 4."""
+    q, k, v = small_qkv
+    cl = ConfigList(
+        [LiteAttentionRunConfig(threshold=-5.0)] * 5
+        + [LiteAttentionDisabledConfig()]
+        + [LiteAttentionRunConfig(threshold=-5.0)]
+    )
+    attn = _make_attn_with_config(cl)
+
+    captured = _capture_forward(attn, q, k, v, 7)
+
+    # Step 4 (index 4, phase=0): writes to buf[1]
+    step4_write = captured[4][1]
+    # Step 5 (index 5): disabled — both None
+    assert captured[5] == (None, None)
+    # Step 6 (index 6, phase still 1): reads buf[1] = step 4's write
+    step6_read = captured[6][0]
+    assert step6_read == step4_write
+
+
+def test_skip_list_disabled_steps_5_6(small_qkv):
+    """Disabled steps 5-6 → step 7 reads the write_list from step 4."""
+    q, k, v = small_qkv
+    cl = ConfigList(
+        [LiteAttentionRunConfig(threshold=-5.0)] * 5
+        + [LiteAttentionDisabledConfig()] * 2
+        + [LiteAttentionRunConfig(threshold=-5.0)]
+    )
+    attn = _make_attn_with_config(cl)
+
+    captured = _capture_forward(attn, q, k, v, 8)
+
+    step4_write = captured[4][1]
+    assert captured[5] == (None, None)
+    assert captured[6] == (None, None)
+    # Step 7: reads buf[1] = step 4's write (phase frozen at 1)
+    assert captured[7][0] == step4_write
+
+
+def test_skip_list_disabled_steps_5_6_7(small_qkv):
+    """Disabled steps 5-7 → step 8 reads the write_list from step 4."""
+    q, k, v = small_qkv
+    cl = ConfigList(
+        [LiteAttentionRunConfig(threshold=-5.0)] * 5
+        + [LiteAttentionDisabledConfig()] * 3
+        + [LiteAttentionRunConfig(threshold=-5.0)]
+    )
+    attn = _make_attn_with_config(cl)
+
+    captured = _capture_forward(attn, q, k, v, 9)
+
+    step4_write = captured[4][1]
+    for i in [5, 6, 7]:
+        assert captured[i] == (None, None)
+    # Step 8: reads buf[1] = step 4's write (phase frozen at 1)
+    assert captured[8][0] == step4_write
+
+
+def test_skip_list_disabled_steps_5_6_8(small_qkv):
+    """Disabled steps 5,6,8 → step 7 reads step 4's write; step 9 reads step 7's write."""
+    q, k, v = small_qkv
+    cl = ConfigList(
+        [LiteAttentionRunConfig(threshold=-5.0)] * 5  # steps 0-4
+        + [LiteAttentionDisabledConfig()] * 2  # steps 5-6
+        + [LiteAttentionRunConfig(threshold=-5.0)]  # step 7
+        + [LiteAttentionDisabledConfig()]  # step 8
+        + [LiteAttentionRunConfig(threshold=-5.0)]  # step 9
+    )
+    attn = _make_attn_with_config(cl)
+
+    captured = _capture_forward(attn, q, k, v, 10)
+
+    step4_write = captured[4][1]
+    assert captured[5] == (None, None)
+    assert captured[6] == (None, None)
+    # Step 7: reads step 4's write (phase was frozen at 1)
+    assert captured[7][0] == step4_write
+    step7_write = captured[7][1]
+    # Step 8: disabled
+    assert captured[8] == (None, None)
+    # Step 9: reads step 7's write (phase was frozen at 0)
+    assert captured[9][0] == step7_write
