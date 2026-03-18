@@ -22,5 +22,5 @@ jobs:
           git config --global user.email "actions@github.com"
           git config --global user.name "github-actions"
 
-          git remote add hf https://oauth2:${HF_TOKEN}@huggingface.co/MoonMath-ai/liteattention
+          git remote add hf https://oauth2:${HF_TOKEN}@huggingface.co/moonmath/liteattention
           git push hf main --force
