@@ -85,11 +85,27 @@ LiteAttention achieves state-of-the-art speeds while maintaining top-tier visual
 
 ## 🔧 Installation
 
-**Requirements:** Hopper H100/H200 GPU, CUDA >= 12.8, C++ 20, PyTorch 2.2+, Linux.
+**Requirements:** H100/H200 GPU (NVIDIA) or MI300X (AMD), CUDA >= 12.8 or ROCm >= 7.0.0, C++ 20, PyTorch 2.2+, Linux.
+
+<details>
+<summary>Full requirements</summary>
+
+- NVIDIA Hopper H100/H200 GPU **or** AMD MI300X GPU
+- CUDA >= 12.8 **or** ROCm >= 7.0.0
+- CUDA toolkit (NVIDIA) or ROCm toolkit (AMD)
+- C++ 20
+- PyTorch 2.2 and above
+- `packaging` Python package (`pip install packaging`)
+- `ninja` Python package (`pip install ninja`) \*
+- Linux
+
+</details>
 
 LiteAttention requires ninja for fast compilation.
 
-> **Note:** Pre-built wheels for common environments will be added soon to simplify installation.
+> **Note:** Pre-built wheels for common environments will be added soon to simplify installation. NVIDIA and AMD have different supported features; see the [NVIDIA (CUDA) vs AMD (ROCm) support](#nvidia-cuda-vs-amd-rocm-support) section.
+
+### Build from Source (NVIDIA — H100/H200)
 
 ### Using `uv` (Recommended)
 
@@ -125,6 +141,30 @@ git clone https://github.com/moonmath-ai/LiteAttention.git
 cd LiteAttention
 pip install --no-build-isolation .
 ```
+
+If your machine has less than 96GB of RAM and lots of CPU cores, `ninja` might run too many parallel compilation jobs. Limit them with `MAX_JOBS`:
+
+```bash
+MAX_JOBS=4 pip install --no-build-isolation .
+```
+
+### Build from Source (AMD — MI300X)
+
+Ensure your environment has a ROCm-enabled PyTorch (built with `torch.version.hip`), or that the ROCm toolchain (`hipcc`, `ROCM_PATH`, or `HIP_PATH`) is present. The build automatically detects ROCm and uses the Composable Kernel (CK) backend.
+
+```bash
+# Clone the repository (with CK submodule)
+git clone --recurse-submodules https://github.com/moonmath-ai/LiteAttention.git
+cd LiteAttention
+
+# Install ROCm-enabled PyTorch and dependencies
+pip install ninja packaging einops structlog tomli-w
+
+# Build and install LiteAttention (ROCm path auto-detected)
+pip install --no-build-isolation .
+```
+
+The build targets `gfx942` (MI300X) by default. Override with `PYTORCH_ROCM_ARCH` if needed.
 
 ---
 
@@ -257,6 +297,89 @@ registry.save_if_calib()
 ```
 
 To run normally using a fixed static threshold, just initialize with `mode="const"` and `threshold=-10.0`.
+
+---
+
+## 📚 Citation & Acknowledgements
+
+Then update the [WanSelfAttention class'](https://github.com/Wan-Video/Wan2.1/blob/main/wan/modules/model.py#L105) `__init__` function to initialize the lite_attention class
+
+```python
+class WanSelfAttention(nn.Module):
+    def __init__(...):
+      .
+      .
+      .
+      # Initialize LiteAttention if available
+      if LITE_ATTENTION_AVAILABLE:
+          print("Using LiteAttention")
+          self.lite_attention = LiteAttention(enable_skipping=True)
+      else:
+          self.lite_attention = None
+```
+
+Lastly, update the forward function to call the lite_attention instance:
+
+```python
+    def forward(self, x, seq_lens, grid_sizes, freqs):
+      .
+      .
+      .
+      # Apply RoPE to q and k
+      q_rope = rope_apply(q, grid_sizes, freqs)
+      k_rope = rope_apply(k, grid_sizes, freqs)
+
+      # Use LiteAttention if available, otherwise fall back to flash_attention
+      if self.lite_attention is not None:
+          # LiteAttention expects (batch, seq_len, heads, head_dim) format
+          # and returns (batch, seq_len, heads * head_dim) format
+          # Convert to bfloat16 for memory efficiency; FA3 does not support float32
+          q_rope = q_rope.bfloat16()
+          k_rope = k_rope.bfloat16()
+          v = v.bfloat16()
+          x = self.lite_attention(q_rope, k_rope, v)
+          # Convert result back to float32 to maintain consistency with model expectations
+          x = x.float()
+      else:
+          x = flash_attention(
+              q=q_rope,
+              k=k_rope,
+              v=v,
+              k_lens=seq_lens,
+              window_size=self.window_size)
+```
+
+---
+
+## NVIDIA (CUDA) vs AMD (ROCm) support
+
+LiteAttention on **AMD (ROCm)** uses the Composable Kernel (CK) backend and does not support the exact same options as the **NVIDIA (CUDA)** build, which uses the full FlashAttention-3 stack.
+
+| Feature | NVIDIA (CUDA) | AMD (ROCm) |
+|--------|----------------|------------|
+| **dtypes** | fp16, bf16; optionally fp8, int8 (build flags) | fp16, bf16 only |
+| **head_dim** | 64, 96, 128, 192, 256 (depending on build) | 64, 96, 128, 192, 256 |
+| **Skip lists** (read/write, threshold, reverse_skip_list) | ✅ | ✅ |
+| **must_do_list** | ✅ | ❌ Not in HIP API; argument is ignored |
+| **phase** (for reverse_skip_list) | ✅ | ❌ Not passed to HIP kernel |
+| **return_softmax_lse** | ✅ | ⚠️ With skip lists, LSE is not computed by the lite kernel; returned tensor may be undefined |
+| **Dropout** | Supported in API | Passed as 0 in Python; not used |
+| **Varlen / KV-cache / paged KV** | Available in full FA3 API | Only batch fwd used; varlen/kvcache not wired in Python for ROCm |
+
+When writing code that runs on both backends, avoid relying on `must_do_list`, and use `return_softmax_lse=True` only when not using skip lists (or only on CUDA).
+
+---
+
+## 🐛 Debugging
+
+You can see additional debug logs by setting the `LITE_ATTENTION_VERBOSE` environment variable to anything other than "FALSE"
+
+If you want to be able to test thresholds greater than 0, you need to set the `LITE_ATTENTION_DEBUG` environment variable to anything other than "FALSE"
+
+## ⚠️ Limits
+
+* The registry and calibration functionality is experimental and may change.
+* `SeqParallelLiteAttention` has **not been tested** with the calibration registry.
 
 ---
 
