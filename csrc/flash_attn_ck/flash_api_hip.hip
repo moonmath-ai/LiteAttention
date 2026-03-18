@@ -2,7 +2,7 @@
  * Copyright (c) 2024, Tri Dao.
  ******************************************************************************/
 
-#include "flash_common.hpp"
+#include "flash_common_hip.hpp"
 
 std::vector<at::Tensor>
 mha_fwd(at::Tensor &q,                            // batch_size x seqlen_q x num_heads x round_multiple(head_size, 8)

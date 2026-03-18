@@ -7,11 +7,28 @@ import torch.nn as nn
 
 # isort: off
 # We need to import the CUDA kernels after importing torch
-import lite_attention._C  # Registers operators with PyTorch
+import torch.utils.cpp_extension
+
+is_rocm = torch.version.hip is not None
+
+try:
+    import lite_attention._C as _C  # Registers operators with PyTorch
+
+    if is_rocm:
+        flash_attn_3_cuda = _C
+    else:
+        flash_attn_3_cuda = torch.ops.lite_attention
+except ImportError as e:
+    # Fallback: check if _C is already available in lite_attention module (e.g. injected by test script)
+    import sys
+
+    _C = sys.modules["lite_attention"]._C
+    if is_rocm:
+        flash_attn_3_cuda = _C
+    else:
+        flash_attn_3_cuda = torch.ops.lite_attention
 
 # isort: on
-
-flash_attn_3_cuda = torch.ops.lite_attention
 
 
 def maybe_contiguous(x):
@@ -60,6 +77,7 @@ def _flash_attn_forward(
     thr=-3.0,
     reverse_skip_list=False,
     phase=False,
+    return_softmax_lse=False,
 ):
     q, k, k_new, v_new = [maybe_contiguous(x) for x in (q, k, k_new, v_new)]
     v = v.contiguous() if v.stride(-1) != 1 and v.stride(-3) != 1 else v
@@ -72,6 +90,30 @@ def _flash_attn_forward(
     ]
     rotary_cos, rotary_sin = [maybe_contiguous(x) for x in (rotary_cos, rotary_sin)]
     seqlens_rotary = maybe_contiguous(seqlens_rotary)
+    if is_rocm or (
+        hasattr(flash_attn_3_cuda, "__name__")
+        and flash_attn_3_cuda.__name__ == "flash_attn_2_cuda"
+    ):
+        out, softmax_lse, *rest = flash_attn_3_cuda.fwd(
+            q=q,
+            k=k,
+            v=v,
+            out_=out,
+            alibi_slopes_=None,
+            p_dropout=0.0,
+            softmax_scale=softmax_scale,
+            is_causal=causal,
+            window_size_left=window_size[0],
+            window_size_right=window_size[1],
+            softcap=softcap,
+            return_softmax=return_softmax_lse,
+            gen_=None,
+            attn_read_list=attn_read_list,
+            attn_write_list=attn_write_list,
+            threshold=thr,
+            reverse_skip_list=reverse_skip_list,
+        )
+        return out, softmax_lse, *rest
     out, softmax_lse, *rest = flash_attn_3_cuda.fwd(
         q,
         k,
@@ -372,6 +414,7 @@ class FlashAttnFunc(torch.autograd.Function):
             thr=thr,
             reverse_skip_list=reverse_skip_list,
             phase=phase,
+            return_softmax_lse=return_softmax_lse,
         )
         # ctx.save_for_backward(q, k, v, out_padded, softmax_lse)
         ctx.save_for_backward(q, k, v, out, softmax_lse)
