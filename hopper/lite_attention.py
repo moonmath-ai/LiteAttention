@@ -1706,13 +1706,14 @@ class LiteAttentionRegistry(ModuleRegistry):
         filename: str | Path | None = None,
         calib_config: dict | None = None,
         force: bool = False,
+        disabled_steps: int = 0,
     ) -> Self:
         """
         Create a registry from a model and configure all its LiteAttention modules.
 
         Args:
             model: `nn.Module` that contains LiteAttention modules.
-            mode: Configuration mode - 'const', 'load', or 'calib'.
+            mode: Configuration mode - 'const', 'load', 'calib', or 'disable'.
             threshold: Threshold value for mode='const'.
             filename: Path to config file for mode='load' (input) or
                 mode='calib' (output via save_if_calib). Cast to Path internally.
@@ -1722,6 +1723,20 @@ class LiteAttentionRegistry(ModuleRegistry):
             force: If True, override instance-level configs on modules.
                 If False (default), warn when a module has an instance config
                 that will take precedence over the registry config.
+            disabled_steps: Number of leading forward passes to run with
+                skipping disabled (regular attention). For a ConfigList, the
+                first ``disabled_steps`` entries are replaced with disabled
+                configs (if the list is shorter, the last entry is kept as a
+                tail). For a scalar config, creates a ConfigList of
+                ``disabled_steps`` disabled entries followed by the original.
+
+                .. note::
+                    This counts **forward() calls per module**, not denoising
+                    steps. When a guider (e.g. CFG/STG) evaluates the model
+                    multiple times per denoising step, each evaluation
+                    consumes one entry from the ConfigList. For example,
+                    with a 4-pass guider, ``disabled_steps=20`` disables 5
+                    denoising steps (20 / 4).
 
         """
         if filename is not None:
@@ -1748,7 +1763,9 @@ class LiteAttentionRegistry(ModuleRegistry):
                         module_name=name,
                     )
 
-        if mode == "const":
+        if mode == "disable":
+            registry.set_bulk_config(LiteAttentionDisabledConfig())
+        elif mode == "const":
             if threshold is None:
                 warnings.warn(
                     "no 'threshold' specified for mode 'const'. Using default value",
@@ -1781,8 +1798,24 @@ class LiteAttentionRegistry(ModuleRegistry):
             registry.set_bulk_config(LiteAttentionCalibConfig(**calib_config))
         else:
             raise ValueError(
-                f"Unknown mode: {mode!r}. Must be 'const', 'load', or 'calib'."
+                f"Unknown mode: {mode!r}. Must be 'const', 'load', 'calib', or 'disable'."
             )
+
+        if disabled_steps < 0:
+            raise ValueError(
+                f"disabled_steps must be non-negative, got {disabled_steps}"
+            )
+        if disabled_steps > 0 and mode != "disable":
+            disabled_prefix = [LiteAttentionDisabledConfig()] * disabled_steps
+            for module in registry.named_modules.values():
+                cfg = module._registry_config
+                if isinstance(cfg, ConfigList):
+                    remainder = list(cfg)[disabled_steps:]
+                    if not remainder:
+                        remainder = [cfg[-1]]
+                    module._registry_config = ConfigList(disabled_prefix + remainder)
+                else:
+                    module._registry_config = ConfigList(disabled_prefix + [cfg])
 
         return registry
 

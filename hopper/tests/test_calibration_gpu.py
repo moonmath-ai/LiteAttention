@@ -519,6 +519,195 @@ def test_disabled_then_clamped_config(qkv):
 
 
 # ===========================================================================
+# from_model: mode="disable" and disabled_steps
+# ===========================================================================
+
+
+def test_registry_from_model_disable(small_qkv):
+    """mode='disable' produces disabled output on every timestep."""
+    q, k, v = small_qkv
+    model = SimpleModel()
+    registry = LiteAttentionRegistry.from_model(model, mode="disable")
+    for mod in registry.named_modules.values():
+        for _ in range(3):
+            torch.cuda.synchronize()
+            mod(q, k, v)
+            torch.cuda.synchronize()
+        assert len(mod._config_output) == 3
+        for r in mod._config_output:
+            assert type(r) is LiteAttentionDisabledConfig
+
+
+def test_registry_from_model_disable_ignores_disabled_steps(small_qkv):
+    """disabled_steps has no effect when mode='disable' (already fully disabled)."""
+    q, k, v = small_qkv
+    model = SimpleModel()
+    registry = LiteAttentionRegistry.from_model(model, mode="disable", disabled_steps=3)
+    for mod in registry.named_modules.values():
+        for _ in range(5):
+            torch.cuda.synchronize()
+            mod(q, k, v)
+            torch.cuda.synchronize()
+        # All steps disabled — disabled_steps doesn't add extra structure
+        assert len(mod._config_output) == 5
+        for r in mod._config_output:
+            assert type(r) is LiteAttentionDisabledConfig
+
+
+def test_registry_from_model_disabled_steps_with_const(small_qkv):
+    """disabled_steps prepends disabled entries to a scalar const config."""
+    q, k, v = small_qkv
+    model = SimpleModel()
+    registry = LiteAttentionRegistry.from_model(
+        model, mode="const", threshold=-5.0, disabled_steps=2
+    )
+    for mod in registry.named_modules.values():
+        # Steps 0-2: in bounds (2 disabled + 1 const)
+        for _ in range(3):
+            torch.cuda.synchronize()
+            mod(q, k, v)
+            torch.cuda.synchronize()
+
+        # Step 3: clamps beyond the 3-element list
+        with pytest.warns(UserWarning, match="clamping to last entry"):
+            torch.cuda.synchronize()
+            mod(q, k, v)
+            torch.cuda.synchronize()
+
+        out = mod._config_output
+        assert len(out) == 4
+        assert type(out[0]) is LiteAttentionDisabledConfig
+        assert type(out[1]) is LiteAttentionDisabledConfig
+        assert type(out[2]) is LiteAttentionRunConfig
+        assert out[2].threshold == -5.0
+        assert type(out[3]) is LiteAttentionRunConfig
+        assert out[3].threshold == -5.0  # clamped last entry
+
+
+def test_registry_from_model_disabled_steps_with_load(small_qkv, tmp_toml):
+    """disabled_steps replaces the first N entries of a loaded ConfigList."""
+    q, k, v = small_qkv
+    model = SimpleModel()
+    names = list(
+        LiteAttentionRegistry.from_model(
+            model, mode="const", threshold=-1.0
+        ).named_modules.keys()
+    )
+    # Save a 4-step config
+    ccd = CalibratedConfigDict(
+        {
+            name: ConfigList(
+                [LiteAttentionRunConfig(threshold=float(-i)) for i in range(4)]
+            )
+            for name in names
+        }
+    )
+    ccd.save(tmp_toml)
+
+    model2 = SimpleModel()
+    registry2 = LiteAttentionRegistry.from_model(
+        model2, mode="load", filename=tmp_toml, disabled_steps=2
+    )
+    for mod in registry2.named_modules.values():
+        for _ in range(4):
+            torch.cuda.synchronize()
+            mod(q, k, v)
+            torch.cuda.synchronize()
+
+        out = mod._config_output
+        assert len(out) == 4
+        assert type(out[0]) is LiteAttentionDisabledConfig
+        assert type(out[1]) is LiteAttentionDisabledConfig
+        assert type(out[2]) is LiteAttentionRunConfig
+        assert out[2].threshold == -2.0
+        assert type(out[3]) is LiteAttentionRunConfig
+        assert out[3].threshold == -3.0
+
+
+def test_registry_from_model_disabled_steps_exceeds_list(small_qkv, tmp_toml):
+    """When disabled_steps >= list length, last entry is kept as fallback."""
+    q, k, v = small_qkv
+    model = SimpleModel()
+    names = list(
+        LiteAttentionRegistry.from_model(
+            model, mode="const", threshold=-1.0
+        ).named_modules.keys()
+    )
+    # Save a 2-step config
+    ccd = CalibratedConfigDict(
+        {
+            name: ConfigList(
+                [LiteAttentionRunConfig(threshold=float(-i)) for i in range(2)]
+            )
+            for name in names
+        }
+    )
+    ccd.save(tmp_toml)
+
+    model2 = SimpleModel()
+    registry2 = LiteAttentionRegistry.from_model(
+        model2, mode="load", filename=tmp_toml, disabled_steps=5
+    )
+    # ConfigList is 6 elements (5 disabled + 1 fallback)
+    for mod in registry2.named_modules.values():
+        # Steps 0-5: in bounds
+        for _ in range(6):
+            torch.cuda.synchronize()
+            mod(q, k, v)
+            torch.cuda.synchronize()
+
+        # Step 6: clamps beyond the 6-element list
+        with pytest.warns(UserWarning, match="clamping to last entry"):
+            torch.cuda.synchronize()
+            mod(q, k, v)
+            torch.cuda.synchronize()
+
+        out = mod._config_output
+        assert len(out) == 7
+        for i in range(5):
+            assert type(out[i]) is LiteAttentionDisabledConfig
+        # Step 5 onward: fallback to last original entry (threshold=-1.0)
+        assert type(out[5]) is LiteAttentionRunConfig
+        assert out[5].threshold == -1.0
+        assert type(out[6]) is LiteAttentionRunConfig
+        assert out[6].threshold == -1.0
+
+
+def test_mixed_config_list_toml_round_trip(tmp_toml):
+    """A ConfigList mixing disabled and run configs survives TOML save/load."""
+    original = ConfigList(
+        [
+            LiteAttentionDisabledConfig(),
+            LiteAttentionDisabledConfig(),
+            LiteAttentionRunConfig(threshold=-3.0),
+            LiteAttentionRunConfig(threshold=-7.0),
+        ]
+    )
+    ccd = CalibratedConfigDict({"attn0": original})
+    ccd.save(tmp_toml)
+
+    config_types = [LiteAttentionRunConfig, LiteAttentionDisabledConfig]
+    loaded = CalibratedConfigDict.load(tmp_toml, config_types=config_types)
+
+    result = loaded["attn0"]
+    assert isinstance(result, ConfigList)
+    assert len(result) == 4
+    assert type(result[0]) is LiteAttentionDisabledConfig
+    assert type(result[1]) is LiteAttentionDisabledConfig
+    assert type(result[2]) is LiteAttentionRunConfig
+    assert result[2].threshold == -3.0
+    assert type(result[3]) is LiteAttentionRunConfig
+    assert result[3].threshold == -7.0
+
+
+def test_registry_from_model_negative_disabled_steps_raises(simple_model):
+    with pytest.raises(ValueError, match="non-negative"):
+        LiteAttentionRegistry.from_model(
+            simple_model, mode="const", threshold=-5.0, disabled_steps=-1
+        )
+
+
+# ===========================================================================
 # Skip list buffer state across disabled steps
 # ===========================================================================
 
