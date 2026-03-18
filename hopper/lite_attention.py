@@ -860,6 +860,9 @@ class LiteAttention(nn.Module, ConfigurableModule):
         >>> # Force computation for positions [0, 128) and [500, 640) (exclusive end)
         >>> output = lite_attn(q, k, v, must_do_list=[0, 128, 500, 640])
         """
+        # Skipping is disabled both by the legacy self.enable_skipping flag
+        # and by LiteAttentionDisabledConfig (per-timestep config).
+        # TODO: drop self.enable_skipping once all callers use the config path.
         cfg = self.config if self.enable_skipping else None
         enable_skipping = self.enable_skipping and not isinstance(
             cfg, LiteAttentionDisabledConfig
@@ -998,7 +1001,11 @@ class LiteAttention(nn.Module, ConfigurableModule):
             use_int8=self.use_int8,
         )
 
-        # Record calibration results and advance timestep
+        # Record calibration results and advance timestep.
+        # Uses self.enable_skipping (not enable_skipping) intentionally:
+        # the config index must advance even for disabled timesteps.
+        # When self.enable_skipping is False the config path is unused,
+        # so there is nothing to record.
         if self.enable_skipping:
             self.add_calibration_results(
                 LiteAttentionRunConfig(threshold=threshold)
