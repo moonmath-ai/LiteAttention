@@ -159,7 +159,19 @@ class LiteAttentionRunConfig(CalibratedRunConfig):
 
 @dataclass
 class LiteAttentionDisabledConfig(CalibratedRunConfig):
-    """Runtime config that disables skipping for this timestep (regular attention)."""
+    """Runtime config that disables skipping for this timestep (regular attention).
+
+    When a timestep uses this config:
+    - No skip list is read or written (the CUDA kernel runs standard attention).
+    - The double-buffer phase does **not** advance, so the next enabled
+      timestep will read the same write buffer that the *last* enabled
+      timestep produced.  Because skip lists only grow (tiles are never
+      un-skipped), this stale list is still safe — it may just skip fewer
+      tiles than an up-to-date list would.
+    - If all preceding timesteps were also disabled (e.g. the first N steps),
+      the skip list is never allocated; the first enabled timestep triggers a
+      fresh initialization to "compute all tiles".
+    """
 
 
 @dataclass
