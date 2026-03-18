@@ -63,14 +63,7 @@ class ConfigurableModule:
         """
         self._registry_config: CalibratedConfig | ConfigList | None = None
         self._config_index = 0
-        self._warned_messages: set[str] = set()
         self._config_output: ConfigList = ConfigList()
-        if self.run_config_type is None:
-            warnings.warn(
-                f"Module {type(self)} has no run_config_type defined. "
-                "Cannot save calibration results.",
-                stacklevel=2,
-            )
 
     def restart_config(self) -> None:
         if self._config_index == 0:
@@ -138,15 +131,33 @@ class ConfigurableModule:
     @property
     def config(self) -> CalibratedConfig:
         """
-        Get the config for the current timestep.
+        Get the config for the current forward pass.
 
         If config_all is a ConfigList, returns the config at _config_index.
-        If config_all is a single config, returns it directly (same for all timesteps).
+        If config_all is a single config, returns it directly (same for all
+        forward passes).
+
+        The index is advanced by :meth:`add_calibration_results`, which must
+        be called exactly once per ``forward()`` call.  Note that one
+        *denoising step* may trigger multiple ``forward()`` calls when a
+        guider evaluates the model more than once per step.
+
+        Out-of-bounds indices are intentionally clamped to the last entry
+        rather than raising IndexError, so configs with fewer entries than
+        forward passes gracefully repeat the final config.
 
         This is the primary way to access config in forward().
         """
         cfg = self.config_all
         if isinstance(cfg, ConfigList):
+            if self._config_index >= len(cfg):
+                warnings.warn(
+                    f"{type(self).__name__}: config index {self._config_index} "
+                    f"exceeds ConfigList length {len(cfg)}, clamping to last entry. "
+                    f"This may indicate a missing restart_config() call.",
+                    stacklevel=2,
+                )
+                return cfg[-1]
             return cfg[self._config_index]
         else:
             return cfg
@@ -162,15 +173,8 @@ class ConfigurableModule:
 
         """
         self._config_index += 1
-        if self.run_config_type is None:
-            return
         if self._registry is None and isinstance(self.config, CalibratedCalibConfig):
             warnings.warn(
                 "Module has no registry. Cannot save calibration results.", stacklevel=2
-            )
-        if not isinstance(results, self.run_config_type):
-            raise TypeError(
-                f"Results type {type(results)} does not match "
-                f"module run_config_type {self.run_config_type}."
             )
         self._config_output.append(results)
