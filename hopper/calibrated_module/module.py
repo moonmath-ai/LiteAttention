@@ -131,14 +131,20 @@ class ConfigurableModule:
     @property
     def config(self) -> CalibratedConfig:
         """
-        Get the config for the current timestep.
+        Get the config for the current forward pass.
 
         If config_all is a ConfigList, returns the config at _config_index.
-        If config_all is a single config, returns it directly (same for all timesteps).
+        If config_all is a single config, returns it directly (same for all
+        forward passes).
+
+        The index is advanced by :meth:`add_calibration_results`, which must
+        be called exactly once per ``forward()`` call.  Note that one
+        *denoising step* may trigger multiple ``forward()`` calls when a
+        guider evaluates the model more than once per step.
 
         Out-of-bounds indices are intentionally clamped to the last entry
         rather than raising IndexError, so configs with fewer entries than
-        timesteps gracefully repeat the final config.
+        forward passes gracefully repeat the final config.
 
         This is the primary way to access config in forward().
         """

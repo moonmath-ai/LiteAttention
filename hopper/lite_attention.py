@@ -1723,12 +1723,20 @@ class LiteAttentionRegistry(ModuleRegistry):
             force: If True, override instance-level configs on modules.
                 If False (default), warn when a module has an instance config
                 that will take precedence over the registry config.
-            disabled_steps: Number of leading timesteps to run with skipping
-                disabled (regular attention). For a ConfigList, the first
-                ``disabled_steps`` entries are replaced with disabled configs
-                (if the list is shorter, the last entry is kept as a tail).
-                For a scalar config, creates a ConfigList of
+            disabled_steps: Number of leading forward passes to run with
+                skipping disabled (regular attention). For a ConfigList, the
+                first ``disabled_steps`` entries are replaced with disabled
+                configs (if the list is shorter, the last entry is kept as a
+                tail). For a scalar config, creates a ConfigList of
                 ``disabled_steps`` disabled entries followed by the original.
+
+                .. note::
+                    This counts **forward() calls per module**, not denoising
+                    steps. When a guider (e.g. CFG/STG) evaluates the model
+                    multiple times per denoising step, each evaluation
+                    consumes one entry from the ConfigList. For example,
+                    with a 4-pass guider, ``disabled_steps=20`` disables 5
+                    denoising steps (20 / 4).
 
         """
         if filename is not None:
