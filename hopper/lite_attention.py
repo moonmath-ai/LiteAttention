@@ -861,19 +861,17 @@ class LiteAttention(nn.Module, ConfigurableModule):
         >>> output = lite_attn(q, k, v, must_do_list=[0, 128, 500, 640])
         """
         cfg = self.config if self.enable_skipping else None
-        disabled = isinstance(cfg, LiteAttentionDisabledConfig)
-
-        # Use a local variable instead of mutating self.enable_skipping
-        # to stay thread-safe and exception-safe.
-        effective_skipping = self.enable_skipping and not disabled
+        enable_skipping = self.enable_skipping and not isinstance(
+            cfg, LiteAttentionDisabledConfig
+        )
 
         # Get read and write lists (internal mask management)
         read_list, write_list = self._get_read_write_lists(
-            query, key, value, must_skip_list, enable_skipping=effective_skipping
+            query, key, value, must_skip_list, enable_skipping=enable_skipping
         )
 
-        if effective_skipping and must_do_list is not None:
-            # handle must-do list - expand the 1d list to a list per head per batch per qi
+        # handle must-do list - expand the 1d list to a list per head per batch per qi
+        if enable_skipping and must_do_list is not None:
             must_do_list_expanded = self._expand_must_do_list(
                 must_do_list, write_list.shape, query, value, self.use_int8
             )
@@ -892,7 +890,8 @@ class LiteAttention(nn.Module, ConfigurableModule):
             else scale
         )
 
-        if not effective_skipping:
+        # set the threshold
+        if not enable_skipping:
             threshold = 0.0  # unused
         elif isinstance(cfg, LiteAttentionCalibConfig):
             temp_list = read_list.clone()
@@ -982,6 +981,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
         else:
             raise ValueError(f"Unknown config type: {type(cfg)}")
 
+        # calc the output
         output = flash_attn_func(
             q=query,
             k=key,
@@ -1001,14 +1001,14 @@ class LiteAttention(nn.Module, ConfigurableModule):
         # Record calibration results and advance timestep
         if self.enable_skipping:
             self.add_calibration_results(
-                LiteAttentionDisabledConfig()
-                if disabled
-                else LiteAttentionRunConfig(threshold=threshold)
+                LiteAttentionRunConfig(threshold=threshold)
+                if isinstance(cfg, LiteAttentionCalibConfig)
+                else cfg
             )
 
         # Calculate and store statistics if enabled
         if (
-            effective_skipping
+            read_list is not None
             and os.getenv("LITE_ATTENTION_VERBOSE", "FALSE") != "FALSE"
         ):
             real_batch_size = query.shape[0]
