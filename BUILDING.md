@@ -5,6 +5,14 @@ After cloning, initialize the submodules:
 git submodule update --init
 ```
 
+### ccache + nvcc conflict
+
+If ccache is installed, PyTorch's `cpp_extension` wraps the host compiler as `"ccache gcc"`, but nvcc's `-ccbin` treats it as a single binary path and fails with `"No such file or directory"`. Fix by pointing `CC` at ccache's compiler symlink so the path has no spaces:
+```bash
+CC=/usr/lib/ccache/gcc CXX=/usr/lib/ccache/g++ CUDA_HOME=/usr/local/cuda-12.8 ... uv sync --frozen
+```
+This preserves ccache acceleration. If ccache symlinks aren't available at that path, check `which ccache` or fall back to `CC=gcc` (disables caching).
+
 # Building and Testing
 
 Build the project and create a virtual environment that includes it:

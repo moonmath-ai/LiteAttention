@@ -36,6 +36,12 @@ CUDA_HOME=/usr/local/cuda-12.8 CXX=g++ uv sync --extra dev
 
 Full build is very slow — the disable flags above skip unused kernel variants. Build isolation is disabled (`no-build-isolation-package` in pyproject.toml) so the extension links against the venv's PyTorch.
 
+If ccache is installed: PyTorch's `cpp_extension` wraps the host compiler as `"ccache gcc"`, but nvcc's `-ccbin` treats it as a single binary path and fails with `"No such file or directory"`. Fix by pointing `CC` at ccache's compiler symlink so the path has no spaces:
+```bash
+CC=/usr/lib/ccache/gcc CXX=/usr/lib/ccache/g++ CUDA_HOME=/usr/local/cuda-12.8 ... uv sync --frozen
+```
+This preserves ccache acceleration. If ccache symlinks aren't available at that path, check `which ccache` or fall back to `CC=gcc` (disables caching).
+
 Stale `.so` files in `hopper/` can shadow the installed package — clean before rebuilding: `rm -rf build hopper/*.so`
 
 See `BUILDING.md` for all optional flags, alternative methods (pip, setup.py, two-step uv), and consuming-project setup.
