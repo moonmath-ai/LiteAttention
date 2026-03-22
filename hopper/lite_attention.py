@@ -1396,6 +1396,7 @@ class SeqParallelLiteAttention:
                 threshold=threshold,
                 max_batch_size=max_batch_size,
                 use_int8=use_int8,
+                config=config,
             )
             for _ in range(num_nodes)
         ]
