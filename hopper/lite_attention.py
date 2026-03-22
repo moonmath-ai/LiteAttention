@@ -280,6 +280,13 @@ class LiteAttention(nn.Module, ConfigurableModule):
         self._rocm_needs_extra_warmup = False
 
         # Public configuration
+        if not enable_skipping:
+            warnings.warn(
+                "LiteAttention(enable_skipping=False) is deprecated. "
+                "Use LiteAttentionDisabledConfig to disable skipping per-timestep instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         self.enable_skipping = enable_skipping
         self.max_batch_size = max_batch_size
 
@@ -929,8 +936,8 @@ class LiteAttention(nn.Module, ConfigurableModule):
         >>> output = lite_attn(q, k, v, must_do_list=[0, 128, 500, 640])
         """
         # Skipping is disabled both by the legacy self.enable_skipping flag
-        # and by LiteAttentionDisabledConfig (per-timestep config).
-        # TODO: drop self.enable_skipping once all callers use the config path.
+        # (deprecated — emits DeprecationWarning) and by
+        # LiteAttentionDisabledConfig (per-timestep config).
         cfg = self.config if self.enable_skipping else None
         enable_skipping = self.enable_skipping and not isinstance(
             cfg, LiteAttentionDisabledConfig
@@ -1328,7 +1335,17 @@ class LiteAttention(nn.Module, ConfigurableModule):
         >>> output1 = lite_attn(q, k, v)  # With skipping
         >>> lite_attn.enable_skip_optimization(False)
         >>> output2 = lite_attn(q, k, v)  # Without skipping
+
+        .. deprecated::
+            Use :class:`LiteAttentionDisabledConfig` to disable skipping
+            per-timestep instead.
         """
+        warnings.warn(
+            "enable_skip_optimization() is deprecated. "
+            "Use LiteAttentionDisabledConfig to disable skipping per-timestep instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.enable_skipping = enable
         # Note: Skip state is preserved to allow toggling without reinitialization
 
