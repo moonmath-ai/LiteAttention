@@ -15,6 +15,12 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Install git-xet
+        run: |
+          curl -fsSL https://gitxet.com/install.sh | bash
+          git xet install
+          git lfs install
+
       - name: Push to Hugging Face
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
