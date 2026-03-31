@@ -105,7 +105,7 @@ class LiteAttentionAMD(nn.Module):
         Returns:
             Attention output tensor.
         """
-        from aiter.ops.mha import mha_fwd
+        from lite_attention._C import lite_attn_fwd
 
         B, S_q, H, D = query.shape
         S_k = key.shape[1]
@@ -116,11 +116,9 @@ class LiteAttentionAMD(nn.Module):
             scale = self._scale
 
         if not self.enable_skipping:
-            out, _, _, _ = mha_fwd(
+            out, _ = lite_attn_fwd(
                 query.contiguous(), key.contiguous(), value.contiguous(),
-                dropout_p=0.0, softmax_scale=scale,
-                is_causal=False, window_size_left=-1, window_size_right=-1,
-                sink_size=0, return_softmax_lse=False, return_dropout_randval=False,
+                softmax_scale=scale, is_causal=False,
             )
             return out.view(B, S_q, H * D) if flatten_heads else out
 
@@ -129,11 +127,9 @@ class LiteAttentionAMD(nn.Module):
         skip_read = self._skip_lists[self._phase]
         skip_write = self._skip_lists[1 - self._phase]
 
-        out, _, _, _ = mha_fwd(
+        out, _ = lite_attn_fwd(
             query.contiguous(), key.contiguous(), value.contiguous(),
-            dropout_p=0.0, softmax_scale=scale,
-            is_causal=False, window_size_left=-1, window_size_right=-1,
-            sink_size=0, return_softmax_lse=False, return_dropout_randval=False,
+            softmax_scale=scale, is_causal=False,
             skip_read=skip_read, skip_write=skip_write,
             skip_threshold=self.threshold,
             skip_reverse_list=self.reverse_skip_list,
@@ -210,7 +206,11 @@ def patch_model(model: nn.Module, threshold: float = -5.0, attr: str = "attn_op"
             lite = lite.to(next(mod.parameters()).device)
 
             def make_fn(lite_mod):
+                _call_count = [0]
                 def fn(q, k, v, flatten_heads=True, **kwargs):
+                    if _call_count[0] < 3:
+                        print(f"[LiteAttn] call={_call_count[0]} q={tuple(q.shape)} k={tuple(k.shape)}", flush=True)
+                    _call_count[0] += 1
                     return lite_mod(q, k, v, flatten_heads=flatten_heads)
                 fn.set_context_parallel_group = lambda *a, **kw: None
                 return fn

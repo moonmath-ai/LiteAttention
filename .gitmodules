@@ -2,3 +2,7 @@
 	path = aiter
 	url = git@github.com:moonmath-ai/aiter.git
 	branch = lite_attn
+[submodule "csrc/composable_kernel"]
+	path = csrc/composable_kernel
+	url = git@github.com:moonmath-ai/composable_kernel.git
+	branch = lite_attn_async
