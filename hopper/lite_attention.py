@@ -185,8 +185,9 @@ class LiteAttention(nn.Module, ConfigurableModule):
         enable_skipping (bool, optional): Whether to enable skip list optimizations.
             Defaults to True. When False, performs standard Flash Attention.
         threshold (float, optional): Log-space threshold for skipping tiles. Defaults to -10.0.
-            Tiles with max(log-attention-score) < threshold will be skipped.
-            Must be negative in non-debug mode. Lower values = more aggressive skipping.
+            Keep rule is (tile_max - running_max) > threshold.
+            Must be negative in non-debug mode. For negative thresholds,
+            values closer to 0 are stricter and usually increase skipping.
         max_batch_size (int, optional): Maximum batch size to pre-allocate memory for.
             Defaults to 2. Actual batch size can be smaller but not larger.
         reverse_skip_list (bool, optional): Whether to use reversed skip list format.
@@ -1239,7 +1240,8 @@ class LiteAttention(nn.Module, ConfigurableModule):
         Args:
             threshold (float): Threshold value in log-space. Must be negative
                 unless LITE_ATTENTION_DEBUG environment variable is set.
-                Lower values = more aggressive skipping = faster but less accurate.
+                Values closer to 0 are stricter and usually increase skipping
+                = faster but less accurate.
                 Typical values: -5.0 to -15.0
 
         Raises:

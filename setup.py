@@ -446,9 +446,8 @@ exe_extension = sysconfig.get_config_var("EXE")
 cmdclass = {}
 ext_modules = []
 
-# We want this even if SKIP_CUDA_BUILD because when we run python setup.py sdist we want the .hpp
-# files included in the source distribution, in case the user compiles from source.
-subprocess.run(["git", "submodule", "update", "--init", "csrc/cutlass"])
+if not SKIP_CUDA_BUILD:
+    subprocess.run(["git", "submodule", "update", "--init", "csrc/cutlass"])
 
 
 # Prefer ROCm path when torch has HIP, or when ROCm toolchain is present (e.g. on AMD machine
@@ -462,14 +461,26 @@ def _rocm_toolchain_present():
 is_rocm = (torch.version.hip is not None) or _rocm_toolchain_present()
 
 if is_rocm:
-    print("\n\nBuilding for AMD ROCm...\n\n")
+    # AMD / ROCm: Python-only install. CK kernels are JIT-compiled by aiter at runtime.
+    # Requires: pip install -e ./aiter --no-build-isolation
+    print("\n\nAMD ROCm detected: installing Python-only package (CK kernels via aiter JIT)\n\n")
 
+if False and os.environ.get("_DEAD_ROCM_BUILD") == "1":
+    # Legacy ROCm CK build path — kept for reference, not used.
     os.environ["PYTORCH_ROCM_ARCH"] = "gfx942"
     os.environ["TORCH_ROCM_ARCH_LIST"] = "gfx942"
     os.environ["ROCM_ARCH"] = "gfx942"
 
-    # Head dims to generate for ROCm (same set as typical NVIDIA build for parity)
-    ROCM_HDIMS = [64, 96, 128, 192, 256]
+    # Head dims to generate for ROCm, honoring the same disable flags used for source selection.
+    ROCM_HDIMS = (
+        ([] if DISABLE_HDIM64 else [64])
+        + ([] if DISABLE_HDIM96 else [96])
+        + ([] if DISABLE_HDIM128 else [128])
+        + ([] if DISABLE_HDIM192 else [192])
+        + ([] if DISABLE_HDIM256 else [256])
+    )
+    if not ROCM_HDIMS:
+        raise RuntimeError("ROCm build selected no head dimensions; enable at least one HDIM.")
     rocm_optdim = ",".join(str(h) for h in ROCM_HDIMS)
 
     # 1. Generate Kernels
@@ -496,97 +507,107 @@ if is_rocm:
             shutil.rmtree(str(generated_dir), ignore_errors=True)
     generated_dir.mkdir(parents=True, exist_ok=True)
 
-    # Build FWD filter: for each head dim, lite + baseline (qr nbias nmask) for fp16 and bf16
+    # Build reduced FWD filter patterns for the ROCm smoke-test build.
+    # Generate both skip and non-skip kernels in one pass so the generated API dispatcher
+    # includes both variants instead of being overwritten by the last filtered invocation.
     fwd_filter_parts = []
+    fwd_dtypes = []
+    if not DISABLE_FP16:
+        fwd_dtypes.append("fp16")
+    fwd_dtypes.append("bf16")
     for h in ROCM_HDIMS:
-        fwd_filter_parts.append(
-            f"*d{h}_fp16_batch*lite*|*d{h}_fp16_batch*qr*nbias*nmask*"
-            f"|*d{h}_bf16_batch*lite*|*d{h}_bf16_batch*qr*nbias*nmask*"
-        )
-    fwd_filter = "|".join(fwd_filter_parts)
+        for dtype in fwd_dtypes:
+            fwd_filter_parts.append(f"*d{h}_{dtype}_batch*nbias*nmask*ndropout*")
 
     print(f"Generating FWD kernels to {generated_dir} (head_dims={ROCM_HDIMS})...")
-    subprocess.run(
-        [
-            sys.executable,
-            str(generate_script),
-            "--api",
-            "fwd",
-            "--optdim",
-            rocm_optdim,
-            "--output_dir",
-            str(generated_dir),
-            "--filter",
-            fwd_filter,
-        ],
-        check=True,
-    )
+    for fwd_filter in fwd_filter_parts:
+        subprocess.run(
+            [
+                sys.executable,
+                str(generate_script),
+                "--api",
+                "fwd",
+                "--optdim",
+                rocm_optdim,
+                "--output_dir",
+                str(generated_dir),
+                "--filter",
+                fwd_filter,
+            ],
+            check=True,
+        )
 
-    # Build BWD filter: for each head dim, fp16 and bf16
-    bwd_filter_parts = [f"*d{h}_fp16_batch*|*d{h}_bf16_batch*" for h in ROCM_HDIMS]
-    bwd_filter = "|".join(bwd_filter_parts)
+    if not DISABLE_BACKWARD:
+        bwd_dtypes = []
+        if not DISABLE_FP16:
+            bwd_dtypes.append("fp16")
+        bwd_dtypes.append("bf16")
+        bwd_filter_parts = [f"*d{h}_{dtype}_batch*" for h in ROCM_HDIMS for dtype in bwd_dtypes]
+        bwd_filter = "|".join(bwd_filter_parts)
 
-    print(f"Generating BWD kernels to {generated_dir} (head_dims={ROCM_HDIMS})...")
-    subprocess.run(
-        [
-            sys.executable,
-            str(generate_script),
-            "--api",
-            "bwd",
-            "--optdim",
-            rocm_optdim,
-            "--output_dir",
-            str(generated_dir),
-            "--filter",
-            bwd_filter,
-        ],
-        check=True,
-    )
+        print(f"Generating BWD kernels to {generated_dir} (head_dims={ROCM_HDIMS})...")
+        subprocess.run(
+            [
+                sys.executable,
+                str(generate_script),
+                "--api",
+                "bwd",
+                "--optdim",
+                rocm_optdim,
+                "--output_dir",
+                str(generated_dir),
+                "--filter",
+                bwd_filter,
+            ],
+            check=True,
+        )
 
     # Generate APPENDKV kernels (receipt=2 = Flash attention integration: fp16/bf16 row-layout only)
-    print(
-        f"Generating FWD_APPENDKV kernels to {generated_dir} (head_dims={ROCM_HDIMS})..."
-    )
-    subprocess.run(
-        [
-            sys.executable,
-            str(generate_script),
-            "--api",
-            "fwd_appendkv",
-            "--optdim",
-            rocm_optdim,
-            "--output_dir",
-            str(generated_dir),
-            "--receipt",
-            "2",
-        ],
-        check=True,
-    )
+    if not DISABLE_APPENDKV:
+        print(
+            f"Generating FWD_APPENDKV kernels to {generated_dir} (head_dims={ROCM_HDIMS})..."
+        )
+        subprocess.run(
+            [
+                sys.executable,
+                str(generate_script),
+                "--api",
+                "fwd_appendkv",
+                "--optdim",
+                rocm_optdim,
+                "--output_dir",
+                str(generated_dir),
+                "--receipt",
+                "2",
+            ],
+            check=True,
+        )
 
     # Generate SPLITKV kernels with sync-only (qr_vr/qr_vc) pipeline variants.
     # receipt=2 limits to fp16/bf16/row/no-bias, and filter "@*qr_vr*|*qr_vc*" excludes
     # qr_async variants (which reference BlockFmhaFwdSplitKVPipelineQRKSVSAsync that
     # doesn't exist in the current CK headers). The '@' splits combine vs main filters.
-    print(
-        f"Generating FWD_SPLITKV kernels to {generated_dir} (head_dims={ROCM_HDIMS})..."
-    )
-    subprocess.run(
-        [
-            sys.executable,
-            str(generate_script),
-            "--api",
-            "fwd_splitkv",
-            "--optdim",
-            rocm_optdim,
-            "--output_dir",
-            str(generated_dir),
-            "--receipt",
-            "2",
-            "--filter",
-            "@*qr_vr*",
-        ],
-        check=True,
-    )
+    if not DISABLE_SPLIT:
+        print(
+            f"Generating FWD_SPLITKV kernels to {generated_dir} (head_dims={ROCM_HDIMS})..."
+        )
+        subprocess.run(
+            [
+                sys.executable,
+                str(generate_script),
+                "--api",
+                "fwd_splitkv",
+                "--optdim",
+                rocm_optdim,
+                "--output_dir",
+                str(generated_dir),
+                "--receipt",
+                "2",
+                "--filter",
+                "@*qr_vr*",
+            ],
+            check=True,
+        )
 
     # Rename generated .cpp files to .hip so they are compiled with hipcc as device code
     for p in list(generated_dir.glob("*.cpp")):
@@ -628,24 +649,58 @@ if is_rocm:
         get_rocm_source(str(flash_attn_ck_dir / "flash_api.cpp")),
         get_rocm_source(str(flash_attn_ck_dir / "flash_common.cpp")),
         get_rocm_source(str(flash_attn_ck_dir / "mha_fwd.cpp")),
-        get_rocm_source(str(flash_attn_ck_dir / "mha_varlen_fwd.cpp")),
-        get_rocm_source(str(flash_attn_ck_dir / "mha_fwd_kvcache.cpp")),
         str(generated_dir / "fmha_fwd_api.hip"),
-        # mha_bwd is always registered in flash_api.hip without a DISABLE_BACKWARD guard
-        get_rocm_source(str(flash_attn_ck_dir / "mha_bwd.cpp")),
-        str(generated_dir / "fmha_bwd_api.hip"),
     ]
+
+    if not DISABLE_VARLEN:
+        sources.append(get_rocm_source(str(flash_attn_ck_dir / "mha_varlen_fwd.cpp")))
+
+    if not DISABLE_PAGEDKV:
+        sources.append(get_rocm_source(str(flash_attn_ck_dir / "mha_fwd_kvcache.cpp")))
+
+    if not DISABLE_BACKWARD:
+        sources.extend(
+            [
+                get_rocm_source(str(flash_attn_ck_dir / "mha_bwd.cpp")),
+                str(generated_dir / "fmha_bwd_api.hip"),
+            ]
+        )
 
     if not DISABLE_VARLEN:
         sources.append(get_rocm_source(str(flash_attn_ck_dir / "mha_varlen_bwd.cpp")))
 
+    def include_generated_rocm_kernel(path: Path) -> bool:
+        name = path.name
+        if name in {"fmha_fwd_api.hip", "fmha_bwd_api.hip"}:
+            return False
+        if name.endswith("_hip.hip"):
+            return False
+        if DISABLE_BACKWARD and name.startswith("fmha_bwd_"):
+            return False
+        if DISABLE_SPLIT and "splitkv" in name:
+            return False
+        if DISABLE_APPENDKV and "appendkv" in name:
+            return False
+        if DISABLE_FP16 and "_fp16_" in name:
+            return False
+        if DISABLE_FP8 and "_fp8_" in name:
+            return False
+        if DISABLE_INT8 and "_int8_" in name:
+            return False
+        if DISABLE_HDIM64 and "_d64_" in name:
+            return False
+        if DISABLE_HDIM96 and "_d96_" in name:
+            return False
+        if DISABLE_HDIM128 and "_d128_" in name:
+            return False
+        if DISABLE_HDIM192 and "_d192_" in name:
+            return False
+        if DISABLE_HDIM256 and "_d256_" in name:
+            return False
+        return True
+
     sources.extend(
-        str(p)
-        for p in generated_dir.glob("*.hip")
-        if p.name not in ["fmha_fwd_api.hip", "fmha_bwd_api.hip"]
-        and not p.name.endswith(
-            "_hip.hip"
-        )  # exclude hipify output files (stale from prior builds)
+        str(p) for p in generated_dir.glob("*.hip") if include_generated_rocm_kernel(p)
     )
 
     # 3. Include Directories
