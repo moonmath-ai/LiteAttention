@@ -42,7 +42,7 @@ class LiteAttentionAMD(nn.Module):
         self,
         threshold: float = -5.0,
         enable_skipping: bool = True,
-        reverse_skip_list: bool = True,
+        reverse_skip_list: bool = False,
     ):
         super().__init__()
         self.threshold = threshold
@@ -128,15 +128,12 @@ class LiteAttentionAMD(nn.Module):
         skip_read = self._skip_lists[self._phase]
         skip_write = self._skip_lists[1 - self._phase]
 
-        # Alternate reverse direction with phase (matches Hopper convention)
-        reverse = self.reverse_skip_list and (self._phase == 0)
-
         out, _ = lite_attn_fwd(
             query.contiguous(), key.contiguous(), value.contiguous(),
             softmax_scale=scale, is_causal=False,
             skip_read=skip_read, skip_write=skip_write,
             skip_threshold=self.threshold,
-            skip_reverse_list=reverse,
+            skip_reverse_list=self.reverse_skip_list,
         )
 
         # Swap buffers
