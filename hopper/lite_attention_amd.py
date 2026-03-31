@@ -70,16 +70,17 @@ class LiteAttentionAMD(nn.Module):
         stride_b = H * stride_h
         total = B * stride_b
 
-        # Initialize both buffers as dense (keep all tiles)
+        # Initialize both buffers as dense (keep all tiles) — vectorized
         for i in range(2):
             buf = torch.zeros(total, dtype=torch.int16, device=device)
-            for b in range(B):
-                for h in range(H):
-                    for qt in range(num_qt):
-                        off = b * stride_b + h * stride_h + qt * stride_q
-                        buf[off] = 2  # length = 2 (one range)
-                        buf[off + 1] = 0  # start
-                        buf[off + 2] = num_kt  # end
+            # Build one tile pattern [2, 0, num_kt, 0, 0, ...] of length stride_q
+            pattern = torch.zeros(stride_q, dtype=torch.int16, device=device)
+            pattern[0] = 2        # length = 2 (one range)
+            pattern[1] = 0        # start
+            pattern[2] = num_kt   # end
+            # Tile it across all (B * H * num_qt) slots
+            num_slots = B * H * num_qt
+            buf[:num_slots * stride_q] = pattern.repeat(num_slots)
             self._skip_lists[i] = buf
 
         self._phase = 0
@@ -206,11 +207,7 @@ def patch_model(model: nn.Module, threshold: float = -5.0, attr: str = "attn_op"
             lite = lite.to(next(mod.parameters()).device)
 
             def make_fn(lite_mod):
-                _call_count = [0]
                 def fn(q, k, v, flatten_heads=True, **kwargs):
-                    if _call_count[0] < 3:
-                        print(f"[LiteAttn] call={_call_count[0]} q={tuple(q.shape)} k={tuple(k.shape)}", flush=True)
-                    _call_count[0] += 1
                     return lite_mod(q, k, v, flatten_heads=flatten_heads)
                 fn.set_context_parallel_group = lambda *a, **kw: None
                 return fn
