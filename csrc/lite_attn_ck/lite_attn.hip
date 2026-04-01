@@ -23,7 +23,8 @@ lite_attn_fwd(at::Tensor q,         // [B, S_q, H_q, D]
               std::optional<at::Tensor> skip_read,      // flat int16 buffer
               std::optional<at::Tensor> skip_write,     // flat int16 buffer
               float skip_threshold,
-              bool skip_reverse_list)
+              bool skip_reverse_list,
+              int8_t skip_phase)
 {
     // --- basic checks ---
     TORCH_CHECK(q.dtype() == at::ScalarType::BFloat16, "q must be bf16");
@@ -181,6 +182,7 @@ lite_attn_fwd(at::Tensor q,         // [B, S_q, H_q, D]
     args.attn_list_stride_b = H_q * args.attn_list_stride_h;
     args.threshold = skip_threshold;
     args.reverse_skip_list = skip_reverse_list;
+    args.reverse_skip_list_phase = skip_phase;
 
     // --- launch ---
     auto stream = at::hip::getCurrentHIPStream();
@@ -204,5 +206,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           py::arg("skip_read") = py::none(),
           py::arg("skip_write") = py::none(),
           py::arg("skip_threshold") = -1e30f,
-          py::arg("skip_reverse_list") = false);
+          py::arg("skip_reverse_list") = false,
+          py::arg("skip_phase") = static_cast<int8_t>(-1));
 }
