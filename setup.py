@@ -513,17 +513,16 @@ if is_rocm:
         )
 
     # Generate qr-lite pipeline kernels (skip-list attention)
-    lite_filter_parts = []
-    for h in ROCM_HDIMS:
-        lite_filter_parts.append(f"*d{h}_bf16*_qr_lite*")
+    # Generate d128 lite with --optdim 128 only so we get exact d128 kernels
+    # (not d192 kernels with bk0max=192 that also cover d128 but waste registers)
     print(f"Generating FWD lite kernels to {generated_dir} (head_dims={ROCM_HDIMS})...")
-    for lite_filter in lite_filter_parts:
-        subprocess.run(
-            [sys.executable, str(generate_script),
-             "--api", "fwd", "--receipt", "600", "--optdim", rocm_optdim,
-             "--output_dir", str(generated_dir), "--filter", lite_filter],
-            check=True,
-        )
+    subprocess.run(
+        [sys.executable, str(generate_script),
+         "--api", "fwd", "--receipt", "600", "--optdim", "128",
+         "--output_dir", str(generated_dir),
+         "--filter", "*d128_bf16*_qr_lite*"],
+        check=True,
+    )
 
     # Rename generated .cpp files to .hip so they are compiled with hipcc as device code
     for p in list(generated_dir.glob("*.cpp")):
