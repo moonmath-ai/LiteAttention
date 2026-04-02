@@ -503,22 +503,8 @@ if is_rocm:
             shutil.rmtree(str(generated_dir), ignore_errors=True)
     generated_dir.mkdir(parents=True, exist_ok=True)
 
-    # Generate FWD kernels: dense (qr_async) + lite (qr_lite) for bf16
-    fwd_filter_parts = []
-    for h in ROCM_HDIMS:
-        fwd_filter_parts.append(f"*d{h}_bf16_batch*nbias*nmask*ndropout*")
-    print(f"Generating FWD dense kernels to {generated_dir} (head_dims={ROCM_HDIMS})...")
-    for fwd_filter in fwd_filter_parts:
-        subprocess.run(
-            [sys.executable, str(generate_script),
-             "--api", "fwd", "--optdim", rocm_optdim,
-             "--output_dir", str(generated_dir), "--filter", fwd_filter],
-            check=True,
-        )
-
     # Generate qr-lite pipeline kernels (skip-list attention).
-    # Each hdim gets its own --optdim so the kernel uses exact tile sizes
-    # (avoids e.g. d192 kernels with bk0max=192 covering d128 but wasting registers).
+    # Keep per-hdim --optdim to avoid d192-tuned kernels covering d128.
     print(f"Generating FWD lite kernels to {generated_dir} (head_dims={ROCM_HDIMS})...")
     for h in ROCM_HDIMS:
         subprocess.run(
@@ -526,6 +512,24 @@ if is_rocm:
              "--api", "fwd", "--receipt", "600", "--optdim", str(h),
              "--output_dir", str(generated_dir),
              "--filter", f"*d{h}_bf16*_qr_lite*"],
+            check=True,
+        )
+
+    # generate.py rewrites fmha_fwd_api.cpp each run. In some sequences this can end up empty.
+    # If that happens, regenerate API using d128 (the primary target in our workload).
+    fwd_api_cpp = generated_dir / "fmha_fwd_api.cpp"
+    has_dispatch = False
+    if fwd_api_cpp.exists():
+        try:
+            has_dispatch = "return fmha_fwd_<" in fwd_api_cpp.read_text()
+        except Exception:
+            has_dispatch = False
+    if not has_dispatch:
+        subprocess.run(
+            [sys.executable, str(generate_script),
+             "--api", "fwd", "--receipt", "600", "--optdim", "128",
+             "--output_dir", str(generated_dir),
+             "--filter", "*d128_bf16*_qr_lite*"],
             check=True,
         )
 
@@ -590,8 +594,23 @@ if is_rocm:
         + ["-DCK_TILE_FMHA_FWD_FAST_EXP2=1"]
     )
     compile_flags = [
-        "-O3", "-std=c++17",
+        "-O3",
+        "-std=c++20",
         "-Wno-c++11-narrowing",
+        "-fgpu-flush-denormals-to-zero",
+        "-fno-offload-uniform-block",
+        "-mllvm",
+        "--amdgpu-kernarg-preload-count=16",
+        "-mllvm",
+        "--lsr-drop-solution=1",
+        "-mllvm",
+        "-enable-post-misched=0",
+        "-mllvm",
+        "-amdgpu-early-inline-all=true",
+        "-mllvm",
+        "-amdgpu-function-calls=false",
+        "-mllvm",
+        "-amdgpu-coerce-illegal-types=1",
         "-D__HIP_PLATFORM_AMD__=1",
     ] + rocm_feature_args
     extra_compile_args = {
