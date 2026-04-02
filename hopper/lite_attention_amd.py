@@ -17,7 +17,7 @@ class LiteAttentionAMD(nn.Module):
     _BLOCK_N = 128
     _SEED_STEPS = 2  # Dense warmup steps to seed both buffers
 
-    def __init__(self, threshold: float = -5.0, reverse_skip_list: bool = True):
+    def __init__(self, threshold: float = -5.0, reverse_skip_list: bool = False):
         super().__init__()
         self.threshold = threshold
         self.reverse_skip_list = reverse_skip_list
