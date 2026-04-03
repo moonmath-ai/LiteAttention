@@ -4,11 +4,12 @@ import torch
 
 if torch.version.hip is not None:
     # AMD / ROCm: use CK-based LiteAttentionAMD (no CUDA extension needed)
-    from .lite_attention_amd import LiteAttentionAMD, patch_model
+    from .lite_attention_amd import LiteAttentionAMD, patch_model, reset_skip_lists
 
     __all__ = [
         "LiteAttentionAMD",
         "patch_model",
+        "reset_skip_lists",
     ]
 else:
     # NVIDIA / CUDA: use Hopper LiteAttention (requires _C extension)

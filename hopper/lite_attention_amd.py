@@ -73,6 +73,16 @@ class LiteAttentionAMD(nn.Module):
         self._shape_key = None
 
 
+def reset_skip_lists(model: nn.Module) -> int:
+    """Reset skip lists on all patched LiteAttentionAMD modules. Returns count reset."""
+    count = 0
+    for mod in model.modules():
+        if isinstance(mod, LiteAttentionAMD):
+            mod.reset()
+            count += 1
+    return count
+
+
 def patch_model(model: nn.Module, threshold: float = -5.0, attr: str = "attn_op") -> int:
     """Patch self-attention modules to use LiteAttentionAMD. Returns count patched."""
     count = 0
@@ -80,6 +90,7 @@ def patch_model(model: nn.Module, threshold: float = -5.0, attr: str = "attn_op"
         if hasattr(mod, attr) and getattr(mod, "is_selfattn", False):
             lite = LiteAttentionAMD(threshold=threshold)
             lite = lite.to(next(mod.parameters()).device)
+            mod.add_module("_lite_attn", lite)
 
             def _make(m):
                 def fn(q, k, v, flatten_heads=True, **kw):
