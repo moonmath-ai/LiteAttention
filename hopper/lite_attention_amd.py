@@ -17,7 +17,7 @@ class LiteAttentionAMD(nn.Module):
     _BLOCK_N = 128
     _SEED_STEPS = 2  # Dense warmup steps to seed both buffers
 
-    def __init__(self, threshold: float = -5.0, reverse_skip_list: bool = False):
+    def __init__(self, threshold: float = -5.0, reverse_skip_list: bool = True):
         super().__init__()
         self.threshold = threshold
         self.reverse_skip_list = reverse_skip_list
@@ -50,6 +50,9 @@ class LiteAttentionAMD(nn.Module):
         self._alloc(B, S_q, key.shape[1], H, query.device)
 
         thr = -1e30 if self._step < self._SEED_STEPS else self.threshold
+        # Alternate forward/reverse each step; phase tells reader the writer's direction
+        do_reverse = self.reverse_skip_list and (self._phase == 1)
+        phase = self._phase if self.reverse_skip_list else -1
 
         out, _ = lite_attn_fwd(
             query.contiguous(), key.contiguous(), value.contiguous(),
@@ -57,7 +60,8 @@ class LiteAttentionAMD(nn.Module):
             skip_read=self._bufs[self._phase],
             skip_write=self._bufs[1 - self._phase],
             skip_threshold=thr,
-            skip_reverse_list=self.reverse_skip_list,
+            skip_reverse_list=do_reverse,
+            skip_phase=phase,
         )
         self._phase = 1 - self._phase
         self._step += 1

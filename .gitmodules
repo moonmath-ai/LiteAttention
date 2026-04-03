@@ -1,4 +1,7 @@
+[submodule "csrc/cutlass"]
+	path = csrc/cutlass
+	url = https://github.com/NVIDIA/cutlass.git
 [submodule "csrc/composable_kernel"]
 	path = csrc/composable_kernel
 	url = git@github.com:moonmath-ai/composable_kernel.git
-	branch = lite_attn_async
+	branch = lite_attn_phase

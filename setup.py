@@ -597,6 +597,7 @@ if is_rocm:
         "-O3",
         "-std=c++20",
         "-Wno-c++11-narrowing",
+        "-fbracket-depth=1024",
         "-fgpu-flush-denormals-to-zero",
         "-fno-offload-uniform-block",
         "-mllvm",
@@ -609,9 +610,9 @@ if is_rocm:
         "-amdgpu-early-inline-all=true",
         "-mllvm",
         "-amdgpu-function-calls=false",
-        "-mllvm",
-        "-amdgpu-coerce-illegal-types=1",
+        "-D__HIP_PLATFORM_HCC__=1",
         "-D__HIP_PLATFORM_AMD__=1",
+        f"-DCK_TILE_FLOAT_TO_BFLOAT16_DEFAULT={os.environ.get('CK_TILE_FLOAT_TO_BFLOAT16_DEFAULT', 2)}",
     ] + rocm_feature_args
     extra_compile_args = {
         "cxx": compile_flags,

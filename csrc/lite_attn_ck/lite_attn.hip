@@ -23,7 +23,8 @@ lite_attn_fwd(at::Tensor q,         // [B, S_q, H_q, D]
               std::optional<at::Tensor> skip_read,      // flat int16 buffer
               std::optional<at::Tensor> skip_write,     // flat int16 buffer
               float skip_threshold,
-              bool skip_reverse_list)
+              bool skip_reverse_list,
+              int8_t skip_phase)
 {
     // --- basic checks ---
     TORCH_CHECK(q.dtype() == at::ScalarType::BFloat16, "q must be bf16");
@@ -45,16 +46,22 @@ lite_attn_fwd(at::Tensor q,         // [B, S_q, H_q, D]
     TORCH_CHECK(D % 8 == 0, "head dim must be a multiple of 8");
     TORCH_CHECK(H_q % H_k == 0, "H_q must be divisible by H_k");
 
+    bool is_lite = skip_read.has_value() && skip_read.value().numel() > 0;
+
     // --- allocate output + lse ---
     auto opts = q.options();
     at::Tensor out = torch::empty({B, S_q, H_q, D}, opts);
-    at::Tensor softmax_lse = torch::empty({B, H_q, S_q}, opts.dtype(torch::kFloat32));
+    at::Tensor softmax_lse =
+        is_lite ? torch::empty({0}, opts.dtype(torch::kFloat32))
+                : torch::empty({B, H_q, S_q}, opts.dtype(torch::kFloat32));
 
     const c10::hip::OptionalHIPGuardMasqueradingAsCUDA device_guard{q.device()};
 
     if (S_k == 0) {
         out.zero_();
-        softmax_lse.fill_(std::numeric_limits<float>::infinity());
+        if (!is_lite) {
+            softmax_lse.fill_(std::numeric_limits<float>::infinity());
+        }
         return {out, softmax_lse};
     }
 
@@ -68,8 +75,6 @@ lite_attn_fwd(at::Tensor q,         // [B, S_q, H_q, D]
     }
 
     // --- build fmha_fwd_traits (runtime dispatch key) ---
-    bool is_lite = skip_read.has_value() && skip_read.value().numel() > 0;
-
     fmha_fwd_traits traits{
         /*hdim_q=*/D,
         /*hdim_v=*/D,
@@ -137,7 +142,7 @@ lite_attn_fwd(at::Tensor q,         // [B, S_q, H_q, D]
         /*nhead_stride_v=*/v.stride(2),
         /*nhead_stride_bias=*/0,
         /*nhead_stride_randval=*/0,
-        /*nhead_stride_lse=*/softmax_lse.stride(1),
+        /*nhead_stride_lse=*/is_lite ? 0 : softmax_lse.stride(1),
         /*nhead_stride_o=*/out.stride(2),
         /*nhead_stride_q_descale=*/0,
         /*nhead_stride_k_descale=*/0,
@@ -147,7 +152,7 @@ lite_attn_fwd(at::Tensor q,         // [B, S_q, H_q, D]
         /*batch_stride_v=*/v.stride(0),
         /*batch_stride_bias=*/0,
         /*batch_stride_randval=*/0,
-        /*batch_stride_lse=*/softmax_lse.stride(0),
+        /*batch_stride_lse=*/is_lite ? 0 : softmax_lse.stride(0),
         /*batch_stride_o=*/out.stride(0),
         /*batch_stride_q_descale=*/0,
         /*batch_stride_k_descale=*/0,
@@ -181,6 +186,7 @@ lite_attn_fwd(at::Tensor q,         // [B, S_q, H_q, D]
     args.attn_list_stride_b = H_q * args.attn_list_stride_h;
     args.threshold = skip_threshold;
     args.reverse_skip_list = skip_reverse_list;
+    args.reverse_skip_list_phase = skip_phase;
 
     // --- launch ---
     auto stream = at::hip::getCurrentHIPStream();
@@ -204,5 +210,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           py::arg("skip_read") = py::none(),
           py::arg("skip_write") = py::none(),
           py::arg("skip_threshold") = -1e30f,
-          py::arg("skip_reverse_list") = false);
+          py::arg("skip_reverse_list") = false,
+          py::arg("skip_phase") = static_cast<int8_t>(-1));
 }
