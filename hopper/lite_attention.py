@@ -1087,6 +1087,8 @@ class LiteAttention(nn.Module, ConfigurableModule):
             return_softmax_lse=return_softmax_lse,
             reverse_skip_list=self.reverse_skip_list,
             # self._phase == 1 because we changed it in _get_read_write_lists!
+            # phase=(self._phase == 1) if self.reverse_skip_list else False,
+            # phase=(self._phase == (1 if custom_read_list is None else 0)) if self.reverse_skip_list else False,
             phase=(self._phase == 1) if self.reverse_skip_list else False,
             use_int8=self.use_int8,
         )

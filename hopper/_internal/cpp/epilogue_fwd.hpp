@@ -401,6 +401,258 @@ struct CollectiveEpilogueFwd {
         }
     }
 
+    // ReInt8 version: stores both tOrO (WG0) and tOrO1 (WG2) to simulate the 2 warp groups that don't exist in ReInt8 mode
+    template <typename SharedStorage, typename FrgTensorO, typename FrgTensorLSE, typename TiledMma>
+    CUTLASS_DEVICE void
+    store_reint8(Params const& params,
+                 FrgTensorO& tOrO,
+                 FrgTensorO& tOrO1,
+                 FrgTensorLSE const& lse,
+                 FrgTensorLSE const& lse1,
+                 SharedStorage& shared_storage,
+                 TiledMma tiled_mma,
+                 int thread_idx,
+                 cute::tuple<int32_t, int32_t, int32_t, int32_t> const& block_coord
+                 ) {
+
+        auto [m_block, bidh, bidb, split_idx] = block_coord;
+        int num_splits = get<4>(params.shape_O_packed);
+        if constexpr (Split && Varlen) {
+            uint32_t num_splits_dynamic_u = reinterpret_cast<uint32_t const&>(split_idx) >> 16; // first 16 bits are for num_splits
+            int num_splits_dynamic = reinterpret_cast<int&>(num_splits_dynamic_u);
+            num_splits = num_splits_dynamic > 0 ? num_splits_dynamic : num_splits;
+            split_idx &= 0x0000FFFF;  // Only use the lower 16 bits of split_idx
+        }
+        bool const is_split = !Split ? false : (!Varlen ? true : num_splits > 1);
+
+        Tensor sO = make_tensor(make_smem_ptr(shared_storage.tensors.epilogue.smem_o.data()), SmemLayoutO{});
+        // Tensor sO_pi = cute::as_position_independent_swizzle_tensor(sO);
+
+        static constexpr bool NeedFP8Permute = FP8PermuteCol && (sizeof(Element) == 2 || sizeof(Element) == 4);
+        // If we will possibly need tOrO in FP32, we'd want to permute tOrO before type conversion.
+        // Otherwise we can permute after conversion.
+        if constexpr (NeedFP8Permute && Split) { 
+            flash::permute_output_fp8_Vcolmajor(tOrO);
+            flash::permute_output_fp8_Vcolmajor(tOrO1);
+        }
+        Tensor tOrO_out = make_tensor_like<Element>(tOrO);
+        Tensor tOrO1_out = make_tensor_like<Element>(tOrO1);
+        flash::convert_type_out(tOrO, tOrO_out);
+        flash::convert_type_out(tOrO1, tOrO1_out);
+        if constexpr (NeedFP8Permute && !Split) { 
+            flash::permute_output_fp8_Vcolmajor(tOrO_out);
+            flash::permute_output_fp8_Vcolmajor(tOrO1_out);
+        }
+
+        // Make sure all WGs have finished reading V
+        // Technically we don't need this if we're not using smem, but the mainloop makes the assumption that
+        // all epilogue threads sync at least once during the epilogue (so that we can start loading Q with
+        // cp.async if we need).
+        // In ReInt8 mode, we simulate WG0 and WG2, but we still use NumEpilogueThreads for the barrier
+        // since all participating threads have thread_idx in [0, NumEpilogueThreads-1] after mapping
+        flash::named_barrier_sync(NumEpilogueThreads, cutlass::arch::ReservedNamedBarriers::EpilogueBarrier);
+
+        // Step 1: Write O from rmem -> smem
+        int warp_group_idx = __shfl_sync(0xFFFFFFFF, thread_idx / cutlass::NumThreadsPerWarpGroup, 0);
+        int const thread_idx_wg2 = flash::get_reint8_thread_idx_second(thread_idx, warp_group_idx);
+        if constexpr (Use_smem) {
+            auto smem_tiled_copy_O = make_tiled_copy_C(SmemCopyAtomO{}, tiled_mma);
+            // Write tOrO as if from WG0
+            auto smem_thr_copy_O = smem_tiled_copy_O.get_thread_slice(flash::get_reint8_thread_idx_base(thread_idx, warp_group_idx));
+            Tensor taccOrO = smem_thr_copy_O.retile_S(tOrO_out);
+            Tensor taccOsO = smem_thr_copy_O.partition_D(sO);
+            cute::copy(smem_tiled_copy_O, taccOrO, taccOsO);
+            // Write tOrO1 as if from WG2
+            auto smem_thr_copy_O_wg2 = smem_tiled_copy_O.get_thread_slice(thread_idx_wg2);
+            Tensor taccOrO_wg2 = smem_thr_copy_O_wg2.retile_S(tOrO1_out);
+            Tensor taccOsO_wg2 = smem_thr_copy_O_wg2.partition_D(sO);
+            cute::copy(smem_tiled_copy_O, taccOrO_wg2, taccOsO_wg2);
+            if constexpr (Use_TMA_O) {
+                cutlass::arch::fence_view_async_shared(); // ensure smem writes are visible to TMA
+                cutlass::arch::NamedBarrier::arrive(NumEpilogueThreads + cutlass::NumThreadsPerWarp,
+                                                    cutlass::arch::ReservedNamedBarriers::EpilogueBarrier);
+            } else {
+                flash::named_barrier_sync(NumEpilogueThreads, cutlass::arch::ReservedNamedBarriers::EpilogueBarrier);
+            }
+        } else {
+            if constexpr (ArchTag::kMinComputeCapability >= 90) {
+                #pragma unroll
+                for (uint32_t cta_id = 0; cta_id < size(ClusterShape{}); ++cta_id) {
+                    shared_storage.pipelines.barrier_O.arrive(cta_id);
+                }
+            }
+        }
+
+        flash::SeqlenInfo<Varlen, kBlockM> seqlen_info{bidb, size<0>(params.shape_O), params.cu_seqlens, params.seqused};
+        bool is_varlen = Varlen && params.cu_seqlens;
+        int offset_o = seqlen_info.offset;
+        int seqlen_o = seqlen_info.seqlen;
+        // warp_group_idx already computed above
+
+        // Step 2: Write LSE from rmem -> gmem
+        auto thread_mma = tiled_mma.get_thread_slice(flash::get_reint8_thread_idx_base(thread_idx, warp_group_idx));
+        auto thread_mma_wg2 = tiled_mma.get_thread_slice(thread_idx_wg2);
+        // (MMA,MMA_M,MMA_K)
+        Tensor taccOcO = thread_mma.partition_C(cute::make_identity_tensor(select<0, 1>(TileShape_MNK_PV{})));
+        Tensor taccOcO_wg2 = thread_mma_wg2.partition_C(cute::make_identity_tensor(select<0, 1>(TileShape_MNK_PV{})));
+        static_assert(decltype(size<0, 0>(taccOcO))::value == 2);
+        static_assert(decltype(size<0, 1>(taccOcO))::value == 2);
+        Tensor taccOcO_rowcol = make_tensor(taccOcO.data(), flash::convert_layout_acc_rowcol(taccOcO.layout()));
+        Tensor taccOcO_rowcol_wg2 = make_tensor(taccOcO_wg2.data(), flash::convert_layout_acc_rowcol(taccOcO_wg2.layout()));
+        Tensor taccOcO_row = taccOcO_rowcol(_, _0{});
+        Tensor taccOcO_row_wg2 = taccOcO_rowcol_wg2(_, _0{});
+        CUTE_STATIC_ASSERT_V(size(lse) == size(taccOcO_row));
+        CUTE_STATIC_ASSERT_V(size(lse1) == size(taccOcO_row_wg2));
+
+        using PackGQA_t = flash::PackGQAManager<get<0>(TileShape_MNK_PV{}), get<1>(TileShape_MNK_PV{}), NumEpilogueThreads, Element>;
+        using PackGQApartial_t = flash::PackGQAManager<get<0>(TileShape_MNK_PV{}), get<1>(TileShape_MNK_PV{}), NumEpilogueThreads, ElementPartial>;
+
+        Tensor mLSE = make_tensor(make_gmem_ptr((!is_split ? params.ptr_LSE : params.ptr_LSE_partial) + offset_o * get<0>(!is_split ? params.stride_LSE : params.stride_LSE_partial)),
+                                  params.shape_LSE_packed,
+                                  !is_split ? params.stride_LSE_packed : params.stride_LSE_partial_packed)(_, bidh, !is_varlen ? bidb : 0, !is_split ? 0 : split_idx);
+        if (!LargeHeadDimV || warp_group_idx == 0) {
+            if constexpr (!PackGQA) {
+                #pragma unroll
+                for (int mi = 0; mi < size(lse); ++mi) {
+                    int const row = m_block * kBlockM + get<0>(taccOcO_row(mi));
+                    if (get<1>(taccOcO_row(_0{})) == 0 && row < seqlen_o) { mLSE(row) = lse(mi); }
+                }
+                #pragma unroll
+                for (int mi = 0; mi < size(lse1); ++mi) {
+                    int const row = m_block * kBlockM + get<0>(taccOcO_row_wg2(mi));
+                    if (get<1>(taccOcO_row_wg2(_0{})) == 0 && row < seqlen_o) { mLSE(row) = lse1(mi); }
+                }
+            } else {
+                PackGQA_t::store_LSE(mLSE, lse, tiled_mma, params.qhead_per_khead_divmod, thread_idx, seqlen_o, m_block);
+                PackGQA_t::store_LSE(mLSE, lse1, tiled_mma, params.qhead_per_khead_divmod, thread_idx_wg2, seqlen_o, m_block);
+            }
+        }
+
+        // Step 3: Write O from smem -> gmem
+        if constexpr (Use_TMA_O) {
+            Tensor mO = params.tma_store_O.get_tma_tensor(params.shape_O)(_, _, bidh, bidb, split_idx);
+            Tensor gO = local_tile(mO, select<0, 1>(TileShape_MNK_PV{}), make_coord(m_block, _0{}));  // (M, K)
+            auto block_tma_O = params.tma_store_O.get_slice(_0{});
+            Tensor tOgO = block_tma_O.partition_D(gO);  // (TMA, TMA_M, TMA_K)
+            Tensor tOsO = block_tma_O.partition_S(sO); // (TMA, TMA_M, TMA_K)
+            int warp_idx_sync = __shfl_sync(0xffffffff, thread_idx / cutlass::NumThreadsPerWarp, 0);
+            if (warp_idx_sync == NumEpilogueThreads / cutlass::NumThreadsPerWarp - 1) {
+                cutlass::arch::NamedBarrier::sync(NumEpilogueThreads + cutlass::NumThreadsPerWarp,
+                                                  cutlass::arch::ReservedNamedBarriers::EpilogueBarrier);
+                if (cute::elect_one_sync()) {
+                    cute::copy(params.tma_store_O, tOsO, tOgO);
+                    tma_store_arrive();
+                    tma_store_wait<0>();
+                    #pragma unroll
+                    for (uint32_t cta_id = 0; cta_id < size(ClusterShape{}); ++cta_id) {
+                        shared_storage.pipelines.barrier_O.arrive(cta_id);
+                    }
+                }
+            }
+        } else {  // Don't use TMA in Varlen case since we don't want to overwrite the output of another sequence
+            if (!is_split) {
+                Tensor mO = make_tensor(make_gmem_ptr(params.ptr_O + offset_o * get<0>(params.stride_O)), params.shape_O_packed, params.stride_O_packed)(_, _, bidh, !is_varlen ? bidb : 0, _0{});
+                Tensor gO = local_tile(mO, select<0, 1>(TileShape_MNK_PV{}), make_coord(m_block, _0{}));  // (M, K)
+                // if (thread_idx == 0) { printf("Before O write, m_block: %d, bidh: %d, bidb: %d, split_idx: %d, offset_o: %d, seqlen_o: %d, mO_addr = %p, addr diff = %d\n", m_block, bidh, bidb, split_idx, offset_o, seqlen_o, mO.data(), reinterpret_cast<int>(&mO(0)) - reinterpret_cast<int>(params.ptr_O)); }
+                GmemTiledCopyO gmem_tiled_copy_O;
+                // Write WG0 data
+                auto gmem_thr_copy_O = gmem_tiled_copy_O.get_thread_slice(thread_idx);
+                Tensor tOsO = gmem_thr_copy_O.partition_S(sO);
+                Tensor tOrO = make_fragment_like(tOsO);
+                cute::copy(gmem_tiled_copy_O, tOsO, tOrO);
+                // Write WG2 data
+                auto gmem_thr_copy_O_wg2 = gmem_tiled_copy_O.get_thread_slice(thread_idx_wg2);
+                Tensor tOsO_wg2 = gmem_thr_copy_O_wg2.partition_S(sO);
+                Tensor tOrO_wg2 = make_fragment_like(tOsO_wg2);
+                cute::copy(gmem_tiled_copy_O, tOsO_wg2, tOrO_wg2);
+                if constexpr (ArchTag::kMinComputeCapability >= 90) {
+                    cutlass::arch::fence_view_async_shared(); // ensure smem reads are done before next TMA to smem_v
+                    #pragma unroll
+                    for (uint32_t cta_id = 0; cta_id < size(ClusterShape{}); ++cta_id) {
+                        shared_storage.pipelines.barrier_O.arrive(cta_id);
+                    }
+                }
+                if constexpr (!PackGQA) {
+                    // (BLK_M,BLK_K) -> (blk_m,blk_k)
+                    Tensor tOcO = gmem_thr_copy_O.partition_D(cute::make_identity_tensor(select<0, 1>(TileShape_MNK_PV{})));
+                    Tensor tOpO = make_tensor<bool>(make_shape(size<2>(tOsO)));
+                    #pragma unroll
+                    for (int k = 0; k < size(tOpO); ++k) { tOpO(k) = get<1>(tOcO(_0{}, _0{}, k)) < get<1>(params.shape_O); }
+                    Tensor tOgO = gmem_thr_copy_O.partition_D(gO);
+                    flash::copy</*Is_even_MN=*/false, /*Is_even_K=*/false, /*Clear_OOB_MN=*/false, /*Clear_OOB_K=*/false>(
+                        gmem_tiled_copy_O, tOrO, tOgO, tOcO, tOpO, seqlen_o - m_block * kBlockM
+                    );
+                    Tensor tOcO_wg2 = gmem_thr_copy_O_wg2.partition_D(cute::make_identity_tensor(select<0, 1>(TileShape_MNK_PV{})));
+                    Tensor tOpO_wg2 = make_tensor<bool>(make_shape(size<2>(tOsO_wg2)));
+                    #pragma unroll
+                    for (int k = 0; k < size(tOpO_wg2); ++k) { tOpO_wg2(k) = get<1>(tOcO_wg2(_0{}, _0{}, k)) < get<1>(params.shape_O); }
+                    Tensor tOgO_wg2 = gmem_thr_copy_O_wg2.partition_D(gO);
+                    flash::copy</*Is_even_MN=*/false, /*Is_even_K=*/false, /*Clear_OOB_MN=*/false, /*Clear_OOB_K=*/false>(
+                        gmem_tiled_copy_O, tOrO_wg2, tOgO_wg2, tOcO_wg2, tOpO_wg2, seqlen_o - m_block * kBlockM
+                    );
+                } else {
+                    // If PackGQA, we split the work of compute O_ptr among threads in the same row
+                    PackGQA_t::store_O(mO, tOrO, params.qhead_per_khead_divmod, thread_idx, seqlen_o, m_block);
+                    PackGQA_t::store_O(mO, tOrO_wg2, params.qhead_per_khead_divmod, thread_idx_wg2, seqlen_o, m_block);
+                }
+            } else {
+                Tensor mOpartial = make_tensor(make_gmem_ptr(params.ptr_O_partial + offset_o * get<0>(params.stride_O_partial)), params.shape_O_packed, params.stride_O_partial_packed)(_, _, bidh, !is_varlen ? bidb : 0, split_idx);
+                Tensor gOpartial = local_tile(mOpartial, select<0, 1>(TileShape_MNK_PV{}), make_coord(m_block, _0{}));  // (M, K)
+                // We already arrived on barrier_O earlier if !Use_smem
+                if constexpr (Use_smem) {
+                    if constexpr (ArchTag::kMinComputeCapability >= 90) {
+                        #pragma unroll
+                        for (uint32_t cta_id = 0; cta_id < size(ClusterShape{}); ++cta_id) {
+                            shared_storage.pipelines.barrier_O.arrive(cta_id);
+                        }
+                    }
+                }
+                if constexpr (!PackGQA) {
+                    static constexpr int kGmemElemsPerStoreDirect = 2;
+                    cute::Copy_Atom<AutoVectorizingCopyWithAssumedAlignment<128>, ElementPartial> gmem_copy_direct;
+                    // Reshape acc from ((2, 2, V), MMA_M, MMA_N) to (nrow=(2, MMA_M), ncol=(2, V, MMA_N))
+                    Tensor tOrO_rowcol = make_tensor(tOrO_out.data(), flash::convert_layout_acc_rowcol(tOrO_out.layout()));
+                    Tensor tOrO_rowcol_wg2 = make_tensor(tOrO1_out.data(), flash::convert_layout_acc_rowcol(tOrO1_out.layout()));
+                    Tensor tOrO_copy = cute::tiled_divide(tOrO_rowcol, Shape<_1, Int<kGmemElemsPerStoreDirect>>{});
+                    Tensor tOrO_copy_wg2 = cute::tiled_divide(tOrO_rowcol_wg2, Shape<_1, Int<kGmemElemsPerStoreDirect>>{});
+                    Tensor tOgO = thread_mma.partition_C(gOpartial);
+                    Tensor tOgO_wg2 = thread_mma_wg2.partition_C(gOpartial);
+                    Tensor tOgO_rowcol = make_tensor(tOgO.data(), flash::convert_layout_acc_rowcol(tOgO.layout()));
+                    Tensor tOgO_rowcol_wg2 = make_tensor(tOgO_wg2.data(), flash::convert_layout_acc_rowcol(tOgO_wg2.layout()));
+                    Tensor tOgO_copy = cute::tiled_divide(tOgO_rowcol, Shape<_1, Int<kGmemElemsPerStoreDirect>>{});
+                    Tensor tOgO_copy_wg2 = cute::tiled_divide(tOgO_rowcol_wg2, Shape<_1, Int<kGmemElemsPerStoreDirect>>{});
+                    Tensor taccOcO_col = taccOcO_rowcol(_0{}, _);
+                    Tensor taccOcO_col_wg2 = taccOcO_rowcol_wg2(_0{}, _);
+                    #pragma unroll
+                    for (int m = 0; m < size(taccOcO_row); ++m) {
+                        if (get<0>(taccOcO_row(m)) < seqlen_o - m_block * kBlockM) {
+                            #pragma unroll
+                            for (int k = 0; k < size(taccOcO_col) / kGmemElemsPerStoreDirect; ++k) {
+                                if (get<1>(taccOcO_col(k * kGmemElemsPerStoreDirect)) < get<1>(params.shape_O)) {
+                                    cute::copy(gmem_copy_direct, tOrO_copy(_, m, k), tOgO_copy(_, m, k));
+                                }
+                            }
+                        }
+                    }
+                    #pragma unroll
+                    for (int m = 0; m < size(taccOcO_row_wg2); ++m) {
+                        if (get<0>(taccOcO_row_wg2(m)) < seqlen_o - m_block * kBlockM) {
+                            #pragma unroll
+                            for (int k = 0; k < size(taccOcO_col_wg2) / kGmemElemsPerStoreDirect; ++k) {
+                                if (get<1>(taccOcO_col_wg2(k * kGmemElemsPerStoreDirect)) < get<1>(params.shape_O)) {
+                                    cute::copy(gmem_copy_direct, tOrO_copy_wg2(_, m, k), tOgO_copy_wg2(_, m, k));
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    PackGQApartial_t::store_O_direct(mOpartial, tOrO_out, tiled_mma, params.qhead_per_khead_divmod, thread_idx, seqlen_o, m_block);
+                    PackGQApartial_t::store_O_direct(mOpartial, tOrO1_out, tiled_mma, params.qhead_per_khead_divmod, thread_idx_wg2, seqlen_o, m_block);
+                }
+            }
+        }
+    }
+
     CUTLASS_DEVICE void
     store_tail() {
         // Don't need to do tma_store_wait<0>() here since we already did in @store
@@ -475,6 +727,102 @@ struct CollectiveEpilogueFwd {
                 Tensor tOrO = make_tensor<Element>(make_shape(Shape<_1, Int<kGmemElemsPerStore>>{}, size<1>(tOcO), size<2>(tOcO)));
                 cute::clear(tOrO);
                 PackGQA_t::store_O(mO, tOrO, params.qhead_per_khead_divmod, thread_idx, seqlen_o, m_block);
+            }
+        }
+
+    }
+
+    // Write 0 to output and -inf to LSE (ReInt8 version: zeros both WG0 and WG2 positions)
+    CUTLASS_DEVICE void
+    store_zero_reint8(
+         Params const& params,
+         int thread_idx,
+         cute::tuple<int32_t, int32_t, int32_t, int32_t> const& block_coord
+         ) {
+        static constexpr int kBlockM = get<0>(TileShape_MNK_PV{});
+        auto [m_block, bidh, bidb, split_idx] = block_coord;
+        int num_splits = get<4>(params.shape_O_packed);
+        if constexpr (Split && Varlen) {
+            uint32_t num_splits_dynamic_u = reinterpret_cast<uint32_t const&>(split_idx) >> 16; // first 16 bits are for num_splits
+            int num_splits_dynamic = reinterpret_cast<int&>(num_splits_dynamic_u);
+            num_splits = num_splits_dynamic > 0 ? num_splits_dynamic : num_splits;
+            split_idx &= 0x0000FFFF;  // Only use the lower 16 bits of split_idx
+        }
+        bool const is_split = !Split ? false : (!Varlen ? true : num_splits > 1);
+
+        flash::SeqlenInfo<Varlen, kBlockM> seqlen_info{bidb, size<0>(params.shape_O), params.cu_seqlens, params.seqused};
+        bool const is_varlen = Varlen && params.cu_seqlens;
+        int offset_o = seqlen_info.offset;
+        int seqlen_o = seqlen_info.seqlen;
+        int qhead_per_khead = !PackGQA ? 1 : params.qhead_per_khead_divmod.divisor;
+        Tensor mLSE = make_tensor(make_gmem_ptr((!is_split ? params.ptr_LSE : params.ptr_LSE_partial) + offset_o * get<0>(!is_split ? params.stride_LSE : params.stride_LSE_partial)),
+                                  params.shape_LSE_packed,
+                                  !is_split ? params.stride_LSE_packed : params.stride_LSE_partial_packed)(_, bidh, !is_varlen ? bidb : 0, !is_split ? 0 : split_idx);
+        Tensor gLSE = local_tile(mLSE, Shape<Int<kBlockM>>{}, make_coord(m_block));
+
+        static_assert(kBlockM <= NumEpilogueThreads);
+        // LSE is per-row, not per-warp-group, so we only need to write once per row
+        if (thread_idx < kBlockM) {
+            const int row = m_block * kBlockM + thread_idx;
+            if constexpr (!PackGQA) {
+                if (row < seqlen_o) { mLSE(row) = -INFINITY; }
+            } else {
+                if (row < seqlen_o * qhead_per_khead) {
+                    int m_idx, h_idx;
+                    m_idx = params.qhead_per_khead_divmod.divmod(h_idx, row);
+                    mLSE(make_coord(make_coord(h_idx, m_idx))) = -INFINITY;
+                }
+            }
+        }
+
+        // If split, we don't have to write 0 to mOpartial if the mha_combine kernel is used,
+        // since it will not use the value of O if LSE is -inf.
+        if (!is_split) {
+            Tensor mO = make_tensor(make_gmem_ptr(params.ptr_O + offset_o * get<0>(params.stride_O)), params.shape_O_packed, params.stride_O_packed)(_, _, bidh, !is_varlen ? bidb : 0, _0{});
+            GmemTiledCopyO gmem_tiled_copy_O;
+            int warp_group_idx = __shfl_sync(0xFFFFFFFF, thread_idx / cutlass::NumThreadsPerWarpGroup, 0);
+            int const thread_idx_wg2 = flash::get_reint8_thread_idx_second(thread_idx, warp_group_idx);
+            
+            // Zero WG0 position
+            auto gmem_thr_copy_O = gmem_tiled_copy_O.get_thread_slice(flash::get_reint8_thread_idx_base(thread_idx, warp_group_idx));
+            Tensor tOcO = gmem_thr_copy_O.partition_D(cute::make_identity_tensor(select<0, 1>(TileShape_MNK_PV{})));
+            if constexpr (!PackGQA) {
+                Tensor tOpO = make_tensor<bool>(make_shape(size<2>(tOcO)));
+                #pragma unroll
+                for (int k = 0; k < size(tOpO); ++k) { tOpO(k) = get<1>(tOcO(_0{}, _0{}, k)) < get<1>(params.shape_O); }
+                Tensor gO = local_tile(mO, select<0, 1>(TileShape_MNK_PV{}), make_coord(m_block, _0{}));  // (M, K)
+                Tensor tOgO = gmem_thr_copy_O.partition_D(gO);
+                Tensor tOrO = make_fragment_like(tOgO);
+                cute::clear(tOrO);
+                flash::copy</*Is_even_MN=*/false, /*Is_even_K=*/false, /*Clear_OOB_MN=*/false, /*Clear_OOB_K=*/false>(
+                    gmem_tiled_copy_O, tOrO, tOgO, tOcO, tOpO, seqlen_o - m_block * kBlockM
+                );
+            } else {
+                using PackGQA_t = flash::PackGQAManager<get<0>(TileShape_MNK_PV{}), get<1>(TileShape_MNK_PV{}), NumEpilogueThreads, Element>;
+                Tensor tOrO = make_tensor<Element>(make_shape(Shape<_1, Int<kGmemElemsPerStore>>{}, size<1>(tOcO), size<2>(tOcO)));
+                cute::clear(tOrO);
+                PackGQA_t::store_O(mO, tOrO, params.qhead_per_khead_divmod, thread_idx, seqlen_o, m_block);
+            }
+            
+            // Zero WG2 position
+            auto gmem_thr_copy_O_wg2 = gmem_tiled_copy_O.get_thread_slice(thread_idx_wg2);
+            Tensor tOcO_wg2 = gmem_thr_copy_O_wg2.partition_D(cute::make_identity_tensor(select<0, 1>(TileShape_MNK_PV{})));
+            if constexpr (!PackGQA) {
+                Tensor tOpO_wg2 = make_tensor<bool>(make_shape(size<2>(tOcO_wg2)));
+                #pragma unroll
+                for (int k = 0; k < size(tOpO_wg2); ++k) { tOpO_wg2(k) = get<1>(tOcO_wg2(_0{}, _0{}, k)) < get<1>(params.shape_O); }
+                Tensor gO = local_tile(mO, select<0, 1>(TileShape_MNK_PV{}), make_coord(m_block, _0{}));  // (M, K)
+                Tensor tOgO_wg2 = gmem_thr_copy_O_wg2.partition_D(gO);
+                Tensor tOrO_wg2 = make_fragment_like(tOgO_wg2);
+                cute::clear(tOrO_wg2);
+                flash::copy</*Is_even_MN=*/false, /*Is_even_K=*/false, /*Clear_OOB_MN=*/false, /*Clear_OOB_K=*/false>(
+                    gmem_tiled_copy_O, tOrO_wg2, tOgO_wg2, tOcO_wg2, tOpO_wg2, seqlen_o - m_block * kBlockM
+                );
+            } else {
+                using PackGQA_t = flash::PackGQAManager<get<0>(TileShape_MNK_PV{}), get<1>(TileShape_MNK_PV{}), NumEpilogueThreads, Element>;
+                Tensor tOrO_wg2 = make_tensor<Element>(make_shape(Shape<_1, Int<kGmemElemsPerStore>>{}, size<1>(tOcO_wg2), size<2>(tOcO_wg2)));
+                cute::clear(tOrO_wg2);
+                PackGQA_t::store_O(mO, tOrO_wg2, params.qhead_per_khead_divmod, thread_idx_wg2, seqlen_o, m_block);
             }
         }
 

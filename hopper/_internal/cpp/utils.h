@@ -16,6 +16,7 @@
 #endif
 
 #include <cute/tensor.hpp>
+#include <cute/algorithm/fill.hpp>
 
 #include <cutlass/cutlass.h>
 #include <cutlass/array.h>
@@ -28,6 +29,77 @@ namespace flash {
 
 using namespace cute;
 
+// Control constexpr for ReInt8 thread index mapping
+// When true: wg0 handles threads 0-255, wg1 handles threads 256-511
+// When false: wg0 handles threads 0-127 and 256-383, wg1 handles threads 128-255 and 384-511
+static constexpr bool ReInt8UseNewThreadMapping = true;
+
+// Magic float value: float(1 << 23) + float(1 << 22), reinterpreted as int32_t
+// Used for int8 quantization/dequantization
+constexpr float magic_float = float(1 << 23) + float(1 << 22);
+inline constexpr int32_t magic_int32 = 0x4B400000;
+
+// Utility function to reinterpret int32_t bits as float
+__device__ __forceinline__ float reinterpret_bits_as_float(int32_t value)
+{
+    union { float f; int32_t i; } u;
+    u.i = value;
+    return u.f;
+}
+
+// Utility function to reinterpret float bits as int32_t
+__device__ __forceinline__ int32_t reinterpret_bits_as_int32(float value)
+{
+    union { float f; int32_t i; } u;
+    u.f = value;
+    return u.i;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// ReInt8 Thread Mapping Helpers using CuTe Layout concepts
+// These helpers map thread indices for ReInt8 mode to support different warp group layouts
+// The mapping follows CuTe Layout semantics: (warp_group_idx, thread_in_wg) -> global_thread_idx
+
+// Get the base thread index for ReInt8 mode
+// Uses CuTe Layout concept: maps (warp_group_idx, thread_idx_in_wg) -> global_thread_idx
+// Layout stride: NumThreadsPerWarpGroup (128)
+CUTLASS_DEVICE constexpr int get_reint8_thread_idx_base(int thread_idx, int warp_group_idx) {
+    if constexpr (flash::ReInt8UseNewThreadMapping) {
+        // New mapping: wg0 -> threads 0-255, wg1 -> threads 256-511
+        // Original formula: thread_idx + (warp_group_idx - 1) * NumThreadsPerWarpGroup
+        // int thread_in_wg = thread_idx % cutlass::NumThreadsPerWarpGroup;
+        return thread_idx + warp_group_idx * cutlass::NumThreadsPerWarpGroup;
+    } else {
+        // Original mapping: no remapping
+        return thread_idx;
+    }
+}
+
+// Get the second thread index (for WG2) for ReInt8 mode
+// Uses CuTe Layout concept with offset for second warp group
+CUTLASS_DEVICE constexpr int get_reint8_thread_idx_second(int thread_idx, int warp_group_idx) {
+    if constexpr (flash::ReInt8UseNewThreadMapping) {
+        // New mapping: wg2 -> threads 256-511 (for wg0) or 512-767 (for wg1)
+        // Original formula: thread_idx + (warp_group_idx - 1) * NumThreadsPerWarpGroup + NumThreadsPerWarpGroup
+        // int thread_in_wg = thread_idx % cutlass::NumThreadsPerWarpGroup;
+        return thread_idx + (warp_group_idx + 1) * cutlass::NumThreadsPerWarpGroup;
+    } else {
+        // Original mapping: wg2 is always at offset 2 * NumThreadsPerWarpGroup
+        return thread_idx + 2 * cutlass::NumThreadsPerWarpGroup;
+    }
+}
+
+// Helper to get warp group thread layout for ReInt8 mode
+// Returns a CuTe Layout that maps warp group indices to thread indices
+// This uses CuTe's Layout type system for compile-time layout specification
+template <int NumWarpGroups>
+CUTLASS_DEVICE constexpr auto make_reint8_warp_group_thread_layout() {
+    // Both modes use the same layout structure (stride-based mapping)
+    // The difference is in how warp_group_idx is computed at call sites
+    return make_layout(make_shape(Int<NumWarpGroups>{}),
+                      make_stride(Int<cutlass::NumThreadsPerWarpGroup>{}));
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 // Helper to get the mask value for a given element type
@@ -35,11 +107,12 @@ using namespace cute;
 // For integer types: most negative value (e.g., INT32_MIN for int32_t)
 template <typename T>
 CUTLASS_HOST_DEVICE constexpr T get_mask_value() {
-    if constexpr (std::is_floating_point_v<T>) {
-        return -INFINITY;
-    } else {
-        return std::numeric_limits<T>::lowest();
-    }
+    return std::numeric_limits<T>::lowest();
+    // if constexpr (std::is_floating_point_v<T>) {
+    //     return -INFINITY;
+    // } else {
+    //     return std::numeric_limits<T>::lowest();
+    // }
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -245,6 +318,33 @@ CUTLASS_DEVICE void convert_type_out(Tensor<Engine, Layout> const &tensor, Tenso
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+// Vectorized fill function assuming 128-bit alignment (4 int32_t elements per int4)
+// Fills a tensor with a given int32_t value using vectorized assignment for efficiency
+template <int32_t value = 0x4B400000, typename Engine, typename Layout>
+CUTLASS_DEVICE void fill_vectorized_128bit(Tensor<Engine, Layout>& tensor) {
+    int4 magic_vec = make_int4(value, value, value, value);
+    int32_t* data_ptr = reinterpret_cast<int32_t*>(tensor.data());
+    constexpr int total_size = CUTE_STATIC_V(size(tensor));
+    constexpr int vec_count = total_size / 4;
+    constexpr int remainder = total_size % 4;
+    
+    // Vectorized assignment: 4 elements at once (128 bits)
+    CUTLASS_PRAGMA_UNROLL
+    for (int i = 0; i < vec_count; ++i) {
+        *reinterpret_cast<int4*>(data_ptr + i * 4) = magic_vec;
+    }
+    
+    // Handle remainder elements
+    if constexpr (remainder > 0) {
+        CUTLASS_PRAGMA_UNROLL
+        for (int i = 0; i < remainder; ++i) {
+            data_ptr[vec_count * 4 + i] = value;
+        }
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
 // Convert int32 tensor to float by multiplying with a scalar (dequantization scale).
 // Leverages automatic type promotion: int32 * float -> float
 template <typename Engine, typename Layout, typename EngineOut>
@@ -318,6 +418,19 @@ CUTLASS_DEVICE void gemm(TiledMma& tiled_mma, Tensor0 const& tCrA, Tensor1 const
         }
         warpgroup_fence_operand(tCrC);
         warpgroup_arrive();
+        
+        // // Check if inputs are int8_t and initialize accumulator with magic value
+        // using OperandADataType = typename TiledMma::ValTypeA;
+        // constexpr bool Is_INT8 = cute::is_same_v<OperandADataType, int8_t>;
+        
+        // if constexpr (Is_INT8) {
+        //     // // Initialize accumulator with magic value (same approach as softmax.h)
+        //     // fill_vectorized_128bit(tCrC);
+        //     // For int8_t, we want to accumulate on top of the magic value, so start with ScaleOut::One
+        //     tiled_mma.accumulate_ = GMMA::ScaleOut::One;
+        // } else if constexpr (zero_init) {
+        //     tiled_mma.accumulate_ = GMMA::ScaleOut::Zero;
+        // }
         if constexpr (zero_init) {
             tiled_mma.accumulate_ = GMMA::ScaleOut::Zero;
         }
@@ -715,6 +828,75 @@ CUTE_DEVICE T warp_uniform(T a) {
 CUTLASS_DEVICE
 int canonical_warp_group_idx_nosync() {
     return threadIdx.x / cutlass::NumThreadsPerWarpGroup;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// // Convert an integer in range [0, 2^23) to a float exactly.
+// // Produces an incorrect result for integers outside the range.
+// CUTLASS_HOST_DEVICE
+// float u23_to_f32(uint32_t x) {
+//     // Magic number: bit representation of 2^23 as float
+//     const float magic_float = static_cast<float>(1u << 23);
+//     union { float f; uint32_t u; } magic_union;
+//     magic_union.f = magic_float;
+//     const uint32_t magic_bits = magic_union.u;
+    
+//     union { float f; uint32_t u; } result_union;
+//     result_union.u = x ^ magic_bits;
+//     return result_union.f - magic_float;
+// }
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// Convert an integer in range [-2^22, 2^22) to a float exactly.
+// Produces an incorrect result for integers outside the range.
+CUTLASS_HOST_DEVICE
+float i23_to_f32(int32_t x) {
+    // Magic number: bit representation of 2^23 as float
+    const float magic_float = static_cast<float>(1u << 23) + static_cast<float>(1u << 22);
+    union { float f; uint32_t u; } magic_union;
+    magic_union.f = magic_float;
+    const uint32_t magic_bits = magic_union.u;
+    
+    union { float f; uint32_t u; } result_union;
+    result_union.u = x + magic_bits;
+    return result_union.f - magic_float;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// TMA Copy Wrapper for INT8
+// For INT8: K is already stored with swizzle in global memory, so TMA should NOT apply swizzle transformation
+// This wrapper strips swizzle from the layout for int8 types before creating the TMA copy
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+template <class TmaInternalType = void,
+          class CopyOp,
+          class GEngine, class GLayout,
+          class SLayout,
+          class CTA_Tiler,
+          class Cluster_Size>
+CUTE_HOST_RTC
+auto
+make_tma_copy_B_sm90_int8_aware(CopyOp                  const& copy_op,
+                                 Tensor<GEngine,GLayout> const& gtensor,
+                                 SLayout                 const& slayout,
+                                 CTA_Tiler               const& cta_tiler,
+                                 Cluster_Size            const& cluster_size)
+{
+  // For int8: strip swizzle from layout since data is already swizzled in global memory
+  // When swizzle is stripped, get_swizzle_portion returns Swizzle<0,4,3> (identity),
+  // which automatically maps to CU_TENSOR_MAP_SWIZZLE_NONE in the TMA descriptor
+  using ElementType = conditional_t<is_same<void, TmaInternalType>::value, typename GEngine::value_type, TmaInternalType>;
+  if constexpr (is_same_v<ElementType, int8_t>) {
+    // Strip swizzle portion for int8 - use non-swizzled layout
+    // Identity swizzle (B=0) automatically maps to CU_TENSOR_MAP_SWIZZLE_NONE
+    auto slayout_nonswizzled = get_nonswizzle_portion(slayout);
+    return make_tma_copy_B_sm90<TmaInternalType>(copy_op, gtensor, slayout_nonswizzled, cta_tiler, cluster_size);
+  } else {
+    // For non-int8 types, use layout as-is (with swizzle)
+    return make_tma_copy_B_sm90<TmaInternalType>(copy_op, gtensor, slayout, cta_tiler, cluster_size);
+  }
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////

@@ -71,6 +71,7 @@ namespace flash
         static constexpr bool ReverseSkipList = CollectiveMainloop::ReverseSkipList;
         static constexpr bool Phase = CollectiveMainloop::Phase;
         static constexpr bool HasMustDoList = CollectiveMainloop::HasMustDoList;
+        static constexpr bool ReInt8 = CollectiveMainloop::ReInt8;
 
         // Mainloop derived types
         using TileShape_MNK_PV = typename CollectiveMainloop::TileShape_MNK_PV;
@@ -92,8 +93,11 @@ namespace flash
         using TileSchedulerParams = typename TileScheduler::Params;
 
         static constexpr uint32_t NumLoadWarpGroups = 1;
-        static constexpr uint32_t NumMmaWarpGroups = CUTE_STATIC_V(size(TiledMmaPV{})) / cutlass::NumThreadsPerWarpGroup;
-        static constexpr uint32_t MaxThreadsPerBlock = CUTE_STATIC_V(size(TiledMmaPV{})) + (NumLoadWarpGroups * cutlass::NumThreadsPerWarpGroup);
+        static constexpr uint32_t TiledMmaPVSize = ReInt8 ? (CUTE_STATIC_V(size(TiledMmaPV{})) / 2) : CUTE_STATIC_V(size(TiledMmaPV{}));
+        // static constexpr uint32_t NumMmaWarpGroups = CUTE_STATIC_V(size(TiledMmaPV{})) / cutlass::NumThreadsPerWarpGroup;
+        static constexpr uint32_t NumMmaWarpGroups = TiledMmaPVSize / cutlass::NumThreadsPerWarpGroup;
+        // static constexpr uint32_t MaxThreadsPerBlock = CUTE_STATIC_V(size(TiledMmaPV{})) + (NumLoadWarpGroups * cutlass::NumThreadsPerWarpGroup);
+        static constexpr uint32_t MaxThreadsPerBlock = TiledMmaPVSize + (NumLoadWarpGroups * cutlass::NumThreadsPerWarpGroup);
         static constexpr uint32_t MinBlocksPerMultiprocessor = 1;
         static_assert(NumMmaWarpGroups == 1 || NumMmaWarpGroups == 2 || NumMmaWarpGroups == 3);
 
@@ -268,7 +272,9 @@ namespace flash
                     shared_storage.pipelines.barrier_Qv.init(Use_TMA_Q ? 1 : NumProducerThreads /*numThreads*/);
                 }
                 // DOR: why do we need barrier_O? do we calculate multiple O tiles in the same cuda block? is it done with the TMA?
-                shared_storage.pipelines.barrier_O.init(size(ClusterShape{}) * (Use_TMA_O ? 1 : NumMmaThreads) /*numThreads*/);
+                // Use NumEpilogueThreads instead of NumMmaThreads since the epilogue uses NumEpilogueThreads threads
+                // (in ReInt8 mode, NumMmaThreads is halved but NumEpilogueThreads remains the same)
+                shared_storage.pipelines.barrier_O.init(size(ClusterShape{}) * (Use_TMA_O ? 1 : CollectiveEpilogue::NumEpilogueThreads) /*numThreads*/);
             }
 
             // We're counting on pipeline_k to call cutlass::arch::fence_barrier_init();
@@ -543,15 +549,6 @@ namespace flash
                         float const k_descale = params.mainloop.ptr_k_descale == nullptr ? 1.0f : params.mainloop.ptr_k_descale[bidb * get<0>(params.mainloop.stride_k_descale) + bidh_kv * get<1>(params.mainloop.stride_k_descale)];
                         // softmax_scale_log2 *= q_descale * k_descale;
                         softmax_scale_log2 = params.mainloop.softmax_scale_log2 * q_descale * k_descale;
-                    }else if constexpr (Is_INT8){
-                        int const m_block = get<0>(block_coord);
-                        // For INT8: Create Q descale tensor with shape (num_batches, num_heads, num_m_blocks)
-                        // Use the INT8-specific stride from params
-                        int const num_m_blocks = cute::ceil_div(seqlen_info.seqlen_q, kBlockM);
-                        auto shape_q_descale_3d = make_shape(get<3>(params.mainloop.shape_Q), get<2>(params.mainloop.shape_Q), num_m_blocks);
-                        Tensor mQDescale = make_tensor(make_gmem_ptr(params.mainloop.ptr_q_descale), shape_q_descale_3d, params.mainloop.stride_q_descale_int8);
-                        // Slice by bidb and bidh to get scalar value for this m_block
-                        softmax_scale_log2 = mQDescale(bidb, bidh, m_block);
                     }else{
                         softmax_scale_log2 = params.mainloop.softmax_scale_log2;
                     }
@@ -560,7 +557,10 @@ namespace flash
                     // // DOR: kNRows = 2 * (2 * 128 / 256) = 2
                     // flash::Softmax<!LargeHeadDimV ? 2 * (2 * kBlockM / NumMmaThreads) : 2, /*Max_offset=*/!Is_8Bit ? 0 : 8> softmax(softmax_scale_log2, row_mask, local_row_idx);
                     // DOR: kNRows = 2 * (2 * 128 / 256) = 2
-                    flash::Softmax<!LargeHeadDimV ? 2 * (2 * kBlockM / NumMmaThreads) : 2, /*Max_offset=*/!Is_FP8 ? 0 : 8, Is_INT8> softmax(softmax_scale_log2, seqlen_info.seqlen_q, thread_idx);
+                    // static constexpr int kNRows = !LargeHeadDimV ? 2 * (2 * kBlockM / (ReInt8 ? (2 * NumMmaThreads) : NumMmaThreads)) : 2;
+                    static constexpr int kNRows = !LargeHeadDimV ? 2 * ((2 * kBlockM) / (ReInt8 ? (2 * NumMmaThreads) : NumMmaThreads)) : 2;
+                    flash::Softmax<kNRows, /*Max_offset=*/!Is_FP8 ? 0 : 8, Is_INT8> softmax(softmax_scale_log2, seqlen_info.seqlen_q, ReInt8 ? flash::get_reint8_thread_idx_base(thread_idx, warp_group_idx - 1) : thread_idx);
+                    flash::Softmax<kNRows, /*Max_offset=*/!Is_FP8 ? 0 : 8, Is_INT8> softmax1(softmax_scale_log2, seqlen_info.seqlen_q, flash::get_reint8_thread_idx_second(thread_idx, warp_group_idx - 1));
 
                     /*
                     taken from the answer here: https://youtu.be/JwUcZwPOCpA?t=3152
@@ -571,13 +571,20 @@ namespace flash
                     */
                     // Attention output (GEMM-II) accumulator.
                     Tensor tOrO = partition_fragment_C(tiled_mma_pv, select<0, 1>(TileShape_MNK_PV{}));
+                    Tensor tOrO1 = partition_fragment_C(tiled_mma_pv, select<0, 1>(TileShape_MNK_PV{}));
                     bool tile_valid;
                     // const int thread_idx = threadIdx.x - MmaThreadOffset;
                     if constexpr (!LargeHeadDimV)
                     {
-                        tile_valid = mainloop.mma(
-                            params.mainloop, pipeline_k, pipeline_v, smem_pipe_read,
-                            tOrO, softmax, thread_idx, work_idx, seqlen_info, block_coord, shared_storage);
+                        if constexpr (ReInt8){
+                            tile_valid = mainloop.mma_reint8(
+                                params.mainloop, pipeline_k, pipeline_v, smem_pipe_read,
+                                tOrO, tOrO1, softmax, softmax1, thread_idx, work_idx, seqlen_info, block_coord, shared_storage);
+                        }else{
+                            tile_valid = mainloop.mma(
+                                params.mainloop, pipeline_k, pipeline_v, smem_pipe_read,
+                                tOrO, softmax, thread_idx, work_idx, seqlen_info, block_coord, shared_storage);
+                        }
                     }
                     else
                     { // mma_pv might not compile if !LargeHeadDimV
@@ -605,14 +612,23 @@ namespace flash
                     }
                     if (tile_valid)
                     {
-                        // if (threadIdx.x == 128) { printf("Before epilogue, bid.x = %d, bid.y = %d, bid.z = %d, m_block = %d, bidb = %d, split_idx = %d\n", blockIdx.x, blockIdx.y, blockIdx.z, m_block, bidb, split_idx); }
-                        epilogue.store(params.epilogue, tOrO, softmax.row_sum, shared_storage, tiled_mma_pv,
+                        if constexpr (ReInt8){
+                            epilogue.store_reint8(params.epilogue, tOrO, tOrO1, softmax.row_sum, softmax1.row_sum, shared_storage, tiled_mma_pv,
                                        threadIdx.x - MmaThreadOffset, block_coord);
+                        }else{
+                            // if (threadIdx.x == 128) { printf("Before epilogue, bid.x = %d, bid.y = %d, bid.z = %d, m_block = %d, bidb = %d, split_idx = %d\n", blockIdx.x, blockIdx.y, blockIdx.z, m_block, bidb, split_idx); }
+                            epilogue.store(params.epilogue, tOrO, softmax.row_sum, shared_storage, tiled_mma_pv,
+                                       threadIdx.x - MmaThreadOffset, block_coord);
+                        }
                     }
                     else
                     {
                         // Write 0 to gO and -inf to gLSE.
-                        epilogue.store_zero(params.epilogue, threadIdx.x - MmaThreadOffset, block_coord);
+                        if constexpr (ReInt8){
+                            epilogue.store_zero_reint8(params.epilogue, threadIdx.x - MmaThreadOffset, block_coord);
+                        }else{
+                            epilogue.store_zero(params.epilogue, threadIdx.x - MmaThreadOffset, block_coord);
+                        }
                     }
                 }
                 epilogue.store_tail();

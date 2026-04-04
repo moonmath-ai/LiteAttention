@@ -779,7 +779,17 @@
          
          // Pre-allocate output tensors
          auto q_int8 = at::empty({batch, seqlen_q, num_heads, head_dim}, q.options().dtype(torch::kInt8));
+        //  // K_int8 must use custom strides to match quant.cu layout (stride_K_q)
+        //  // quant.cu writes (seqlen_k, head_dim, num_heads, batch) with strides (head_dim, 1, seqlen_k*head_dim, seqlen_k*head_dim*num_heads)
+        //  int64_t stride_k_batch = static_cast<int64_t>(seqlen_k) * head_dim * num_heads;
+        //  int64_t stride_k_seqlen = head_dim;
+        //  int64_t stride_k_heads = static_cast<int64_t>(seqlen_k) * head_dim;
+        //  int64_t stride_k_dim = 1;
+        //  auto k_int8 = at::empty_strided({batch, seqlen_k, num_heads, head_dim},
+        //                                  {stride_k_batch, stride_k_seqlen, stride_k_heads, stride_k_dim},
+        //                                  k.options().dtype(torch::kInt8));
          auto k_int8 = at::empty({batch, seqlen_k, num_heads, head_dim}, k.options().dtype(torch::kInt8));
+
          auto q_desc = at::empty({batch, num_heads, num_q_blocks}, q.options().dtype(torch::kFloat32));
          auto k_desc = at::empty({batch, num_heads, num_k_blocks}, k.options().dtype(torch::kFloat32));
          

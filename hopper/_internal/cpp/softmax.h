@@ -62,26 +62,6 @@ namespace flash
         }
     }
 
-    // Dequantize a 1D tensor (e.g., after reduction) to another 1D tensor with optional max operation
-    template <bool const zero_init = true, typename Engine0, typename Layout0, typename Engine1, typename Layout1>
-    __device__ __forceinline__ void dequantize_max_1d_(Tensor<Engine0, Layout0> &src, Tensor<Engine1, Layout1> &dst, float const dequan_s)
-    {
-        MaxOp<float> op;
-        static_assert(Layout0::rank == 1, "Only support 1D Tensor for source");
-        static_assert(Layout1::rank == 1, "Only support 1D Tensor for destination");
-        CUTE_STATIC_ASSERT_V(size(src) == size(dst));
-#pragma unroll
-        for (int mi = 0; mi < size(src); mi++)
-        {
-            const float value = src(mi) * dequan_s;
-            if constexpr (zero_init){
-                dst(mi) = value;
-            }else{
-                dst(mi) = op(dst(mi), value);
-            }
-        }
-    }
-
     template <typename Engine0, typename Layout0, typename Engine1, typename Layout1, typename Operator>
     __device__ __forceinline__ void quad_allreduce_(Tensor<Engine0, Layout0> &dst, Tensor<Engine1, Layout1> &src, Operator &op)
     {
@@ -110,12 +90,114 @@ namespace flash
     template <bool const zero_init = true, typename Engine0, typename Layout0, typename Engine1, typename Layout1>
     __device__ __forceinline__ void reduce_max_dequantize(Tensor<Engine0, Layout0> &tensor, Tensor<Engine1, Layout1> &max, float const dequan_s)
     {
-        MaxOp<int32_t> max_op;
+        // Half of the rows do max on int's and the other half do max on float's
+        // This overlaps the conversion with the max finding and avoids register pressure
+        MaxOp<int32_t> max_op_int;
+        MaxOp<float> max_op_float;
         Tensor max_converted = make_tensor_like<int32_t>(max);
-        // thread_reduce_<true, true /*outer_loop_is_rows*/>(tensor, max_converted, max_op);
-        thread_reduce_<true, false /*outer_loop_is_rows*/>(tensor, max_converted, max_op);
-        quad_allreduce_(max_converted, max_converted, max_op);
-        dequantize_max_1d_<zero_init>(max_converted, max, dequan_s);
+        Tensor max_float = make_tensor_like<float>(max);
+        
+        // Convert odd rows (mi % 2 == 1) from int to float in-place
+        // and do max on floats for those rows
+        // Even rows (mi % 2 == 0) do max on ints
+#pragma unroll
+        for (int mi = 0; mi < size<0>(tensor); mi++)
+        {
+            if (mi % 2 == 0) {
+                // Even rows: do max on ints (original behavior)
+                int32_t row_max_int = tensor(mi, 0);
+                // tensor(mi, 0) += magic_int32;
+#pragma unroll
+                for (int ni = 1; ni < size<1>(tensor); ni++)
+                {
+                    row_max_int = max_op_int(row_max_int, tensor(mi, ni));
+                    // tensor(mi, ni) += magic_int32;
+                }
+                max_converted(mi) = row_max_int;
+                max_converted(mi) = Allreduce<4>::run(max_converted(mi), max_op_int);
+                // Even rows: dequantize int max
+                float value = max_converted(mi) * dequan_s;
+                // const float value = max_int * dequan_s;
+                if constexpr (zero_init) {
+                    max(mi) = value;
+                } else {
+                    max(mi) = max_op_float(max(mi), value);
+                }
+
+                for (int ni = 0; ni < size<1>(tensor); ni++)
+                {
+                    tensor(mi, ni) += magic_int32;
+                }
+            } else {
+                int int_val = tensor(mi, 0);
+                float float_val = static_cast<float>(tensor(mi, 0));
+                tensor(mi, 0) = reinterpret_bits_as_int32(float_val);
+#pragma unroll
+                for (int ni = 1; ni < 12; ni++)
+                {
+                    int_val = max_op_int(int_val, tensor(mi, ni));
+                    float_val = static_cast<float>(tensor(mi, ni));
+                    tensor(mi, ni) = reinterpret_bits_as_int32(float_val);
+                }
+                // Odd rows: convert int to float in-place and do max on floats
+                // float float_val = static_cast<float>(tensor(mi, 0));
+                // tensor(mi, 0) = reinterpret_bits_as_int32(float_val);
+                // float row_max_float = float_val;
+                float row_max_float = static_cast<float>(int_val);
+#pragma unroll
+                // for (int ni = 1; ni < size<1>(tensor); ni++)
+                for (int ni = 12; ni < size<1>(tensor); ni++)
+                {
+                    float_val = static_cast<float>(tensor(mi, ni));
+                    tensor(mi, ni) = reinterpret_bits_as_int32(float_val);
+                    row_max_float = max_op_float(row_max_float, float_val);
+                }
+                max_float(mi) = row_max_float;
+                float value = max_float(mi) * dequan_s;
+                value = Allreduce<4>::run(value, max_op_float);
+                if constexpr (zero_init) {
+                    max(mi) = value;
+                } else {
+                    max(mi) = max_op_float(max(mi), value);
+                }
+            }
+        }
+        
+        // // Reduce across threads
+        // quad_allreduce_(max_converted, max_converted, max_op_int);
+        // quad_allreduce_(max_float, max_float, max_op_float);
+        
+        // Dequantize: for even rows use int max, for odd rows use float max
+// #pragma unroll
+//         for (int mi = 0; mi < size(max); mi++)
+//         {
+//             if (mi % 2 == 0) {
+//                 max_converted(mi) = Allreduce<4>::run(max_converted(mi), max_op_int);
+//                 // Even rows: dequantize int max
+//                 float value = max_converted(mi) * dequan_s;
+//                 // const float value = max_int * dequan_s;
+//                 if constexpr (zero_init) {
+//                     max(mi) = value;
+//                 } else {
+//                     max(mi) = max_op_float(max(mi), value);
+//                 }
+
+//                 for (int ni = 0; ni < size<1>(tensor); ni++)
+//                 {
+//                     tensor(mi, ni) += magic_int32;
+//                 }
+
+//             } else {
+//                 // Odd rows: max is already a float, just multiply by dequan_s
+//                 float value = max_float(mi) * dequan_s;
+//                 value = Allreduce<4>::run(value, max_op_float);
+//                 if constexpr (zero_init) {
+//                     max(mi) = value;
+//                 } else {
+//                     max(mi) = max_op_float(max(mi), value);
+//                 }
+//             }
+        // }
     }
 
     template <bool const zero_init = true, bool warp_reduce = true, typename Engine0, typename Layout0, typename Engine1, typename Layout1>
@@ -176,14 +258,15 @@ namespace flash
     // tensor: input tensor with int32_t values (from INT8 MMA)
     // tensor_dequantized: output tensor with float values
     // dequan_s: dequantization scale (q_dequant * k_dequant)
-    template <bool const Scale_max = true, bool const Check_inf = true, int const Max_offset = 0, bool const outer_loop_is_rows = true,
+    // template <bool const Scale_max = true, bool const Check_inf = true, int const Max_offset = 0, bool const outer_loop_is_rows = true,
+    template <bool const outer_loop_is_rows = true,
               typename Engine0, typename Layout0, typename Engine1, typename Layout1, typename Engine2, typename Layout2>
     __forceinline__ __device__ void scale_apply_exp2_dequantize(Tensor<Engine0, Layout0> &tensor, Tensor<Engine1, Layout1> &max,
                                                                  Tensor<Engine2, Layout2> &tensor_dequantized, const float dequan_s)
     {
-        // For FP8, we can subtract max by 8.0 so that the value after exp2 is in the range of [0, 256].
-        // This lets us use more of the FP8 range (instead of just [0, 1]) to reduce underflow.
-        static constexpr float max_offset = float(Max_offset); // We can only template on int, not float
+        // // For FP8, we can subtract max by 8.0 so that the value after exp2 is in the range of [0, 256].
+        // // This lets us use more of the FP8 range (instead of just [0, 1]) to reduce underflow.
+        // static constexpr float max_offset = float(Max_offset); // We can only template on int, not float
         static_assert(Layout0::rank == 2, "Only support 2D Tensor");
         static_assert(Layout1::rank == 1, "Only support 1D Tensor");
         static_assert(Layout2::rank == 2, "Only support 2D Tensor for output");
@@ -193,10 +276,17 @@ namespace flash
         
         // Helper lambda to compute max_scaled for a given row index
         auto get_max_scaled = [&](int mi) -> float {
-            if constexpr (Check_inf){
-                return max(mi) == -INFINITY ? 0.f : (!Scale_max ? max(mi) : max(mi)) - max_offset;
+            // float max_value;
+            // if constexpr (Check_inf){
+            //     max_value = max(mi) == -INFINITY ? 0.f : (!Scale_max ? max(mi) : max(mi)) - max_offset;
+            // }else{
+            //     max_value = (!Scale_max ? max(mi) : max(mi)) - max_offset;
+            // }
+            float max_value = max(mi);
+            if (mi % 2 == 0){
+                return dequan_s * magic_float + max_value;
             }else{
-                return (!Scale_max ? max(mi) : max(mi)) - max_offset;
+                return max_value;
             }
         };
         
@@ -204,7 +294,21 @@ namespace flash
         auto process_element = [&](int mi, int ni, float max_scaled) {
             // Dequantize int32 to float, then compute exp2(dequantized_value - max_scaled)
             // tensor(mi, ni) is int32_t, multiply by dequan_s to get float
-            const float dequantized_value = tensor(mi, ni) * dequan_s - max_scaled;
+            // const float dequantized_value = tensor(mi, ni) * dequan_s - max_scaled;
+
+            float dequantized_value;
+            if (mi % 2 == 0){
+                union { float f; int32_t i; } result_union;
+                // result_union.i = tensor(mi, ni) + magic_int32;
+                result_union.i = tensor(mi, ni);
+                // const float dequantized_value = result_union.f * dequan_s - max_scaled;
+                dequantized_value = result_union.f * dequan_s - max_scaled;
+            }else{
+                // Odd rows: tensor already contains float bits from in-place conversion, just reinterpret as float
+                union { float f; int32_t i; } result_union;
+                result_union.i = tensor(mi, ni);
+                dequantized_value = result_union.f * dequan_s - max_scaled;
+            }
             tensor_dequantized(mi, ni) = exp2f(dequantized_value);
         };
         
@@ -262,7 +366,8 @@ namespace flash
         CUTLASS_DEVICE void set_dequan_s(float const dequan_k)
         {
             // dequan_s = dequan_k * softmax_scale_log2;
-            dequan_s = __shfl_sync(0xffffffff, dequan_k * softmax_scale_log2, 0);
+            // dequan_s = __shfl_sync(0xffffffff, dequan_k * softmax_scale_log2, 0);
+            dequan_s = dequan_k;
         }
 
         template <int kBlockM, typename TiledMma, bool const Is_first, bool const Check_inf = false, typename Tensor0>
@@ -477,7 +582,8 @@ namespace flash
             // consider: scores are Int's when Is_INT8 is enabled, so we need to pass the dequan_s instead of scale_apply_exp2
             //           and also we need to define a new scores tensor for float type (we dequantize and take the exp2 inside this function)
             // flash::template scale_apply_exp2</*Scale_max=*/true, Check_inf, Max_offset>(scores, row_max, softmax_scale_log2);
-            flash::template scale_apply_exp2_dequantize</*Scale_max=*/true, Check_inf, Max_offset>(scores, row_max, scores_float, dequan_s);
+            // flash::template scale_apply_exp2_dequantize</*Scale_max=*/true, Check_inf, Max_offset>(scores, row_max, scores_float, dequan_s);
+            flash::template scale_apply_exp2_dequantize</*outer_loop_is_rows=*/true>(scores, row_max, scores_float, dequan_s);
 
             // consider: here we should reduce_sum with the values of the float exp2 scores (which we need to create a float tensor for when Is_INT8 is enabled)
             // We don't do the reduce across threads here since we don't need to use the row_sum.
