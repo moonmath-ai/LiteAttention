@@ -115,35 +115,6 @@ else:
 log = structlog.get_logger()
 
 
-def _rocm_lse_fp32_chunked(
-    q: torch.Tensor, k: torch.Tensor, softmax_scale: float, chunk_size: int = 128
-) -> torch.Tensor:
-    """Compute LSE in fp32 with chunked K iteration to avoid OOM on long sequences.
-
-    Used as a precision fallback on ROCm for non-power-of-2 head dimensions where the CK
-    kernel accumulates bf16 rounding error.  The chunked log-sum-exp formula is:
-        LSE(q, k_full) = log( sum_chunks exp(LSE_chunk) )
-                       = logaddexp over all chunks of LSE_chunk
-    """
-    # q: [batch, q_len, heads, head_dim]
-    q_t = q.float().permute(0, 2, 1, 3)  # [B, H, Lq, D]
-    k_t = k.float().permute(0, 2, 1, 3)  # [B, H, Lk, D]
-    k_len = k_t.shape[2]
-
-    lse: Optional[torch.Tensor] = None
-    for ki in range(0, k_len, chunk_size):
-        k_chunk = k_t[:, :, ki : ki + chunk_size, :]
-        scores = (
-            torch.matmul(q_t, k_chunk.transpose(-1, -2)) * softmax_scale
-        )  # [B, H, Lq, kchunk]
-        chunk_lse = torch.logsumexp(scores, dim=-1)  # [B, H, Lq]
-        if lse is None:
-            lse = chunk_lse
-        else:
-            lse = torch.logaddexp(lse, chunk_lse)
-
-    return lse  # [B, H, Lq]
-
 
 @dataclass
 class LiteAttentionRunConfig(CalibratedRunConfig):
@@ -257,9 +228,6 @@ class LiteAttention(nn.Module, ConfigurableModule):
         # Statistics
         self._last_percentage = 0.0  # Percentage of tiles computed in last pass
         self._last_use_int8 = use_int8  # Whether using int8 quantization in last pass
-        # ROCm: extra warmup passes needed after skip list initialization to ensure
-        # the skip list converges before the user's 2 standard warmup passes
-        self._rocm_needs_extra_warmup = False
 
         # Public configuration
         self.enable_skipping = enable_skipping
@@ -406,6 +374,9 @@ class LiteAttention(nn.Module, ConfigurableModule):
                 - kBlockM: Number of rows per tile (query dimension)
                 - kBlockN: Number of columns per tile (key dimension)
         """
+        if _IS_ROCM:
+            # CK kernel uses fixed tile sizes: 128x128, except 128x64 for D<=64
+            return 128, (64 if head_dim <= 64 else 128)
         is_int8 = dtype == torch.int8
         element_size = dtype.itemsize
         # Call C++ tile_size_fwd_sm90 function
@@ -531,15 +502,9 @@ class LiteAttention(nn.Module, ConfigurableModule):
             )
         else:
             # Initialize first buffer with "compute all tiles" configuration.
-            # On ROCm: use [2, ktiles-1, 0] which is the kernel's stable output format
-            # (start=0, end=ktiles-1, processes tiles 0..ktiles-2 via loop start_k < end_k).
-            # On CUDA: use [2, ktiles-1, -1] which triggers the kernel's full-range pass.
-            if _IS_ROCM:
-                init_val = [2, ktiles - 1, 0]
-            else:
-                init_val = [2, ktiles - 1, -1]
+            # One pair (end_incl=ktiles-1, start_excl=-1) covering all tiles.
             skip_list[0, :, :, :, 0:3] = torch.tensor(
-                init_val, dtype=torch.int16, device=device
+                [2, ktiles - 1, -1], dtype=torch.int16, device=device
             )
 
             # Note: Second buffer (skip_list[1]) is left uninitialized and will be populated
@@ -682,11 +647,6 @@ class LiteAttention(nn.Module, ConfigurableModule):
             self._skip_list = self._init_skip_list(query, key, value, must_skip_list)
             # ditermines which part of self._skip_list to use for read_list and write_list
             self._phase = 0
-            # On ROCm, the CK kernel needs extra warmup passes after fresh initialization
-            # to converge to a stable skip list state within the user's 2 standard warmup calls
-            if _IS_ROCM:
-                self._rocm_needs_extra_warmup = True
-
             # update the last attributes to the current values
             self._last_seq_len = current_seq_len
             self._last_head_dim = current_head_dim
@@ -1024,20 +984,6 @@ class LiteAttention(nn.Module, ConfigurableModule):
             assert isinstance(cfg, LiteAttentionRunConfig)
             threshold = cfg.threshold
 
-        # ROCm: for non-power-of-2 head dims without skip lists, pad to next power of 2
-        # to avoid uninitialized register contributions in the CK kernel's internal padding.
-        _orig_head_dim_pad = None
-        if _IS_ROCM and not self.enable_skipping and (head_dim & (head_dim - 1)) != 0:
-            _orig_head_dim_pad = head_dim
-            _next_pow2 = 1 << (head_dim - 1).bit_length()
-            _pad_size = _next_pow2 - head_dim
-            # Compute scale from original head_dim before padding
-            if softmax_scale is None:
-                softmax_scale = head_dim ** (-0.5)
-            query = F.pad(query, (0, _pad_size))
-            key = F.pad(key, (0, _pad_size))
-            value = F.pad(value, (0, _pad_size))
-
         output = flash_attn_func(
             q=query,
             k=key,
@@ -1053,103 +999,6 @@ class LiteAttention(nn.Module, ConfigurableModule):
             phase=(self._phase == 1) if self.reverse_skip_list else False,
             use_int8=self.use_int8,
         )
-
-        # Unpad output if tensors were padded above
-        if _orig_head_dim_pad is not None:
-            if isinstance(output, tuple):
-                _out_padded, _lse = output
-                output = (_out_padded[..., :_orig_head_dim_pad], _lse)
-            else:
-                output = output[..., :_orig_head_dim_pad]
-
-        # ROCm post-processing: the CK kernel ignores must_do_list and has no minimum-tile
-        # guarantee when all tiles are skipped. Fix write_list here so the next pass reads
-        # the correct ranges.
-        if _IS_ROCM and self.enable_skipping and write_list is not None:
-            real_batch_size = query.shape[0]
-            if must_do_list_expanded is not None:
-                # Override write_list with the must_do ranges (kernel ignored them).
-                # must_do_list_expanded format: [num_vals, tile_start_0, tile_end_0_excl, ...]
-                # write_list format: [length, tile_end_0_excl, tile_start_0, ...]  (decreasing pairs)
-                n = int(must_do_list_expanded[0].item())
-                num_ranges = n // 2
-                write_list[:real_batch_size, :, :, 0] = n
-                for i in range(num_ranges):
-                    write_list[:real_batch_size, :, :, 2 * i + 1] = (
-                        must_do_list_expanded[2 * i + 2]
-                    )
-                    write_list[:real_batch_size, :, :, 2 * i + 2] = (
-                        must_do_list_expanded[2 * i + 1]
-                    )
-            else:
-                # Ensure at least 1 tile is recorded even when threshold skips everything.
-                # The kernel writes length=0 when all tiles are below threshold; enforce a
-                # single-tile range [2, 1, 0] so downstream assertions (e.g. test_skip_all)
-                # can always find a valid range.
-                all_zero = write_list[:real_batch_size, :, :, 0] == 0
-                if all_zero.any():
-                    write_list[:real_batch_size, :, :, 0] = torch.where(
-                        all_zero,
-                        write_list[:real_batch_size, :, :, 0].new_full((), 2),
-                        write_list[:real_batch_size, :, :, 0],
-                    )
-                    write_list[:real_batch_size, :, :, 1] = torch.where(
-                        all_zero,
-                        write_list[:real_batch_size, :, :, 1].new_full((), 1),
-                        write_list[:real_batch_size, :, :, 1],
-                    )
-                    write_list[:real_batch_size, :, :, 2] = torch.where(
-                        all_zero,
-                        write_list[:real_batch_size, :, :, 2].new_full((), 0),
-                        write_list[:real_batch_size, :, :, 2],
-                    )
-
-        # ROCm: if skip list was just initialized, run extra warmup passes to speed up
-        # convergence so the user's standard 2 warmup passes are sufficient for stability.
-        # Skip when must_do_list_expanded is set: the post-processed write_list already contains
-        # the correct must_do ranges and extra passes would overwrite them with the min-tile value.
-        if (
-            _IS_ROCM
-            and self.enable_skipping
-            and self._rocm_needs_extra_warmup
-            and must_do_list_expanded is None
-        ):
-            self._rocm_needs_extra_warmup = False
-            _extra_bs = query.shape[0]
-            for _ in range(2):
-                _e_read, _e_write = self._get_read_write_lists(query, key, value)
-                flash_attn_func(
-                    q=query,
-                    k=key,
-                    v=value,
-                    softmax_scale=softmax_scale,
-                    attn_read_list=_e_read,
-                    attn_must_do_list=None,
-                    attn_write_list=_e_write,
-                    thr=threshold,
-                    return_softmax_lse=False,
-                    reverse_skip_list=self.reverse_skip_list,
-                    phase=(self._phase == 1) if self.reverse_skip_list else False,
-                    use_int8=self.use_int8,
-                )
-                # Apply minimum-tile guarantee for each extra warmup pass
-                _e_zero = _e_write[:_extra_bs, :, :, 0] == 0
-                if _e_zero.any():
-                    _e_write[:_extra_bs, :, :, 0] = torch.where(
-                        _e_zero,
-                        _e_write[:_extra_bs, :, :, 0].new_full((), 2),
-                        _e_write[:_extra_bs, :, :, 0],
-                    )
-                    _e_write[:_extra_bs, :, :, 1] = torch.where(
-                        _e_zero,
-                        _e_write[:_extra_bs, :, :, 1].new_full((), 1),
-                        _e_write[:_extra_bs, :, :, 1],
-                    )
-                    _e_write[:_extra_bs, :, :, 2] = torch.where(
-                        _e_zero,
-                        _e_write[:_extra_bs, :, :, 2].new_full((), 0),
-                        _e_write[:_extra_bs, :, :, 2],
-                    )
 
         # Record calibration results and advance timestep
         if self.enable_skipping:
@@ -1167,20 +1016,6 @@ class LiteAttention(nn.Module, ConfigurableModule):
                 skip_percentage=1.0 - self._last_percentage,
                 threshold=threshold,
             )
-
-        # ROCm: non-power-of-2 head dims have reduced bf16 LSE precision (the CK kernel pads
-        # to the next power of 2 internally, accumulating extra rounding error). Recompute
-        # LSE in fp32 when the caller requests it to maintain accuracy.
-        if _IS_ROCM and return_softmax_lse and (head_dim & (head_dim - 1)) != 0:
-            if isinstance(output, tuple):
-                _out_tensor, _ = output
-            else:
-                _out_tensor = output
-            _lse_scale = (
-                softmax_scale if softmax_scale is not None else head_dim ** (-0.5)
-            )
-            _lse_corrected = _rocm_lse_fp32_chunked(query, key, _lse_scale)
-            output = (_out_tensor, _lse_corrected)
 
         return output
 
@@ -1215,7 +1050,6 @@ class LiteAttention(nn.Module, ConfigurableModule):
         self.verbose_reinitialization = False
         self._last_percentage = 0.0
         self._last_num_heads = None
-        self._rocm_needs_extra_warmup = False
         self.restart_config()
 
     @property

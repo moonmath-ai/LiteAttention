@@ -94,26 +94,17 @@ def _flash_attn_forward(
         hasattr(flash_attn_3_cuda, "__name__")
         and flash_attn_3_cuda.__name__ == "flash_attn_2_cuda"
     ):
-        out, softmax_lse, *rest = flash_attn_3_cuda.fwd(
-            q=q,
-            k=k,
-            v=v,
-            out_=out,
-            alibi_slopes_=None,
-            p_dropout=0.0,
-            softmax_scale=softmax_scale,
+        out, softmax_lse = flash_attn_3_cuda.lite_attn_fwd(
+            q.contiguous(), k.contiguous(), v.contiguous(),
+            softmax_scale=softmax_scale if softmax_scale is not None else q.shape[-1] ** -0.5,
             is_causal=causal,
-            window_size_left=window_size[0],
-            window_size_right=window_size[1],
-            softcap=softcap,
-            return_softmax=return_softmax_lse,
-            gen_=None,
-            attn_read_list=attn_read_list,
-            attn_write_list=attn_write_list,
-            threshold=thr,
+            skip_read=attn_read_list,
+            skip_write=attn_write_list,
+            skip_threshold=thr,
             reverse_skip_list=reverse_skip_list,
+            phase=phase,
         )
-        return out, softmax_lse, *rest
+        return out, softmax_lse
     out, softmax_lse, *rest = flash_attn_3_cuda.fwd(
         q,
         k,
