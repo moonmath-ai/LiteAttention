@@ -100,6 +100,7 @@ from ._internal.flash_attn_interface import flash_attn_func
 from .calibrated_module import (
     CalibratedCalibConfig,
     CalibratedRunConfig,
+    ConfigList,
     ConfigurableModule,
     ModuleRegistry,
 )
@@ -125,6 +126,23 @@ class LiteAttentionRunConfig(CalibratedRunConfig):
     @classmethod
     def default(cls) -> Self:
         return cls(threshold=-10.0)
+
+
+@dataclass
+class LiteAttentionDisabledConfig(CalibratedRunConfig):
+    """Runtime config that disables skipping for this timestep (regular attention).
+
+    When a timestep uses this config:
+    - No skip list is read or written (the CUDA kernel runs standard attention).
+    - The double-buffer phase does **not** advance, so the next enabled
+      timestep will read the same write buffer that the *last* enabled
+      timestep produced.  Because skip lists only grow (tiles are never
+      un-skipped), this stale list is still safe — it may just skip fewer
+      tiles than an up-to-date list would.
+    - If all preceding timesteps were also disabled (e.g. the first N steps),
+      the skip list is never allocated; the first enabled timestep triggers a
+      fresh initialization to "compute all tiles".
+    """
 
 
 @dataclass
@@ -230,6 +248,13 @@ class LiteAttention(nn.Module, ConfigurableModule):
         self._last_use_int8 = use_int8  # Whether using int8 quantization in last pass
 
         # Public configuration
+        if not enable_skipping:
+            warnings.warn(
+                "LiteAttention(enable_skipping=False) is deprecated. "
+                "Use LiteAttentionDisabledConfig to disable skipping per-timestep instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         self.enable_skipping = enable_skipping
         self.max_batch_size = max_batch_size
 
@@ -569,6 +594,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
         key: torch.Tensor,
         value: Optional[torch.Tensor] = None,
         must_skip_list: list = None,
+        enable_skipping: Optional[bool] = None,
     ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
         """
         Get the current read and write skip lists for this attention forward pass.
@@ -605,7 +631,9 @@ class LiteAttention(nn.Module, ConfigurableModule):
         """
 
         # If skipping disabled, return None (standard Flash Attention)
-        if not self.enable_skipping:
+        if enable_skipping is None:
+            enable_skipping = self.enable_skipping
+        if not enable_skipping:
             return None, None
 
         # Backward-compat: older callers pass (query, value) only.
@@ -867,15 +895,21 @@ class LiteAttention(nn.Module, ConfigurableModule):
         >>> # Force computation for positions [0, 128) and [500, 640) (exclusive end)
         >>> output = lite_attn(q, k, v, must_do_list=[0, 128, 500, 640])
         """
+        # Skipping is disabled both by the legacy self.enable_skipping flag
+        # (deprecated — emits DeprecationWarning) and by
+        # LiteAttentionDisabledConfig (per-timestep config).
         cfg = self.config if self.enable_skipping else None
+        enable_skipping = self.enable_skipping and not isinstance(
+            cfg, LiteAttentionDisabledConfig
+        )
 
         # Get read and write lists (internal mask management)
         read_list, write_list = self._get_read_write_lists(
-            query, key, value, must_skip_list
+            query, key, value, must_skip_list, enable_skipping=enable_skipping
         )
 
-        if self.enable_skipping and (must_do_list is not None):
-            # handle must-do list - expand the 1d list to a list per head per batch per qi
+        # handle must-do list - expand the 1d list to a list per head per batch per qi
+        if enable_skipping and must_do_list is not None:
             must_do_list_expanded = self._expand_must_do_list(
                 must_do_list, write_list.shape, query, value, self.use_int8
             )
@@ -895,7 +929,8 @@ class LiteAttention(nn.Module, ConfigurableModule):
             else scale
         )
 
-        if not self.enable_skipping:
+        # set the threshold
+        if not enable_skipping:
             threshold = 0.0  # unused
         elif isinstance(cfg, LiteAttentionCalibConfig):
             temp_list = read_list.clone()
@@ -980,9 +1015,10 @@ class LiteAttention(nn.Module, ConfigurableModule):
                 return curr_th
 
             threshold = find_threshold(low=-20.0, high=0.0)
-        else:
-            assert isinstance(cfg, LiteAttentionRunConfig)
+        elif isinstance(cfg, LiteAttentionRunConfig):
             threshold = cfg.threshold
+        else:
+            raise ValueError(f"Unknown config type: {type(cfg)}")
 
         output = flash_attn_func(
             q=query,
@@ -1002,11 +1038,15 @@ class LiteAttention(nn.Module, ConfigurableModule):
 
         # Record calibration results and advance timestep
         if self.enable_skipping:
-            self.add_calibration_results(LiteAttentionRunConfig(threshold=threshold))
+            self.add_calibration_results(
+                LiteAttentionRunConfig(threshold=threshold)
+                if isinstance(cfg, LiteAttentionCalibConfig)
+                else cfg
+            )
 
         # Calculate and store statistics if enabled
         if (
-            self.enable_skipping
+            read_list is not None
             and os.getenv("LITE_ATTENTION_VERBOSE", "FALSE") != "FALSE"
         ):
             real_batch_size = query.shape[0]
@@ -1124,7 +1164,17 @@ class LiteAttention(nn.Module, ConfigurableModule):
         >>> output1 = lite_attn(q, k, v)  # With skipping
         >>> lite_attn.enable_skip_optimization(False)
         >>> output2 = lite_attn(q, k, v)  # Without skipping
+
+        .. deprecated::
+            Use :class:`LiteAttentionDisabledConfig` to disable skipping
+            per-timestep instead.
         """
+        warnings.warn(
+            "enable_skip_optimization() is deprecated. "
+            "Use LiteAttentionDisabledConfig to disable skipping per-timestep instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.enable_skipping = enable
         # Note: Skip state is preserved to allow toggling without reinitialization
 
@@ -1413,6 +1463,7 @@ class SeqParallelLiteAttention:
                 threshold=threshold,
                 max_batch_size=max_batch_size,
                 use_int8=use_int8,
+                config=config,
             )
             for _ in range(num_nodes)
         ]
@@ -1502,13 +1553,14 @@ class LiteAttentionRegistry(ModuleRegistry):
         filename: str | Path | None = None,
         calib_config: dict | None = None,
         force: bool = False,
+        disabled_steps: int = 0,
     ) -> Self:
         """
         Create a registry from a model and configure all its LiteAttention modules.
 
         Args:
             model: `nn.Module` that contains LiteAttention modules.
-            mode: Configuration mode - 'const', 'load', or 'calib'.
+            mode: Configuration mode - 'const', 'load', 'calib', or 'disable'.
             threshold: Threshold value for mode='const'.
             filename: Path to config file for mode='load' (input) or
                 mode='calib' (output via save_if_calib). Cast to Path internally.
@@ -1518,6 +1570,20 @@ class LiteAttentionRegistry(ModuleRegistry):
             force: If True, override instance-level configs on modules.
                 If False (default), warn when a module has an instance config
                 that will take precedence over the registry config.
+            disabled_steps: Number of leading forward passes to run with
+                skipping disabled (regular attention). For a ConfigList, the
+                first ``disabled_steps`` entries are replaced with disabled
+                configs (if the list is shorter, the last entry is kept as a
+                tail). For a scalar config, creates a ConfigList of
+                ``disabled_steps`` disabled entries followed by the original.
+
+                .. note::
+                    This counts **forward() calls per module**, not denoising
+                    steps. When a guider (e.g. CFG/STG) evaluates the model
+                    multiple times per denoising step, each evaluation
+                    consumes one entry from the ConfigList. For example,
+                    with a 4-pass guider, ``disabled_steps=20`` disables 5
+                    denoising steps (20 / 4).
 
         """
         if filename is not None:
@@ -1544,7 +1610,9 @@ class LiteAttentionRegistry(ModuleRegistry):
                         module_name=name,
                     )
 
-        if mode == "const":
+        if mode == "disable":
+            registry.set_bulk_config(LiteAttentionDisabledConfig())
+        elif mode == "const":
             if threshold is None:
                 warnings.warn(
                     "no 'threshold' specified for mode 'const'. Using default value",
@@ -1559,7 +1627,11 @@ class LiteAttentionRegistry(ModuleRegistry):
                 raise ValueError("filename is required for mode='load'")
             registry.load_config(
                 filename,
-                config_types=[LiteAttentionRunConfig, LiteAttentionCalibConfig],
+                config_types=[
+                    LiteAttentionRunConfig,
+                    LiteAttentionDisabledConfig,
+                    LiteAttentionCalibConfig,
+                ],
             )
         elif mode == "calib":
             if filename is None:
@@ -1573,8 +1645,24 @@ class LiteAttentionRegistry(ModuleRegistry):
             registry.set_bulk_config(LiteAttentionCalibConfig(**calib_config))
         else:
             raise ValueError(
-                f"Unknown mode: {mode!r}. Must be 'const', 'load', or 'calib'."
+                f"Unknown mode: {mode!r}. Must be 'const', 'load', 'calib', or 'disable'."
             )
+
+        if disabled_steps < 0:
+            raise ValueError(
+                f"disabled_steps must be non-negative, got {disabled_steps}"
+            )
+        if disabled_steps > 0 and mode != "disable":
+            disabled_prefix = [LiteAttentionDisabledConfig()] * disabled_steps
+            for module in registry.named_modules.values():
+                cfg = module._registry_config
+                if isinstance(cfg, ConfigList):
+                    remainder = list(cfg)[disabled_steps:]
+                    if not remainder:
+                        remainder = [cfg[-1]]
+                    module._registry_config = ConfigList(disabled_prefix + remainder)
+                else:
+                    module._registry_config = ConfigList(disabled_prefix + [cfg])
 
         return registry
 

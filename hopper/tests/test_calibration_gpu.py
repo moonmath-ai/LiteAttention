@@ -10,6 +10,7 @@ from lite_attention.calibrated_module import (
 )
 from lite_attention.lite_attention import (
     LiteAttentionCalibConfig,
+    LiteAttentionDisabledConfig,
     LiteAttentionRegistry,
     LiteAttentionRunConfig,
 )
@@ -62,6 +63,19 @@ class SimpleModel(nn.Module):
 @pytest.fixture
 def simple_model():
     return SimpleModel()
+
+
+@pytest.fixture
+def small_qkv():
+    """Smaller tensors for tests that only check config output types, not numerics."""
+    torch.manual_seed(42)
+    torch.cuda.manual_seed(42)
+    sq = 256
+    h = 2
+    q = torch.randn(BATCH, sq, h, HEAD_DIM, device="cuda", dtype=torch.bfloat16)
+    k = torch.randn(BATCH, sq, h, HEAD_DIM, device="cuda", dtype=torch.bfloat16)
+    v = torch.randn(BATCH, sq, h, HEAD_DIM, device="cuda", dtype=torch.bfloat16)
+    return q, k, v
 
 
 @pytest.fixture
@@ -361,3 +375,493 @@ def test_calc_error_different_tensors():
     assert errors["Cossim"] > 0
     assert errors["L1"] > 0
     assert errors["RMSE"] > 0
+
+
+# ===========================================================================
+# LiteAttentionDisabledConfig
+# ===========================================================================
+
+
+def test_disabled_config_in_config_list(qkv):
+    """Disabled timesteps run regular attention; skipping timesteps use threshold."""
+    q, k, v = qkv
+    cl = ConfigList(
+        [
+            LiteAttentionRunConfig(threshold=-5.0),
+            LiteAttentionRunConfig(threshold=-5.0),
+            LiteAttentionDisabledConfig(),
+            LiteAttentionRunConfig(threshold=-5.0),
+        ]
+    )
+
+    class _M(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.attn = LiteAttention()
+
+    m = _M()
+    _ = LiteAttentionRegistry.from_model(m, mode="const", threshold=-99.0)
+    attn = m.attn
+    attn._registry_config = cl
+
+    for i in range(4):
+        torch.cuda.synchronize()
+        attn(q, k, v)
+        torch.cuda.synchronize()
+
+    assert len(attn._config_output) == 4
+    # Steps 0, 1, 3 should record LiteAttentionRunConfig with threshold -5.0
+    for i in [0, 1, 3]:
+        assert type(attn._config_output[i]) is LiteAttentionRunConfig
+        assert attn._config_output[i].threshold == -5.0
+    # Step 2 should record LiteAttentionDisabledConfig
+    assert type(attn._config_output[2]) is LiteAttentionDisabledConfig
+
+
+def test_disabled_config_output_matches_no_skipping(qkv):
+    """Output with LiteAttentionDisabledConfig should match enable_skipping=False."""
+    q, k, v = qkv
+
+    # Reference: skipping disabled entirely
+    attn_ref = LiteAttention(enable_skipping=False)
+    torch.cuda.synchronize()
+    out_ref = attn_ref(q, k, v)
+    torch.cuda.synchronize()
+
+    # Test: disabled via config on a specific timestep
+    cl = ConfigList([LiteAttentionDisabledConfig()])
+
+    class _M(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.attn = LiteAttention()
+
+    m = _M()
+    _ = LiteAttentionRegistry.from_model(m, mode="const", threshold=-99.0)
+    m.attn._registry_config = cl
+    torch.cuda.synchronize()
+    out_test = m.attn(q, k, v)
+    torch.cuda.synchronize()
+
+    torch.testing.assert_close(out_test, out_ref)
+
+
+def test_config_list_clamping_gpu(qkv):
+    """ConfigList shorter than timestep count repeats last element."""
+    q, k, v = qkv
+    cl = ConfigList([LiteAttentionRunConfig(threshold=-5.0)])
+
+    class _M(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.attn = LiteAttention()
+
+    m = _M()
+    _ = LiteAttentionRegistry.from_model(m, mode="const", threshold=-99.0)
+    attn = m.attn
+    attn._registry_config = cl
+
+    # Step 0: in bounds
+    torch.cuda.synchronize()
+    attn(q, k, v)
+    torch.cuda.synchronize()
+
+    # Steps 1-2: clamp beyond the 1-element list
+    with pytest.warns(UserWarning, match="clamping to last entry"):
+        for _ in range(2):
+            torch.cuda.synchronize()
+            attn(q, k, v)
+            torch.cuda.synchronize()
+
+    assert len(attn._config_output) == 3
+    for r in attn._config_output:
+        assert isinstance(r, LiteAttentionRunConfig)
+        assert r.threshold == -5.0
+
+
+def test_disabled_then_clamped_config(qkv):
+    """Short ConfigList ending with DisabledConfig clamps to disabled forever."""
+    q, k, v = qkv
+    cl = ConfigList(
+        [
+            LiteAttentionRunConfig(threshold=-5.0),
+            LiteAttentionDisabledConfig(),
+        ]
+    )
+
+    class _M(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.attn = LiteAttention()
+
+    m = _M()
+    _ = LiteAttentionRegistry.from_model(m, mode="const", threshold=-99.0)
+    attn = m.attn
+    attn._registry_config = cl
+
+    # Steps 0-1: in bounds
+    for _ in range(2):
+        torch.cuda.synchronize()
+        attn(q, k, v)
+        torch.cuda.synchronize()
+
+    # Steps 2-3: clamp beyond the 2-element list
+    with pytest.warns(UserWarning, match="clamping to last entry"):
+        for _ in range(2):
+            torch.cuda.synchronize()
+            attn(q, k, v)
+            torch.cuda.synchronize()
+
+    assert len(attn._config_output) == 4
+    assert type(attn._config_output[0]) is LiteAttentionRunConfig
+    for i in [1, 2, 3]:
+        assert type(attn._config_output[i]) is LiteAttentionDisabledConfig
+
+
+# ===========================================================================
+# from_model: mode="disable" and disabled_steps
+# ===========================================================================
+
+
+def test_registry_from_model_disable(small_qkv):
+    """mode='disable' produces disabled output on every timestep."""
+    q, k, v = small_qkv
+    model = SimpleModel()
+    registry = LiteAttentionRegistry.from_model(model, mode="disable")
+    for mod in registry.named_modules.values():
+        for _ in range(3):
+            torch.cuda.synchronize()
+            mod(q, k, v)
+            torch.cuda.synchronize()
+        assert len(mod._config_output) == 3
+        for r in mod._config_output:
+            assert type(r) is LiteAttentionDisabledConfig
+
+
+def test_registry_from_model_disable_ignores_disabled_steps(small_qkv):
+    """disabled_steps has no effect when mode='disable' (already fully disabled)."""
+    q, k, v = small_qkv
+    model = SimpleModel()
+    registry = LiteAttentionRegistry.from_model(model, mode="disable", disabled_steps=3)
+    for mod in registry.named_modules.values():
+        for _ in range(5):
+            torch.cuda.synchronize()
+            mod(q, k, v)
+            torch.cuda.synchronize()
+        # All steps disabled — disabled_steps doesn't add extra structure
+        assert len(mod._config_output) == 5
+        for r in mod._config_output:
+            assert type(r) is LiteAttentionDisabledConfig
+
+
+def test_registry_from_model_disabled_steps_with_const(small_qkv):
+    """disabled_steps prepends disabled entries to a scalar const config."""
+    q, k, v = small_qkv
+    model = SimpleModel()
+    registry = LiteAttentionRegistry.from_model(
+        model, mode="const", threshold=-5.0, disabled_steps=2
+    )
+    for mod in registry.named_modules.values():
+        # Steps 0-2: in bounds (2 disabled + 1 const)
+        for _ in range(3):
+            torch.cuda.synchronize()
+            mod(q, k, v)
+            torch.cuda.synchronize()
+
+        # Step 3: clamps beyond the 3-element list
+        with pytest.warns(UserWarning, match="clamping to last entry"):
+            torch.cuda.synchronize()
+            mod(q, k, v)
+            torch.cuda.synchronize()
+
+        out = mod._config_output
+        assert len(out) == 4
+        assert type(out[0]) is LiteAttentionDisabledConfig
+        assert type(out[1]) is LiteAttentionDisabledConfig
+        assert type(out[2]) is LiteAttentionRunConfig
+        assert out[2].threshold == -5.0
+        assert type(out[3]) is LiteAttentionRunConfig
+        assert out[3].threshold == -5.0  # clamped last entry
+
+
+def test_registry_from_model_disabled_steps_with_load(small_qkv, tmp_toml):
+    """disabled_steps replaces the first N entries of a loaded ConfigList."""
+    q, k, v = small_qkv
+    model = SimpleModel()
+    names = list(
+        LiteAttentionRegistry.from_model(
+            model, mode="const", threshold=-1.0
+        ).named_modules.keys()
+    )
+    # Save a 4-step config
+    ccd = CalibratedConfigDict(
+        {
+            name: ConfigList(
+                [LiteAttentionRunConfig(threshold=float(-i)) for i in range(4)]
+            )
+            for name in names
+        }
+    )
+    ccd.save(tmp_toml)
+
+    model2 = SimpleModel()
+    registry2 = LiteAttentionRegistry.from_model(
+        model2, mode="load", filename=tmp_toml, disabled_steps=2
+    )
+    for mod in registry2.named_modules.values():
+        for _ in range(4):
+            torch.cuda.synchronize()
+            mod(q, k, v)
+            torch.cuda.synchronize()
+
+        out = mod._config_output
+        assert len(out) == 4
+        assert type(out[0]) is LiteAttentionDisabledConfig
+        assert type(out[1]) is LiteAttentionDisabledConfig
+        assert type(out[2]) is LiteAttentionRunConfig
+        assert out[2].threshold == -2.0
+        assert type(out[3]) is LiteAttentionRunConfig
+        assert out[3].threshold == -3.0
+
+
+def test_registry_from_model_disabled_steps_exceeds_list(small_qkv, tmp_toml):
+    """When disabled_steps >= list length, last entry is kept as fallback."""
+    q, k, v = small_qkv
+    model = SimpleModel()
+    names = list(
+        LiteAttentionRegistry.from_model(
+            model, mode="const", threshold=-1.0
+        ).named_modules.keys()
+    )
+    # Save a 2-step config
+    ccd = CalibratedConfigDict(
+        {
+            name: ConfigList(
+                [LiteAttentionRunConfig(threshold=float(-i)) for i in range(2)]
+            )
+            for name in names
+        }
+    )
+    ccd.save(tmp_toml)
+
+    model2 = SimpleModel()
+    registry2 = LiteAttentionRegistry.from_model(
+        model2, mode="load", filename=tmp_toml, disabled_steps=5
+    )
+    # ConfigList is 6 elements (5 disabled + 1 fallback)
+    for mod in registry2.named_modules.values():
+        # Steps 0-5: in bounds
+        for _ in range(6):
+            torch.cuda.synchronize()
+            mod(q, k, v)
+            torch.cuda.synchronize()
+
+        # Step 6: clamps beyond the 6-element list
+        with pytest.warns(UserWarning, match="clamping to last entry"):
+            torch.cuda.synchronize()
+            mod(q, k, v)
+            torch.cuda.synchronize()
+
+        out = mod._config_output
+        assert len(out) == 7
+        for i in range(5):
+            assert type(out[i]) is LiteAttentionDisabledConfig
+        # Step 5 onward: fallback to last original entry (threshold=-1.0)
+        assert type(out[5]) is LiteAttentionRunConfig
+        assert out[5].threshold == -1.0
+        assert type(out[6]) is LiteAttentionRunConfig
+        assert out[6].threshold == -1.0
+
+
+def test_mixed_config_list_toml_round_trip(tmp_toml):
+    """A ConfigList mixing disabled and run configs survives TOML save/load."""
+    original = ConfigList(
+        [
+            LiteAttentionDisabledConfig(),
+            LiteAttentionDisabledConfig(),
+            LiteAttentionRunConfig(threshold=-3.0),
+            LiteAttentionRunConfig(threshold=-7.0),
+        ]
+    )
+    ccd = CalibratedConfigDict({"attn0": original})
+    ccd.save(tmp_toml)
+
+    config_types = [LiteAttentionRunConfig, LiteAttentionDisabledConfig]
+    loaded = CalibratedConfigDict.load(tmp_toml, config_types=config_types)
+
+    result = loaded["attn0"]
+    assert isinstance(result, ConfigList)
+    assert len(result) == 4
+    assert type(result[0]) is LiteAttentionDisabledConfig
+    assert type(result[1]) is LiteAttentionDisabledConfig
+    assert type(result[2]) is LiteAttentionRunConfig
+    assert result[2].threshold == -3.0
+    assert type(result[3]) is LiteAttentionRunConfig
+    assert result[3].threshold == -7.0
+
+
+def test_registry_from_model_negative_disabled_steps_raises(simple_model):
+    with pytest.raises(ValueError, match="non-negative"):
+        LiteAttentionRegistry.from_model(
+            simple_model, mode="const", threshold=-5.0, disabled_steps=-1
+        )
+
+
+# ===========================================================================
+# Skip list buffer state across disabled steps
+# ===========================================================================
+
+
+def _make_attn_with_config(config_list):
+    """Create a LiteAttention module with a given ConfigList via a registry."""
+
+    class _M(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.attn = LiteAttention()
+
+    m = _M()
+    _ = LiteAttentionRegistry.from_model(m, mode="const", threshold=-99.0)
+    m.attn._registry_config = config_list
+    return m.attn
+
+
+def _capture_forward(attn, q, k, v, n_steps):
+    """Run n_steps forward passes, capturing (read_list, write_list) each step.
+
+    Returns a list of (read_data_ptr | None, write_data_ptr | None) tuples.
+    """
+    captured = []
+    orig = attn._get_read_write_lists
+
+    def patched(*args, **kwargs):
+        r, w = orig(*args, **kwargs)
+        captured.append(
+            (
+                r.data_ptr() if r is not None else None,
+                w.data_ptr() if w is not None else None,
+            )
+        )
+        return r, w
+
+    attn._get_read_write_lists = patched
+    try:
+        for _ in range(n_steps):
+            torch.cuda.synchronize()
+            attn(q, k, v)
+            torch.cuda.synchronize()
+    finally:
+        attn._get_read_write_lists = orig
+    return captured
+
+
+def test_skip_list_disabled_first_3_steps(small_qkv):
+    """First 3 steps disabled → skip list not allocated; step 4 gets fresh 'compute all'."""
+    q, k, v = small_qkv
+    cl = ConfigList(
+        [
+            LiteAttentionDisabledConfig(),
+            LiteAttentionDisabledConfig(),
+            LiteAttentionDisabledConfig(),
+            LiteAttentionRunConfig(threshold=-5.0),
+        ]
+    )
+    attn = _make_attn_with_config(cl)
+
+    # Run 3 disabled steps — skip list should never be allocated
+    captured = _capture_forward(attn, q, k, v, 3)
+    for r, w in captured:
+        assert r is None and w is None
+    assert attn._skip_list is None
+
+    # Step 4: first enabled step — skip list gets initialized fresh
+    captured = _capture_forward(attn, q, k, v, 1)
+    assert captured[0][0] is not None  # read_list exists
+    assert attn._skip_list is not None
+    # read_list is buf[0] (phase starts at 0 after init), which is "compute all"
+    assert captured[0][0] == attn._skip_list[0].data_ptr()
+
+
+def test_skip_list_disabled_step_5(small_qkv):
+    """Disabled step 5 → step 6 reads the write_list from step 4."""
+    q, k, v = small_qkv
+    cl = ConfigList(
+        [LiteAttentionRunConfig(threshold=-5.0)] * 5
+        + [LiteAttentionDisabledConfig()]
+        + [LiteAttentionRunConfig(threshold=-5.0)]
+    )
+    attn = _make_attn_with_config(cl)
+
+    captured = _capture_forward(attn, q, k, v, 7)
+
+    # Step 4 (index 4, phase=0): writes to buf[1]
+    step4_write = captured[4][1]
+    # Step 5 (index 5): disabled — both None
+    assert captured[5] == (None, None)
+    # Step 6 (index 6, phase still 1): reads buf[1] = step 4's write
+    step6_read = captured[6][0]
+    assert step6_read == step4_write
+
+
+def test_skip_list_disabled_steps_5_6(small_qkv):
+    """Disabled steps 5-6 → step 7 reads the write_list from step 4."""
+    q, k, v = small_qkv
+    cl = ConfigList(
+        [LiteAttentionRunConfig(threshold=-5.0)] * 5
+        + [LiteAttentionDisabledConfig()] * 2
+        + [LiteAttentionRunConfig(threshold=-5.0)]
+    )
+    attn = _make_attn_with_config(cl)
+
+    captured = _capture_forward(attn, q, k, v, 8)
+
+    step4_write = captured[4][1]
+    assert captured[5] == (None, None)
+    assert captured[6] == (None, None)
+    # Step 7: reads buf[1] = step 4's write (phase frozen at 1)
+    assert captured[7][0] == step4_write
+
+
+def test_skip_list_disabled_steps_5_6_7(small_qkv):
+    """Disabled steps 5-7 → step 8 reads the write_list from step 4."""
+    q, k, v = small_qkv
+    cl = ConfigList(
+        [LiteAttentionRunConfig(threshold=-5.0)] * 5
+        + [LiteAttentionDisabledConfig()] * 3
+        + [LiteAttentionRunConfig(threshold=-5.0)]
+    )
+    attn = _make_attn_with_config(cl)
+
+    captured = _capture_forward(attn, q, k, v, 9)
+
+    step4_write = captured[4][1]
+    for i in [5, 6, 7]:
+        assert captured[i] == (None, None)
+    # Step 8: reads buf[1] = step 4's write (phase frozen at 1)
+    assert captured[8][0] == step4_write
+
+
+def test_skip_list_disabled_steps_5_6_8(small_qkv):
+    """Disabled steps 5,6,8 → step 7 reads step 4's write; step 9 reads step 7's write."""
+    q, k, v = small_qkv
+    cl = ConfigList(
+        [LiteAttentionRunConfig(threshold=-5.0)] * 5  # steps 0-4
+        + [LiteAttentionDisabledConfig()] * 2  # steps 5-6
+        + [LiteAttentionRunConfig(threshold=-5.0)]  # step 7
+        + [LiteAttentionDisabledConfig()]  # step 8
+        + [LiteAttentionRunConfig(threshold=-5.0)]  # step 9
+    )
+    attn = _make_attn_with_config(cl)
+
+    captured = _capture_forward(attn, q, k, v, 10)
+
+    step4_write = captured[4][1]
+    assert captured[5] == (None, None)
+    assert captured[6] == (None, None)
+    # Step 7: reads step 4's write (phase was frozen at 1)
+    assert captured[7][0] == step4_write
+    step7_write = captured[7][1]
+    # Step 8: disabled
+    assert captured[8] == (None, None)
+    # Step 9: reads step 7's write (phase was frozen at 0)
+    assert captured[9][0] == step7_write

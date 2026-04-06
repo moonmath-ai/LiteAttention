@@ -121,7 +121,15 @@ class CalibratedCalibConfig(CalibratedConfig):
 
 class ConfigList(list[CalibratedConfig]):
     """
-    List of config objects, one per timestep.
+    List of config objects, one per forward pass.
+
+    Each ``forward()`` call on a :class:`ConfigurableModule` consumes the next
+    entry (via :meth:`~ConfigurableModule.add_calibration_results`).  Note that
+    one *denoising step* may trigger multiple forward passes when a guider
+    (e.g. CFG/STG) evaluates the model more than once per step.
+
+    Out-of-bounds indices are clamped to the last entry, so a list shorter than
+    the total number of forward passes gracefully repeats the final config.
 
     Provides methods to convert between list-of-configs and dict-with-lists
     representations.
