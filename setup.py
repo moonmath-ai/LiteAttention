@@ -857,6 +857,7 @@ if not SKIP_CUDA_BUILD and not is_rocm:
         Path(this_dir) / SRC_DIR,
         Path(this_dir) / SRC_DIR / "_internal" / "cpp",
         cutlass_dir / "include",
+        Path(CUDA_HOME) / "include",
     ]
 
     ext_modules.append(
