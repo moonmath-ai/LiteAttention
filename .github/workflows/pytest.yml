@@ -63,7 +63,7 @@ jobs:
           source .venv/bin/activate
           python -m pip install --upgrade pip
           python -m pip install packaging wheel ninja
-          python -m pip install --extra-index-url "${TORCH_INDEX_URL}" torch
+          python -m pip install torch --index-url "${TORCH_INDEX_URL}"
           python -m pip install numpy
 
       - name: Clean and install project with dev extras
