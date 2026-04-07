@@ -3,7 +3,6 @@
 from typing import Optional, Union
 
 import torch
-import torch.nn as nn
 
 # isort: off
 # We need to import the CUDA kernels after importing torch
@@ -18,7 +17,7 @@ try:
         flash_attn_3_cuda = _C
     else:
         flash_attn_3_cuda = torch.ops.lite_attention
-except ImportError as e:
+except ImportError:
     # Fallback: check if _C is already available in lite_attention module (e.g. injected by test script)
     import sys
 
@@ -95,8 +94,12 @@ def _flash_attn_forward(
         and flash_attn_3_cuda.__name__ == "flash_attn_2_cuda"
     ):
         out, softmax_lse = flash_attn_3_cuda.lite_attn_fwd(
-            q.contiguous(), k.contiguous(), v.contiguous(),
-            softmax_scale=softmax_scale if softmax_scale is not None else q.shape[-1] ** -0.5,
+            q.contiguous(),
+            k.contiguous(),
+            v.contiguous(),
+            softmax_scale=softmax_scale
+            if softmax_scale is not None
+            else q.shape[-1] ** -0.5,
             is_causal=causal,
             skip_read=attn_read_list,
             skip_write=attn_write_list,

@@ -18,11 +18,10 @@ from pathlib import Path
 
 import torch
 from packaging.version import Version, parse
-from setuptools import find_packages, setup
+from setuptools import setup
 from torch.utils.cpp_extension import (
     CUDA_HOME,
     BuildExtension,
-    CppExtension,
     CUDAExtension,
 )
 from wheel.bdist_wheel import bdist_wheel as _bdist_wheel
@@ -478,7 +477,9 @@ if is_rocm:
     # For dense kernels, generate each hdim with its own optdim to get exact tile sizes
     ROCM_DENSE_HDIMS = ROCM_HDIMS
     if not ROCM_HDIMS:
-        raise RuntimeError("ROCm build selected no head dimensions; enable at least one HDIM.")
+        raise RuntimeError(
+            "ROCm build selected no head dimensions; enable at least one HDIM."
+        )
     rocm_optdim = ",".join(str(h) for h in ROCM_HDIMS)
 
     # 1. Generate Kernels
@@ -511,18 +512,38 @@ if is_rocm:
     print(f"Generating FWD lite kernels to {generated_dir} (head_dims={ROCM_HDIMS})...")
     for h in ROCM_HDIMS:
         subprocess.run(
-            [sys.executable, str(generate_script),
-             "--api", "fwd", "--receipt", "600", "--optdim", str(h),
-             "--output_dir", str(generated_dir),
-             "--filter", f"*d{h}_bf16*_qr_lite*"],
+            [
+                sys.executable,
+                str(generate_script),
+                "--api",
+                "fwd",
+                "--receipt",
+                "600",
+                "--optdim",
+                str(h),
+                "--output_dir",
+                str(generated_dir),
+                "--filter",
+                f"*d{h}_bf16*_qr_lite*",
+            ],
             check=True,
         )
     # Regenerate the API dispatch file covering all hdims (generate.py overwrites it each run).
     subprocess.run(
-        [sys.executable, str(generate_script),
-         "--api", "fwd", "--receipt", "600", "--optdim", rocm_optdim,
-         "--output_dir", str(generated_dir),
-         "--filter", "*_qr_lite*"],
+        [
+            sys.executable,
+            str(generate_script),
+            "--api",
+            "fwd",
+            "--receipt",
+            "600",
+            "--optdim",
+            rocm_optdim,
+            "--output_dir",
+            str(generated_dir),
+            "--filter",
+            "*_qr_lite*",
+        ],
         check=True,
     )
 
@@ -558,7 +579,8 @@ if is_rocm:
     # Add generated kernel instantiations (skip API files and stale hipify outputs)
     api_files = {"fmha_fwd_api.hip", "fmha_bwd_api.hip"}
     sources.extend(
-        str(p) for p in generated_dir.glob("*.hip")
+        str(p)
+        for p in generated_dir.glob("*.hip")
         if p.name not in api_files and not p.name.endswith("_hip.hip")
     )
 
@@ -839,7 +861,7 @@ if not SKIP_CUDA_BUILD and not is_rocm:
 
     ext_modules.append(
         CUDAExtension(
-            name=f"lite_attention._C",
+            name="lite_attention._C",
             sources=sources,
             extra_compile_args={
                 "cxx": ["-O3", "-std=c++17", "-DPy_LIMITED_API=0x03090000"]

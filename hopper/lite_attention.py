@@ -116,7 +116,6 @@ else:
 log = structlog.get_logger()
 
 
-
 @dataclass
 class LiteAttentionRunConfig(CalibratedRunConfig):
     """Runtime configuration for LiteAttention threshold."""
@@ -686,7 +685,7 @@ class LiteAttention(nn.Module, ConfigurableModule):
             self._last_use_int8 = self.use_int8
 
             if os.getenv("LITE_ATTENTION_VERBOSE", "FALSE") != "FALSE":
-                print(f"[Warning]: reinitialized skip list during the forward pass")
+                print("[Warning]: reinitialized skip list during the forward pass")
 
         # Alternate between the two skip list buffers
         if self._phase == 0:
