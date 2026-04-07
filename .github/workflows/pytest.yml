@@ -74,7 +74,15 @@ jobs:
           # Match PyTorch C++ ABI to avoid undefined symbol (c10::* or ListType::get)
           CXX11_ABI=$(python -c "import torch; print('TRUE' if torch._C._GLIBCXX_USE_CXX11_ABI else 'FALSE')")
           echo "Building with LITE_ATTENTION_FORCE_CXX11_ABI=$CXX11_ABI"
-          LITE_ATTENTION_FORCE_CXX11_ABI=$CXX11_ABI python -m pip install --no-build-isolation .[dev]
+          # Pin torch to the CUDA-matched version installed earlier so pip
+          # doesn't replace it with a PyPI wheel built for a different CUDA.
+          python -c "import torch; print(f'torch=={torch.__version__}')" > /tmp/torch-pin.txt
+          echo "Pinning: $(cat /tmp/torch-pin.txt)"
+          LITE_ATTENTION_FORCE_CXX11_ABI=$CXX11_ABI \
+            pip install --no-build-isolation \
+              --extra-index-url "${TORCH_INDEX_URL}" \
+              -c /tmp/torch-pin.txt \
+              .[dev]
 
       - name: Run pytest tests
         run: |
