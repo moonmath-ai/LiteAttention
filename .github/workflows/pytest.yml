@@ -34,13 +34,24 @@ jobs:
           import subprocess
 
           cuda_version = None
+          # Use nvcc (actual toolkit) rather than nvidia-smi (driver max CUDA).
+          # PyTorch's _check_cuda_version compares nvcc against torch.version.cuda.
           try:
-              output = subprocess.check_output(["nvidia-smi"], text=True)
-              match = re.search(r"CUDA Version:\s*([0-9.]+)", output)
+              output = subprocess.check_output(["nvcc", "--version"], text=True)
+              match = re.search(r"release (\d+\.\d+)", output)
               if match:
                   cuda_version = match.group(1)
-          except Exception as exc:  # noqa: BLE001
-              print(f"Could not detect CUDA version: {exc}")
+          except Exception:  # noqa: BLE001
+              pass
+
+          if not cuda_version:
+              try:
+                  output = subprocess.check_output(["nvidia-smi"], text=True)
+                  match = re.search(r"CUDA Version:\s*([0-9.]+)", output)
+                  if match:
+                      cuda_version = match.group(1)
+              except Exception as exc:  # noqa: BLE001
+                  print(f"Could not detect CUDA version: {exc}")
 
           torch_label = None
           if cuda_version:

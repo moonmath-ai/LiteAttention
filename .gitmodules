@@ -4,4 +4,4 @@
 [submodule "csrc/composable_kernel"]
 	path = csrc/composable_kernel
 	url = https://github.com/moonmath-ai/composable_kernel.git
-	branch = idan/add_la_support
+	branch = feat/conv_fp8
