@@ -82,6 +82,8 @@ jobs:
           python -c "import torch; print(f'torch=={torch.__version__}')" > /tmp/torch-pin.txt
           echo "Pinning: $(cat /tmp/torch-pin.txt)"
           echo "CUDA_HOME=$CUDA_HOME"
+          export CUDA_HOME=${CUDA_HOME:-/usr/local/cuda}
+          echo "CUDA_HOME=$CUDA_HOME"
           LITE_ATTENTION_FORCE_CXX11_ABI=$CXX11_ABI \
             pip install --no-build-isolation \
               --extra-index-url "${TORCH_INDEX_URL}" \
