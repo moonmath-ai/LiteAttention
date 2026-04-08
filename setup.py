@@ -18,11 +18,10 @@ from pathlib import Path
 
 import torch
 from packaging.version import Version, parse
-from setuptools import find_packages, setup
+from setuptools import setup
 from torch.utils.cpp_extension import (
     CUDA_HOME,
     BuildExtension,
-    CppExtension,
     CUDAExtension,
 )
 from wheel.bdist_wheel import bdist_wheel as _bdist_wheel
@@ -462,14 +461,25 @@ def _rocm_toolchain_present():
 is_rocm = (torch.version.hip is not None) or _rocm_toolchain_present()
 
 if is_rocm:
-    print("\n\nBuilding for AMD ROCm...\n\n")
+    print("\n\nBuilding LiteAttention for AMD ROCm...\n\n")
 
-    os.environ["PYTORCH_ROCM_ARCH"] = "gfx942"
-    os.environ["TORCH_ROCM_ARCH_LIST"] = "gfx942"
+    os.environ["PYTORCH_ROCM_ARCH"] = os.environ.get("PYTORCH_ROCM_ARCH", "gfx942")
     os.environ["ROCM_ARCH"] = "gfx942"
 
-    # Head dims to generate for ROCm (same set as typical NVIDIA build for parity)
-    ROCM_HDIMS = [64, 96, 128, 192, 256]
+    # Head dims to build (all supported dims; use LITE_ATTENTION_DISABLE_HDIM* to trim)
+    ROCM_HDIMS = (
+        ([] if DISABLE_HDIM64 else [64])
+        + ([] if DISABLE_HDIM96 else [96])
+        + ([] if DISABLE_HDIM128 else [128])
+        + ([] if DISABLE_HDIM192 else [192])
+        + ([] if DISABLE_HDIM256 else [256])
+    )
+    # For dense kernels, generate each hdim with its own optdim to get exact tile sizes
+    ROCM_DENSE_HDIMS = ROCM_HDIMS
+    if not ROCM_HDIMS:
+        raise RuntimeError(
+            "ROCm build selected no head dimensions; enable at least one HDIM."
+        )
     rocm_optdim = ",".join(str(h) for h in ROCM_HDIMS)
 
     # 1. Generate Kernels
@@ -496,94 +506,43 @@ if is_rocm:
             shutil.rmtree(str(generated_dir), ignore_errors=True)
     generated_dir.mkdir(parents=True, exist_ok=True)
 
-    # Build FWD filter: for each head dim, lite + baseline (qr nbias nmask) for fp16 and bf16
-    fwd_filter_parts = []
+    # Generate qr-lite pipeline kernels (skip-list attention).
+    # Per-hdim --optdim ensures each hdim gets optimal tile sizes (e.g. d128 uses bk0max=128).
+    # Generate kernel instantiations per-hdim, then regenerate the API file with all hdims.
+    print(f"Generating FWD lite kernels to {generated_dir} (head_dims={ROCM_HDIMS})...")
     for h in ROCM_HDIMS:
-        fwd_filter_parts.append(
-            f"*d{h}_fp16_batch*lite*|*d{h}_fp16_batch*qr*nbias*nmask*"
-            f"|*d{h}_bf16_batch*lite*|*d{h}_bf16_batch*qr*nbias*nmask*"
+        subprocess.run(
+            [
+                sys.executable,
+                str(generate_script),
+                "--api",
+                "fwd",
+                "--receipt",
+                "600",
+                "--optdim",
+                str(h),
+                "--output_dir",
+                str(generated_dir),
+                "--filter",
+                f"*d{h}_bf16*_qr_lite*",
+            ],
+            check=True,
         )
-    fwd_filter = "|".join(fwd_filter_parts)
-
-    print(f"Generating FWD kernels to {generated_dir} (head_dims={ROCM_HDIMS})...")
+    # Regenerate the API dispatch file covering all hdims (generate.py overwrites it each run).
     subprocess.run(
         [
             sys.executable,
             str(generate_script),
             "--api",
             "fwd",
-            "--optdim",
-            rocm_optdim,
-            "--output_dir",
-            str(generated_dir),
-            "--filter",
-            fwd_filter,
-        ],
-        check=True,
-    )
-
-    # Build BWD filter: for each head dim, fp16 and bf16
-    bwd_filter_parts = [f"*d{h}_fp16_batch*|*d{h}_bf16_batch*" for h in ROCM_HDIMS]
-    bwd_filter = "|".join(bwd_filter_parts)
-
-    print(f"Generating BWD kernels to {generated_dir} (head_dims={ROCM_HDIMS})...")
-    subprocess.run(
-        [
-            sys.executable,
-            str(generate_script),
-            "--api",
-            "bwd",
-            "--optdim",
-            rocm_optdim,
-            "--output_dir",
-            str(generated_dir),
-            "--filter",
-            bwd_filter,
-        ],
-        check=True,
-    )
-
-    # Generate APPENDKV kernels (receipt=2 = Flash attention integration: fp16/bf16 row-layout only)
-    print(
-        f"Generating FWD_APPENDKV kernels to {generated_dir} (head_dims={ROCM_HDIMS})..."
-    )
-    subprocess.run(
-        [
-            sys.executable,
-            str(generate_script),
-            "--api",
-            "fwd_appendkv",
-            "--optdim",
-            rocm_optdim,
-            "--output_dir",
-            str(generated_dir),
             "--receipt",
-            "2",
-        ],
-        check=True,
-    )
-
-    # Generate SPLITKV kernels with sync-only (qr_vr/qr_vc) pipeline variants.
-    # receipt=2 limits to fp16/bf16/row/no-bias, and filter "@*qr_vr*|*qr_vc*" excludes
-    # qr_async variants (which reference BlockFmhaFwdSplitKVPipelineQRKSVSAsync that
-    # doesn't exist in the current CK headers). The '@' splits combine vs main filters.
-    print(
-        f"Generating FWD_SPLITKV kernels to {generated_dir} (head_dims={ROCM_HDIMS})..."
-    )
-    subprocess.run(
-        [
-            sys.executable,
-            str(generate_script),
-            "--api",
-            "fwd_splitkv",
+            "600",
             "--optdim",
             rocm_optdim,
             "--output_dir",
             str(generated_dir),
-            "--receipt",
-            "2",
             "--filter",
-            "@*qr_vr*",
+            "*_qr_lite*",
         ],
         check=True,
     )
@@ -609,59 +568,34 @@ if is_rocm:
             except Exception:
                 pass
 
-    # Copy flash_api.cpp -> flash_api.hip so we only maintain the .cpp (single source of truth)
-    flash_attn_ck_dir = repo_root / "csrc" / "flash_attn_ck"
-    shutil.copy(
-        flash_attn_ck_dir / "flash_api.cpp", flash_attn_ck_dir / "flash_api.hip"
-    )
-
     # 2. Collect Sources
-    def get_rocm_source(path_str):
-        path = Path(path_str)
-        if path.suffix == ".cpp":
-            hip_path = path.with_suffix(".hip")
-            if hip_path.exists():
-                return str(hip_path)
-        return str(path)
-
+    # Note: flash_attn_ck/ sources are NOT compiled here — they belong to the
+    # flash_attn._C extension (separate build). This extension only builds
+    # lite_attn_ck + generated CK kernels for lite_attention._C.
     sources = [
-        get_rocm_source(str(flash_attn_ck_dir / "flash_api.cpp")),
-        get_rocm_source(str(flash_attn_ck_dir / "flash_common.cpp")),
-        get_rocm_source(str(flash_attn_ck_dir / "mha_fwd.cpp")),
-        get_rocm_source(str(flash_attn_ck_dir / "mha_varlen_fwd.cpp")),
-        get_rocm_source(str(flash_attn_ck_dir / "mha_fwd_kvcache.cpp")),
+        str(repo_root / "csrc" / "lite_attn_ck" / "lite_attn.hip"),
         str(generated_dir / "fmha_fwd_api.hip"),
-        # mha_bwd is always registered in flash_api.hip without a DISABLE_BACKWARD guard
-        get_rocm_source(str(flash_attn_ck_dir / "mha_bwd.cpp")),
-        str(generated_dir / "fmha_bwd_api.hip"),
     ]
-
-    if not DISABLE_VARLEN:
-        sources.append(get_rocm_source(str(flash_attn_ck_dir / "mha_varlen_bwd.cpp")))
-
+    # Add generated kernel instantiations (skip API files and stale hipify outputs)
+    api_files = {"fmha_fwd_api.hip", "fmha_bwd_api.hip"}
     sources.extend(
         str(p)
         for p in generated_dir.glob("*.hip")
-        if p.name not in ["fmha_fwd_api.hip", "fmha_bwd_api.hip"]
-        and not p.name.endswith(
-            "_hip.hip"
-        )  # exclude hipify output files (stale from prior builds)
+        if p.name not in api_files and not p.name.endswith("_hip.hip")
     )
 
     # 3. Include Directories
     rocm_include_dirs = [
-        str(flash_attn_ck_dir),
         str(ck_dir / "include"),
         str(ck_dir / "library" / "include"),
         str(ck_dir / "example" / "ck_tile" / "01_fmha"),
         str(generated_dir),
     ]
 
-    # 4. Compiler Flags (ROCm/HIP uses hipcc which is Clang-based; -Wno-c++11-narrowing avoids
-    #    "float cannot be narrowed to index_t" when CK args use float threshold and compiler is strict)
+    # 4. Compiler Flags
+    rocm_arch = os.environ.get("PYTORCH_ROCM_ARCH", "gfx942").split(";")[0]
     rocm_feature_args = (
-        []
-        + (["-DLITEATTENTION_DISABLE_BACKWARD"] if DISABLE_BACKWARD else [])
+        (["-DLITEATTENTION_DISABLE_BACKWARD"] if DISABLE_BACKWARD else [])
         + (["-DLITEATTENTION_DISABLE_PAGEDKV"] if DISABLE_PAGEDKV else [])
         + (["-DLITEATTENTION_DISABLE_SPLIT"] if DISABLE_SPLIT else [])
         + (["-DLITEATTENTION_DISABLE_APPENDKV"] if DISABLE_APPENDKV else [])
@@ -670,33 +604,21 @@ if is_rocm:
         + (["-DLITEATTENTION_DISABLE_PACKGQA"] if DISABLE_PACKGQA else [])
         + (["-DLITEATTENTION_DISABLE_FP16"] if DISABLE_FP16 else [])
         + (["-DLITEATTENTION_DISABLE_FP8"] if DISABLE_FP8 else [])
-        + (["-DLITEATTENTION_DISABLE_INT8"] if DISABLE_INT8 else [])
         + (["-DLITEATTENTION_DISABLE_VARLEN"] if DISABLE_VARLEN else [])
         + (["-DLITEATTENTION_DISABLE_CLUSTER"] if DISABLE_CLUSTER else [])
-        + (["-DLITEATTENTION_DISABLE_HDIM64"] if DISABLE_HDIM64 else [])
-        + (["-DLITEATTENTION_DISABLE_HDIM96"] if DISABLE_HDIM96 else [])
-        + (["-DLITEATTENTION_DISABLE_HDIM128"] if DISABLE_HDIM128 else [])
-        + (["-DLITEATTENTION_DISABLE_HDIM192"] if DISABLE_HDIM192 else [])
-        + (["-DLITEATTENTION_DISABLE_HDIM256"] if DISABLE_HDIM256 else [])
-        + (["-DCK_TILE_FMHA_FWD_FAST_EXP2=1"])
+        + ["-DCK_TILE_FMHA_FWD_FAST_EXP2=1"]
     )
+    compile_flags = [
+        "-O3",
+        "-std=c++17",
+        "-Wno-c++11-narrowing",
+        "-fgpu-flush-denormals-to-zero",
+        "-D__HIP_PLATFORM_AMD__=1",
+        f"-DCK_TILE_FLOAT_TO_BFLOAT16_DEFAULT={os.environ.get('CK_TILE_FLOAT_TO_BFLOAT16_DEFAULT', 2)}",
+    ] + rocm_feature_args
     extra_compile_args = {
-        "cxx": [
-            "-O3",
-            "-std=c++17",
-            "-Wno-c++11-narrowing",
-            "-D__HIP_PLATFORM_AMD__=1",
-            "-DTORCH_EXTENSION_NAME=lite_attention._C",
-        ]
-        + rocm_feature_args,
-        "nvcc": [
-            "-O3",
-            "-std=c++17",
-            "-Wno-c++11-narrowing",
-            "-D__HIP_PLATFORM_AMD__=1",
-            "--offload-arch=gfx942",
-        ]
-        + rocm_feature_args,  # nvcc maps to hipcc in CUDAExtension when IS_HIP_EXTENSION is true
+        "cxx": compile_flags,
+        "nvcc": compile_flags + [f"--offload-arch={rocm_arch}"],
     }
 
     ext_modules.append(
@@ -935,11 +857,12 @@ if not SKIP_CUDA_BUILD and not is_rocm:
         Path(this_dir) / SRC_DIR,
         Path(this_dir) / SRC_DIR / "_internal" / "cpp",
         cutlass_dir / "include",
+        Path(CUDA_HOME) / "include",
     ]
 
     ext_modules.append(
         CUDAExtension(
-            name=f"lite_attention._C",
+            name="lite_attention._C",
             sources=sources,
             extra_compile_args={
                 "cxx": ["-O3", "-std=c++17", "-DPy_LIMITED_API=0x03090000"]

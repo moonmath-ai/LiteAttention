@@ -357,16 +357,15 @@ LiteAttention on **AMD (ROCm)** uses the Composable Kernel (CK) backend and does
 
 | Feature | NVIDIA (CUDA) | AMD (ROCm) |
 |--------|----------------|------------|
-| **dtypes** | fp16, bf16; optionally fp8, int8 (build flags) | fp16, bf16 only |
-| **head_dim** | 64, 96, 128, 192, 256 (depending on build) | 64, 96, 128, 192, 256 |
+| **dtypes** | fp16, bf16; optionally fp8, int8 (build flags) | bf16 only |
+| **head_dim** | 64, 96, 128, 192, 256 (depending on build) | 64, 96, 128, 192 |
 | **Skip lists** (read/write, threshold, reverse_skip_list) | ✅ | ✅ |
-| **must_do_list** | ✅ | ❌ Not in HIP API; argument is ignored |
-| **phase** (for reverse_skip_list) | ✅ | ❌ Not passed to HIP kernel |
-| **return_softmax_lse** | ✅ | ⚠️ With skip lists, LSE is not computed by the lite kernel; returned tensor may be undefined |
-| **Dropout** | Supported in API | Passed as 0 in Python; not used |
-| **Varlen / KV-cache / paged KV** | Available in full FA3 API | Only batch fwd used; varlen/kvcache not wired in Python for ROCm |
+| **Phase alternation** (forward/reverse iteration) | ✅ | ✅ |
+| **must_do_list** | ✅ | ❌ Not supported by CK kernel |
+| **return_softmax_lse** | ✅ | ❌ Lite kernel does not compute LSE |
+| **Varlen / KV-cache / paged KV** | Available in full FA3 API | ❌ Batch forward only |
 
-When writing code that runs on both backends, avoid relying on `must_do_list`, and use `return_softmax_lse=True` only when not using skip lists (or only on CUDA).
+When writing code that runs on both backends, avoid relying on `must_do_list` and `return_softmax_lse`.
 
 ---
 

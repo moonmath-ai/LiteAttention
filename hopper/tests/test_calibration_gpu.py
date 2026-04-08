@@ -9,7 +9,6 @@ from lite_attention.calibrated_module import (
     ConfigList,
 )
 from lite_attention.lite_attention import (
-    LiteAttentionCalibConfig,
     LiteAttentionDisabledConfig,
     LiteAttentionRegistry,
     LiteAttentionRunConfig,

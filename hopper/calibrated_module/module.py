@@ -4,7 +4,6 @@ ConfigurableModule mixin: adds config and calibration support to nn.Module.
 
 from __future__ import annotations
 
-import typing
 import warnings
 
 import structlog
